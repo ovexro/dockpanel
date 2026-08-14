@@ -1,0 +1,3585 @@
+{
+  "_generated": "Do not edit. Source of truth is TEMPLATES in panel/agent/src/services/docker_apps.rs. Regenerate with UPDATE_TEMPLATE_CATALOGUE=1 cargo test -p dockpanel-agent catalogue",
+  "count": 148,
+  "templates": [
+    {
+      "category": "CMS",
+      "cmd": null,
+      "container_port": "2368/tcp",
+      "default_port": 2368,
+      "env_vars": [
+        {
+          "default": "http://localhost:2368",
+          "label": "Site URL",
+          "name": "url",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "sqlite3",
+          "label": "Database Client",
+          "name": "database__client",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "/var/lib/ghost/content/data/ghost.db",
+          "label": "SQLite Database File",
+          "name": "database__connection__filename",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "ghost",
+      "image": "ghost:5",
+      "name": "Ghost",
+      "volumes": [
+        "/var/lib/ghost/content"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8420,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Database Root Password",
+          "name": "MARIADB_ROOT_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "azuracast",
+      "image": "ghcr.io/azuracast/azuracast:stable",
+      "name": "AzuraCast",
+      "volumes": [
+        "/var/azuracast"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "6379/tcp",
+      "default_port": 6379,
+      "env_vars": [],
+      "id": "redis",
+      "image": "redis:7-alpine",
+      "name": "Redis",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 8081,
+      "env_vars": [],
+      "id": "adminer",
+      "image": "adminer:4",
+      "name": "Adminer",
+      "volumes": []
+    },
+    {
+      "category": "Monitoring",
+      "cmd": null,
+      "container_port": "3001/tcp",
+      "default_port": 3001,
+      "env_vars": [],
+      "id": "uptime-kuma",
+      "image": "louislam/uptime-kuma:1",
+      "name": "Uptime Kuma",
+      "volumes": [
+        "/app/data"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "9443/tcp",
+      "default_port": 9443,
+      "env_vars": [],
+      "id": "portainer",
+      "image": "portainer/portainer-ce:lts",
+      "name": "Portainer",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Automation",
+      "cmd": null,
+      "container_port": "5678/tcp",
+      "default_port": 5678,
+      "env_vars": [],
+      "id": "n8n",
+      "image": "n8nio/n8n:1",
+      "name": "n8n",
+      "volumes": [
+        "/home/node/.n8n"
+      ]
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3000,
+      "env_vars": [],
+      "id": "gitea",
+      "image": "gitea/gitea:1",
+      "name": "Gitea",
+      "volumes": [
+        "/data",
+        "/etc/timezone"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "5432/tcp",
+      "default_port": 5432,
+      "env_vars": [
+        {
+          "default": "postgres",
+          "label": "Username",
+          "name": "POSTGRES_USER",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Password",
+          "name": "POSTGRES_PASSWORD",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "app",
+          "label": "Database Name",
+          "name": "POSTGRES_DB",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "postgres",
+      "image": "postgres:16-alpine",
+      "name": "PostgreSQL",
+      "volumes": [
+        "/var/lib/postgresql/data"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "3306/tcp",
+      "default_port": 3306,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Root Password",
+          "name": "MYSQL_ROOT_PASSWORD",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "app",
+          "label": "Database Name",
+          "name": "MYSQL_DATABASE",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "User",
+          "name": "MYSQL_USER",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "User Password",
+          "name": "MYSQL_PASSWORD",
+          "required": false,
+          "secret": true
+        }
+      ],
+      "id": "mysql",
+      "image": "mysql:8",
+      "name": "MySQL",
+      "volumes": [
+        "/var/lib/mysql"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "3306/tcp",
+      "default_port": 3307,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Root Password",
+          "name": "MARIADB_ROOT_PASSWORD",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "app",
+          "label": "Database Name",
+          "name": "MARIADB_DATABASE",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "mariadb",
+      "image": "mariadb:11",
+      "name": "MariaDB",
+      "volumes": [
+        "/var/lib/mysql"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "27017/tcp",
+      "default_port": 27017,
+      "env_vars": [
+        {
+          "default": "admin",
+          "label": "Root Username",
+          "name": "MONGO_INITDB_ROOT_USERNAME",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Root Password",
+          "name": "MONGO_INITDB_ROOT_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "mongo",
+      "image": "mongo:7",
+      "name": "MongoDB",
+      "volumes": [
+        "/data/db"
+      ]
+    },
+    {
+      "category": "CMS",
+      "cmd": null,
+      "container_port": "8055/tcp",
+      "default_port": 8055,
+      "env_vars": [
+        {
+          "default": "admin@example.com",
+          "label": "Admin Email",
+          "name": "ADMIN_EMAIL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Admin Password",
+          "name": "ADMIN_PASSWORD",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "",
+          "label": "Secret Key",
+          "name": "SECRET",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "directus",
+      "image": "directus/directus:11",
+      "name": "Directus",
+      "volumes": [
+        "/directus/uploads",
+        "/directus/database"
+      ]
+    },
+    {
+      "category": "Storage",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8082,
+      "env_vars": [
+        {
+          "default": "admin",
+          "label": "Admin Username",
+          "name": "NEXTCLOUD_ADMIN_USER",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Admin Password",
+          "name": "NEXTCLOUD_ADMIN_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "nextcloud",
+      "image": "nextcloud:30",
+      "name": "Nextcloud",
+      "volumes": [
+        "/var/www/html"
+      ]
+    },
+    {
+      "category": "Monitoring",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3002,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Admin Password",
+          "name": "GF_SECURITY_ADMIN_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "grafana",
+      "image": "grafana/grafana:13.1",
+      "name": "Grafana",
+      "volumes": [
+        "/var/lib/grafana"
+      ]
+    },
+    {
+      "category": "Monitoring",
+      "cmd": null,
+      "container_port": "9090/tcp",
+      "default_port": 9090,
+      "env_vars": [],
+      "id": "prometheus",
+      "image": "prom/prometheus:v3",
+      "name": "Prometheus",
+      "volumes": [
+        "/prometheus"
+      ]
+    },
+    {
+      "category": "Analytics",
+      "cmd": [
+        "sh",
+        "-c",
+        "/entrypoint.sh db createdb && /entrypoint.sh db migrate && /entrypoint.sh run"
+      ],
+      "container_port": "8000/tcp",
+      "default_port": 8000,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Secret Key (64+ chars)",
+          "name": "SECRET_KEY_BASE",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "http://localhost:8000",
+          "label": "Site URL",
+          "name": "BASE_URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "PostgreSQL URL (required, external)",
+          "name": "DATABASE_URL",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "",
+          "label": "ClickHouse URL (required, external)",
+          "name": "CLICKHOUSE_DATABASE_URL",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "plausible",
+      "image": "ghcr.io/plausible/community-edition:v3.2.1",
+      "name": "Plausible Analytics",
+      "volumes": []
+    },
+    {
+      "category": "Analytics",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3003,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Postgres URL",
+          "name": "DATABASE_URL",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "umami",
+      "image": "ghcr.io/umami-software/umami:postgresql-v2.15.1",
+      "name": "Umami",
+      "volumes": []
+    },
+    {
+      "category": "Analytics",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8083,
+      "env_vars": [],
+      "id": "matomo",
+      "image": "matomo:5",
+      "name": "Matomo",
+      "volumes": [
+        "/var/www/html"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 5050,
+      "env_vars": [
+        {
+          "default": "admin@example.com",
+          "label": "Admin Email",
+          "name": "PGADMIN_DEFAULT_EMAIL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Admin Password",
+          "name": "PGADMIN_DEFAULT_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "pgadmin",
+      "image": "dpage/pgadmin4:8",
+      "name": "pgAdmin",
+      "volumes": [
+        "/var/lib/pgadmin"
+      ]
+    },
+    {
+      "category": "Storage",
+      "cmd": [
+        "server",
+        "/data",
+        "--console-address",
+        ":9001"
+      ],
+      "container_port": "9000/tcp",
+      "default_port": 9000,
+      "env_vars": [
+        {
+          "default": "minioadmin",
+          "label": "Root User",
+          "name": "MINIO_ROOT_USER",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Root Password",
+          "name": "MINIO_ROOT_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "minio",
+      "image": "minio/minio:latest",
+      "name": "MinIO",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Security",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8084,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Admin Token",
+          "name": "ADMIN_TOKEN",
+          "required": false,
+          "secret": true
+        }
+      ],
+      "id": "vaultwarden",
+      "image": "vaultwarden/server:1.37.1",
+      "name": "Vaultwarden",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "7700/tcp",
+      "default_port": 7700,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Master Key",
+          "name": "MEILI_MASTER_KEY",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "meilisearch",
+      "image": "getmeili/meilisearch:v1",
+      "name": "Meilisearch",
+      "volumes": [
+        "/meili_data"
+      ]
+    },
+    {
+      "category": "Analytics",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3004,
+      "env_vars": [],
+      "id": "metabase",
+      "image": "metabase/metabase:v0.58-lts",
+      "name": "Metabase",
+      "volumes": [
+        "/metabase-data"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 8085,
+      "env_vars": [],
+      "id": "nocodb",
+      "image": "nocodb/nocodb:latest",
+      "name": "NocoDB",
+      "volumes": [
+        "/usr/app/data"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 8086,
+      "env_vars": [],
+      "id": "searxng",
+      "image": "searxng/searxng:latest",
+      "name": "SearXNG",
+      "volumes": [
+        "/etc/searxng"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "8096/tcp",
+      "default_port": 8096,
+      "env_vars": [],
+      "id": "jellyfin",
+      "image": "jellyfin/jellyfin:10",
+      "name": "Jellyfin",
+      "volumes": [
+        "/config",
+        "/cache"
+      ]
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 8443,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Access Password",
+          "name": "PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "code-server",
+      "image": "codercom/code-server:4.131.0",
+      "name": "VS Code Server",
+      "volumes": [
+        "/home/coder"
+      ]
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8087,
+      "env_vars": [
+        {
+          "default": "localhost",
+          "label": "Server Host",
+          "name": "DRONE_SERVER_HOST",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "http",
+          "label": "Protocol",
+          "name": "DRONE_SERVER_PROTO",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "RPC Secret",
+          "name": "DRONE_RPC_SECRET",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "drone",
+      "image": "drone/drone:2",
+      "name": "Drone CI",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "5000/tcp",
+      "default_port": 5000,
+      "env_vars": [],
+      "id": "registry",
+      "image": "registry:2",
+      "name": "Docker Registry",
+      "volumes": [
+        "/var/lib/registry"
+      ]
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "8025/tcp",
+      "default_port": 8025,
+      "env_vars": [],
+      "id": "mailpit",
+      "image": "axllent/mailpit:v1.30",
+      "name": "Mailpit",
+      "volumes": []
+    },
+    {
+      "category": "Networking",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8088,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Web Password",
+          "name": "WEBPASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "pihole",
+      "image": "pihole/pihole:2024.07.0",
+      "name": "Pi-hole",
+      "volumes": [
+        "/etc/pihole",
+        "/etc/dnsmasq.d"
+      ]
+    },
+    {
+      "category": "Monitoring",
+      "cmd": null,
+      "container_port": "3100/tcp",
+      "default_port": 3100,
+      "env_vars": [],
+      "id": "loki",
+      "image": "grafana/loki:3",
+      "name": "Grafana Loki",
+      "volumes": [
+        "/loki"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3005,
+      "env_vars": [
+        {
+          "default": "sqlite",
+          "label": "Database Type",
+          "name": "DB_TYPE",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "wikijs",
+      "image": "ghcr.io/requarks/wiki:2",
+      "name": "Wiki.js",
+      "volumes": [
+        "/wiki/data"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 6875,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Application URL",
+          "name": "APP_URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Database Host",
+          "name": "DB_HOST",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "bookstack",
+          "label": "Database User",
+          "name": "DB_USER",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Database Password",
+          "name": "DB_PASS",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "bookstack",
+          "label": "Database Name",
+          "name": "DB_DATABASE",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "bookstack",
+      "image": "lscr.io/linuxserver/bookstack:latest",
+      "name": "BookStack",
+      "volumes": [
+        "/config"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3006,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Secret Key",
+          "name": "SECRET_KEY",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "",
+          "label": "Application URL",
+          "name": "URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Database URL",
+          "name": "DATABASE_URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "redis://localhost:6379",
+          "label": "Redis URL",
+          "name": "REDIS_URL",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "outline",
+      "image": "outlinewiki/outline:1.9",
+      "name": "Outline",
+      "volumes": [
+        "/var/lib/outline/data"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "8065/tcp",
+      "default_port": 8065,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Database Connection String",
+          "name": "MM_SQLSETTINGS_DATASOURCE",
+          "required": true,
+          "secret": false
+        }
+      ],
+      "id": "mattermost",
+      "image": "mattermost/mattermost-team-edition:release-11",
+      "name": "Mattermost",
+      "volumes": [
+        "/mattermost/config",
+        "/mattermost/data",
+        "/mattermost/logs"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3007,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "MongoDB URL",
+          "name": "MONGO_URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Root URL",
+          "name": "ROOT_URL",
+          "required": true,
+          "secret": false
+        }
+      ],
+      "id": "rocketchat",
+      "image": "rocketchat/rocket.chat:8.7.0",
+      "name": "Rocket.Chat",
+      "volumes": [
+        "/app/uploads"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "3001/tcp",
+      "default_port": 2283,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Database Hostname",
+          "name": "DB_HOSTNAME",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "immich",
+          "label": "Database Username",
+          "name": "DB_USERNAME",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Database Password",
+          "name": "DB_PASSWORD",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "immich",
+          "label": "Database Name",
+          "name": "DB_DATABASE_NAME",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "redis",
+          "label": "Redis Hostname",
+          "name": "REDIS_HOSTNAME",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "immich",
+      "image": "ghcr.io/immich-app/immich-server:release",
+      "name": "Immich",
+      "volumes": [
+        "/usr/src/app/upload"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "2342/tcp",
+      "default_port": 2342,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Admin Password",
+          "name": "PHOTOPRISM_ADMIN_PASSWORD",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "http://localhost:2342",
+          "label": "Site URL",
+          "name": "PHOTOPRISM_SITE_URL",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "photoprism",
+      "image": "photoprism/photoprism:latest",
+      "name": "PhotoPrism",
+      "volumes": [
+        "/photoprism/storage",
+        "/photoprism/originals"
+      ]
+    },
+    {
+      "category": "Security",
+      "cmd": null,
+      "container_port": "9000/tcp",
+      "default_port": 9001,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Secret Key",
+          "name": "AUTHENTIK_SECRET_KEY",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "redis",
+          "label": "Redis Host",
+          "name": "AUTHENTIK_REDIS__HOST",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "PostgreSQL Host",
+          "name": "AUTHENTIK_POSTGRESQL__HOST",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "PostgreSQL Password",
+          "name": "AUTHENTIK_POSTGRESQL__PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "authentik",
+      "image": "ghcr.io/goauthentik/server:2024.12",
+      "name": "Authentik",
+      "volumes": [
+        "/media",
+        "/templates"
+      ]
+    },
+    {
+      "category": "Security",
+      "cmd": [
+        "start-dev"
+      ],
+      "container_port": "8080/tcp",
+      "default_port": 8180,
+      "env_vars": [
+        {
+          "default": "admin",
+          "label": "Admin Username",
+          "name": "KEYCLOAK_ADMIN",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Admin Password",
+          "name": "KEYCLOAK_ADMIN_PASSWORD",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "postgres",
+          "label": "Database Type",
+          "name": "KC_DB",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Database JDBC URL",
+          "name": "KC_DB_URL",
+          "required": true,
+          "secret": false
+        }
+      ],
+      "id": "keycloak",
+      "image": "quay.io/keycloak/keycloak:26.7",
+      "name": "Keycloak",
+      "volumes": []
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "8000/tcp",
+      "default_port": 8000,
+      "env_vars": [
+        {
+          "default": "true",
+          "label": "Open Registration",
+          "name": "WOODPECKER_OPEN",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Admin User",
+          "name": "WOODPECKER_ADMIN",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Server Host URL",
+          "name": "WOODPECKER_HOST",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Agent Secret",
+          "name": "WOODPECKER_AGENT_SECRET",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "woodpecker",
+      "image": "woodpeckerci/woodpecker-server:v3",
+      "name": "Woodpecker CI",
+      "volumes": [
+        "/var/lib/woodpecker"
+      ]
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "9000/tcp",
+      "default_port": 9002,
+      "env_vars": [
+        {
+          "default": "jdbc:h2:tcp://localhost/sonar",
+          "label": "JDBC URL",
+          "name": "SONAR_JDBC_URL",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "sonarqube",
+      "image": "sonarqube:10-community",
+      "name": "SonarQube",
+      "volumes": [
+        "/opt/sonarqube/data",
+        "/opt/sonarqube/logs",
+        "/opt/sonarqube/extensions"
+      ]
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3009,
+      "env_vars": [],
+      "id": "forgejo",
+      "image": "codeberg.org/forgejo/forgejo:9",
+      "name": "Forgejo",
+      "volumes": [
+        "/data",
+        "/etc/timezone"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 9003,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Application URL",
+          "name": "APP_URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Application Key",
+          "name": "APP_KEY",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "",
+          "label": "Database Host",
+          "name": "DB_HOST",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "ninja",
+          "label": "Database Name",
+          "name": "DB_DATABASE",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "ninja",
+          "label": "Database Username",
+          "name": "DB_USERNAME",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Database Password",
+          "name": "DB_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "invoice-ninja",
+      "image": "invoiceninja/invoiceninja:5",
+      "name": "Invoice Ninja",
+      "volumes": [
+        "/var/app/public",
+        "/var/app/storage"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 8080,
+      "env_vars": [],
+      "id": "erpnext",
+      "image": "frappe/erpnext:latest",
+      "name": "ERPNext",
+      "volumes": [
+        "/home/frappe/frappe-bench/sites"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3010,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Database URL",
+          "name": "DATABASE_URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "NextAuth Secret",
+          "name": "NEXTAUTH_SECRET",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "",
+          "label": "Encryption Key",
+          "name": "CALENDSO_ENCRYPTION_KEY",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "calcom",
+      "image": "calcom/cal.com:v6.2.0",
+      "name": "Cal.com",
+      "volumes": []
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3011,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Secret Key Base",
+          "name": "SECRET_KEY_BASE",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "",
+          "label": "Frontend URL",
+          "name": "FRONTEND_URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "PostgreSQL Host",
+          "name": "POSTGRES_HOST",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "PostgreSQL Password",
+          "name": "POSTGRES_PASSWORD",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "redis://redis:6379",
+          "label": "Redis URL",
+          "name": "REDIS_URL",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "chatwoot",
+      "image": "chatwoot/chatwoot:latest-ce",
+      "name": "Chatwoot",
+      "volumes": [
+        "/app/storage"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3012,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Database URL",
+          "name": "DATABASE_URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "NextAuth URL",
+          "name": "NEXTAUTH_URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Encryption Secret",
+          "name": "ENCRYPTION_SECRET",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "typebot",
+      "image": "baptistearno/typebot-builder:2",
+      "name": "Typebot",
+      "volumes": []
+    },
+    {
+      "category": "AI",
+      "cmd": null,
+      "container_port": "11434/tcp",
+      "default_port": 11434,
+      "env_vars": [
+        {
+          "default": "5m",
+          "label": "Model idle timeout",
+          "name": "OLLAMA_KEEP_ALIVE",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "1",
+          "label": "Max parallel requests",
+          "name": "OLLAMA_NUM_PARALLEL",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "ollama",
+      "image": "ollama/ollama:latest",
+      "name": "Ollama",
+      "volumes": [
+        "/root/.ollama"
+      ]
+    },
+    {
+      "category": "AI",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 3101,
+      "env_vars": [
+        {
+          "default": "http://host.docker.internal:11434",
+          "label": "Ollama URL",
+          "name": "OLLAMA_BASE_URL",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "open-webui",
+      "image": "ghcr.io/open-webui/open-webui:main",
+      "name": "Open WebUI",
+      "volumes": [
+        "/app/backend/data"
+      ]
+    },
+    {
+      "category": "AI",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 8296,
+      "env_vars": [],
+      "id": "localai",
+      "image": "localai/localai:latest-gpu-nvidia-cuda-12",
+      "name": "LocalAI",
+      "volumes": [
+        "/build/models"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3013,
+      "env_vars": [],
+      "id": "homepage",
+      "image": "ghcr.io/gethomepage/homepage:latest",
+      "name": "Homepage",
+      "volumes": [
+        "/app/config"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "7575/tcp",
+      "default_port": 7575,
+      "env_vars": [],
+      "id": "homarr",
+      "image": "ghcr.io/homarr-labs/homarr:latest",
+      "name": "Homarr",
+      "volumes": [
+        "/appdata"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 4000,
+      "env_vars": [],
+      "id": "dashy",
+      "image": "lissy93/dashy:latest",
+      "name": "Dashy",
+      "volumes": [
+        "/app/user-data"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "8000/tcp",
+      "default_port": 8010,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Secret Key",
+          "name": "PAPERLESS_SECRET_KEY",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "admin",
+          "label": "Admin Username",
+          "name": "PAPERLESS_ADMIN_USER",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Admin Password",
+          "name": "PAPERLESS_ADMIN_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "paperless-ngx",
+      "image": "ghcr.io/paperless-ngx/paperless-ngx:latest",
+      "name": "Paperless-ngx",
+      "volumes": [
+        "/usr/src/paperless/data",
+        "/usr/src/paperless/media"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 8182,
+      "env_vars": [],
+      "id": "stirling-pdf",
+      "image": "frooodle/s-pdf:latest",
+      "name": "Stirling-PDF",
+      "volumes": [
+        "/usr/share/tessdata",
+        "/configs"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "5006/tcp",
+      "default_port": 5006,
+      "env_vars": [],
+      "id": "actual-budget",
+      "image": "actualbudget/actual-server:latest",
+      "name": "Actual Budget",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3014,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Database URL",
+          "name": "CMD_DB_URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Session Secret",
+          "name": "CMD_SESSION_SECRET",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "",
+          "label": "Domain",
+          "name": "CMD_DOMAIN",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "hedgedoc",
+      "image": "quay.io/hedgedoc/hedgedoc:latest",
+      "name": "HedgeDoc",
+      "volumes": [
+        "/hedgedoc/public/uploads"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "3456/tcp",
+      "default_port": 3456,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "JWT Secret",
+          "name": "VIKUNJA_SERVICE_JWTSECRET",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "vikunja",
+      "image": "vikunja/vikunja:latest",
+      "name": "Vikunja",
+      "volumes": [
+        "/app/vikunja/files"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "5230/tcp",
+      "default_port": 5230,
+      "env_vars": [],
+      "id": "memos",
+      "image": "neosmemo/memos:stable",
+      "name": "Memos",
+      "volumes": [
+        "/var/opt/memos"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 8383,
+      "env_vars": [],
+      "id": "trilium",
+      "image": "triliumnext/notes:latest",
+      "name": "Trilium Notes",
+      "volumes": [
+        "/home/node/trilium-data"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3015,
+      "env_vars": [],
+      "id": "docuseal",
+      "image": "docuseal/docuseal:latest",
+      "name": "DocuSeal",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "4533/tcp",
+      "default_port": 4533,
+      "env_vars": [],
+      "id": "navidrome",
+      "image": "deluan/navidrome:latest",
+      "name": "Navidrome",
+      "volumes": [
+        "/data",
+        "/music"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 13378,
+      "env_vars": [],
+      "id": "audiobookshelf",
+      "image": "ghcr.io/advplyr/audiobookshelf:latest",
+      "name": "Audiobookshelf",
+      "volumes": [
+        "/config",
+        "/metadata",
+        "/audiobooks",
+        "/podcasts"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "8083/tcp",
+      "default_port": 8283,
+      "env_vars": [
+        {
+          "default": "1000",
+          "label": "User ID",
+          "name": "PUID",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "1000",
+          "label": "Group ID",
+          "name": "PGID",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "calibre-web",
+      "image": "lscr.io/linuxserver/calibre-web:latest",
+      "name": "Calibre-Web",
+      "volumes": [
+        "/config",
+        "/books"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "5000/tcp",
+      "default_port": 5001,
+      "env_vars": [],
+      "id": "kavita",
+      "image": "jvmilazz0/kavita:latest",
+      "name": "Kavita",
+      "volumes": [
+        "/kavita/config",
+        "/manga"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "32400/tcp",
+      "default_port": 32400,
+      "env_vars": [
+        {
+          "default": "1000",
+          "label": "User ID",
+          "name": "PUID",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "1000",
+          "label": "Group ID",
+          "name": "PGID",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Plex Claim Token",
+          "name": "PLEX_CLAIM",
+          "required": false,
+          "secret": true
+        }
+      ],
+      "id": "plex",
+      "image": "lscr.io/linuxserver/plex:latest",
+      "name": "Plex",
+      "volumes": [
+        "/config",
+        "/tv",
+        "/movies"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8284,
+      "env_vars": [],
+      "id": "freshrss",
+      "image": "freshrss/freshrss:latest",
+      "name": "FreshRSS",
+      "volumes": [
+        "/var/www/FreshRSS/data",
+        "/var/www/FreshRSS/extensions"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3016,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Database URL",
+          "name": "DATABASE_URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "NextAuth Secret",
+          "name": "NEXTAUTH_SECRET",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "",
+          "label": "NextAuth URL",
+          "name": "NEXTAUTH_URL",
+          "required": true,
+          "secret": false
+        }
+      ],
+      "id": "linkwarden",
+      "image": "ghcr.io/linkwarden/linkwarden:latest",
+      "name": "Linkwarden",
+      "volumes": [
+        "/data/data"
+      ]
+    },
+    {
+      "category": "Monitoring",
+      "cmd": null,
+      "container_port": "5000/tcp",
+      "default_port": 5555,
+      "env_vars": [],
+      "id": "changedetection",
+      "image": "ghcr.io/dgtlmoon/changedetection.io:latest",
+      "name": "Changedetection.io",
+      "volumes": [
+        "/datastore"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 8285,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Secret Key",
+          "name": "SECRET_KEY",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "django.db.backends.sqlite3",
+          "label": "DB Engine",
+          "name": "DB_ENGINE",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "tandoor",
+      "image": "vabene1111/recipes:latest",
+      "name": "Tandoor Recipes",
+      "volumes": [
+        "/opt/recipes/mediafiles",
+        "/opt/recipes/staticfiles"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "9000/tcp",
+      "default_port": 9925,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Base URL",
+          "name": "BASE_URL",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "mealie",
+      "image": "ghcr.io/mealie-recipes/mealie:latest",
+      "name": "Mealie",
+      "volumes": [
+        "/app/data"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": [
+        "serve"
+      ],
+      "container_port": "80/tcp",
+      "default_port": 8286,
+      "env_vars": [],
+      "id": "ntfy",
+      "image": "binwiederhier/ntfy:latest",
+      "name": "ntfy",
+      "volumes": [
+        "/var/cache/ntfy",
+        "/etc/ntfy"
+      ]
+    },
+    {
+      "category": "Tools",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8287,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Admin Password",
+          "name": "GOTIFY_DEFAULTUSER_PASS",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "gotify",
+      "image": "gotify/server:latest",
+      "name": "Gotify",
+      "volumes": [
+        "/app/data"
+      ]
+    },
+    {
+      "category": "Networking",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3017,
+      "env_vars": [],
+      "id": "adguard-home",
+      "image": "adguard/adguardhome:latest",
+      "name": "AdGuard Home",
+      "volumes": [
+        "/opt/adguardhome/work",
+        "/opt/adguardhome/conf"
+      ]
+    },
+    {
+      "category": "Networking",
+      "cmd": null,
+      "container_port": "5380/tcp",
+      "default_port": 5380,
+      "env_vars": [],
+      "id": "technitium-dns",
+      "image": "technitium/dns-server:latest",
+      "name": "Technitium DNS",
+      "volumes": [
+        "/etc/dns"
+      ]
+    },
+    {
+      "category": "Networking",
+      "cmd": null,
+      "container_port": "81/tcp",
+      "default_port": 8181,
+      "env_vars": [],
+      "id": "nginx-proxy-manager",
+      "image": "jc21/nginx-proxy-manager:latest",
+      "name": "Nginx Proxy Manager",
+      "volumes": [
+        "/data",
+        "/etc/letsencrypt"
+      ]
+    },
+    {
+      "category": "Networking",
+      "cmd": null,
+      "container_port": "51820/udp",
+      "default_port": 51820,
+      "env_vars": [
+        {
+          "default": "1000",
+          "label": "User ID",
+          "name": "PUID",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "1000",
+          "label": "Group ID",
+          "name": "PGID",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "3",
+          "label": "Number of Peers",
+          "name": "PEERS",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Server URL/IP",
+          "name": "SERVERURL",
+          "required": true,
+          "secret": false
+        }
+      ],
+      "id": "wireguard",
+      "image": "lscr.io/linuxserver/wireguard:latest",
+      "name": "WireGuard",
+      "volumes": [
+        "/config"
+      ]
+    },
+    {
+      "category": "Monitoring",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 9999,
+      "env_vars": [],
+      "id": "dozzle",
+      "image": "amir20/dozzle:latest",
+      "name": "Dozzle",
+      "volumes": []
+    },
+    {
+      "category": "Monitoring",
+      "cmd": null,
+      "container_port": "61208/tcp",
+      "default_port": 61208,
+      "env_vars": [
+        {
+          "default": "-w",
+          "label": "Glances Options",
+          "name": "GLANCES_OPT",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "glances",
+      "image": "nicolargo/glances:latest-full",
+      "name": "Glances",
+      "volumes": []
+    },
+    {
+      "category": "Monitoring",
+      "cmd": null,
+      "container_port": "19999/tcp",
+      "default_port": 19999,
+      "env_vars": [],
+      "id": "netdata",
+      "image": "netdata/netdata:stable",
+      "name": "Netdata",
+      "volumes": [
+        "/etc/netdata",
+        "/var/lib/netdata",
+        "/var/cache/netdata"
+      ]
+    },
+    {
+      "category": "Storage",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8288,
+      "env_vars": [],
+      "id": "filebrowser",
+      "image": "filebrowser/filebrowser:latest",
+      "name": "File Browser",
+      "volumes": [
+        "/srv",
+        "/database"
+      ]
+    },
+    {
+      "category": "Storage",
+      "cmd": null,
+      "container_port": "8384/tcp",
+      "default_port": 8384,
+      "env_vars": [
+        {
+          "default": "1000",
+          "label": "User ID",
+          "name": "PUID",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "1000",
+          "label": "Group ID",
+          "name": "PGID",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "syncthing",
+      "image": "lscr.io/linuxserver/syncthing:latest",
+      "name": "Syncthing",
+      "volumes": [
+        "/config",
+        "/data"
+      ]
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8289,
+      "env_vars": [],
+      "id": "it-tools",
+      "image": "corentinth/it-tools:latest",
+      "name": "IT-Tools",
+      "volumes": []
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 8290,
+      "env_vars": [],
+      "id": "jenkins",
+      "image": "jenkins/jenkins:lts",
+      "name": "Jenkins",
+      "volumes": [
+        "/var/jenkins_home"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "8123/tcp",
+      "default_port": 8123,
+      "env_vars": [],
+      "id": "clickhouse",
+      "image": "clickhouse/clickhouse-server:latest",
+      "name": "ClickHouse",
+      "volumes": [
+        "/var/lib/clickhouse",
+        "/var/log/clickhouse-server"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "8086/tcp",
+      "default_port": 8292,
+      "env_vars": [
+        {
+          "default": "setup",
+          "label": "Init Mode",
+          "name": "DOCKER_INFLUXDB_INIT_MODE",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "admin",
+          "label": "Admin Username",
+          "name": "DOCKER_INFLUXDB_INIT_USERNAME",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Admin Password",
+          "name": "DOCKER_INFLUXDB_INIT_PASSWORD",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "myorg",
+          "label": "Organization",
+          "name": "DOCKER_INFLUXDB_INIT_ORG",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "default",
+          "label": "Bucket Name",
+          "name": "DOCKER_INFLUXDB_INIT_BUCKET",
+          "required": true,
+          "secret": false
+        }
+      ],
+      "id": "influxdb",
+      "image": "influxdb:2",
+      "name": "InfluxDB",
+      "volumes": [
+        "/var/lib/influxdb2"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "6379/tcp",
+      "default_port": 6380,
+      "env_vars": [],
+      "id": "valkey",
+      "image": "valkey/valkey:8-alpine",
+      "name": "Valkey",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "5984/tcp",
+      "default_port": 5984,
+      "env_vars": [
+        {
+          "default": "admin",
+          "label": "Admin Username",
+          "name": "COUCHDB_USER",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Admin Password",
+          "name": "COUCHDB_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "couchdb",
+      "image": "couchdb:3",
+      "name": "CouchDB",
+      "volumes": [
+        "/opt/couchdb/data"
+      ]
+    },
+    {
+      "category": "Security",
+      "cmd": null,
+      "container_port": "6060/tcp",
+      "default_port": 6060,
+      "env_vars": [],
+      "id": "crowdsec",
+      "image": "crowdsecurity/crowdsec:latest",
+      "name": "CrowdSec",
+      "volumes": [
+        "/etc/crowdsec",
+        "/var/lib/crowdsec/data"
+      ]
+    },
+    {
+      "category": "Automation",
+      "cmd": null,
+      "container_port": "1880/tcp",
+      "default_port": 1880,
+      "env_vars": [],
+      "id": "node-red",
+      "image": "nodered/node-red:latest",
+      "name": "Node-RED",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Automation",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8293,
+      "env_vars": [
+        {
+          "default": "dist/packages/engine/main.js",
+          "label": "Engine Path",
+          "name": "AP_ENGINE_EXECUTABLE_PATH",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Encryption Key",
+          "name": "AP_ENCRYPTION_KEY",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "",
+          "label": "JWT Secret",
+          "name": "AP_JWT_SECRET",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "PGLITE",
+          "label": "Database Mode",
+          "name": "AP_DB_TYPE",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "MEMORY",
+          "label": "Queue Mode",
+          "name": "AP_REDIS_TYPE",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "activepieces",
+      "image": "activepieces/activepieces:latest",
+      "name": "Activepieces",
+      "volumes": [
+        "/root/.activepieces"
+      ]
+    },
+    {
+      "category": "CMS",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8294,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Database Host",
+          "name": "WORDPRESS_DB_HOST",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "wordpress",
+          "label": "Database User",
+          "name": "WORDPRESS_DB_USER",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Database Password",
+          "name": "WORDPRESS_DB_PASSWORD",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "wordpress",
+          "label": "Database Name",
+          "name": "WORDPRESS_DB_NAME",
+          "required": true,
+          "secret": false
+        }
+      ],
+      "id": "wordpress-docker",
+      "image": "wordpress:6-apache",
+      "name": "WordPress (Docker)",
+      "volumes": [
+        "/var/www/html"
+      ]
+    },
+    {
+      "category": "CMS",
+      "cmd": null,
+      "container_port": "9000/tcp",
+      "default_port": 9100,
+      "env_vars": [
+        {
+          "default": "0.0.0.0:9000",
+          "label": "Listen Address",
+          "name": "LISTMONK_app__address",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "DB Host",
+          "name": "LISTMONK_db__host",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "5432",
+          "label": "DB Port",
+          "name": "LISTMONK_db__port",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "listmonk",
+          "label": "DB User",
+          "name": "LISTMONK_db__user",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "DB Password",
+          "name": "LISTMONK_db__password",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "listmonk",
+          "label": "DB Name",
+          "name": "LISTMONK_db__database",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "listmonk",
+      "image": "listmonk/listmonk:latest",
+      "name": "Listmonk",
+      "volumes": [
+        "/listmonk/uploads"
+      ]
+    },
+    {
+      "category": "Analytics",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 8295,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Secret Key",
+          "name": "DJANGO_SECRET_KEY",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "shynet",
+          "label": "Database Name",
+          "name": "DB_NAME",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "shynet",
+      "image": "milesmcc/shynet:latest",
+      "name": "Shynet",
+      "volumes": []
+    },
+    {
+      "category": "Storage",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3018,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Core Secret",
+          "name": "CORE_SECRET",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "",
+          "label": "Database URL",
+          "name": "CORE_DATABASE_URL",
+          "required": true,
+          "secret": false
+        }
+      ],
+      "id": "zipline",
+      "image": "ghcr.io/diced/zipline:latest",
+      "name": "Zipline",
+      "volumes": [
+        "/zipline/uploads",
+        "/zipline/public"
+      ]
+    },
+    {
+      "category": "Security",
+      "cmd": null,
+      "container_port": "9091/tcp",
+      "default_port": 9091,
+      "env_vars": [],
+      "id": "authelia",
+      "image": "authelia/authelia:latest",
+      "name": "Authelia",
+      "volumes": [
+        "/config"
+      ]
+    },
+    {
+      "category": "AI",
+      "cmd": null,
+      "container_port": "7860/tcp",
+      "default_port": 7861,
+      "env_vars": [
+        {
+          "default": "--listen",
+          "label": "Extra Launch Args",
+          "name": "EXTRA_LAUNCH_ARGS",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "text-generation-webui",
+      "image": "atinoda/text-generation-webui:default",
+      "name": "Text Generation WebUI",
+      "volumes": [
+        "/app/models",
+        "/app/characters",
+        "/app/loras"
+      ]
+    },
+    {
+      "category": "AI",
+      "cmd": null,
+      "container_port": "9000/tcp",
+      "default_port": 9300,
+      "env_vars": [
+        {
+          "default": "base",
+          "label": "Model Size",
+          "name": "ASR_MODEL",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "whisper",
+      "image": "onerahmet/openai-whisper-asr-webservice:latest",
+      "name": "Whisper ASR",
+      "volumes": []
+    },
+    {
+      "category": "AI",
+      "cmd": null,
+      "container_port": "4000/tcp",
+      "default_port": 4100,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Master API Key",
+          "name": "LITELLM_MASTER_KEY",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "litellm",
+      "image": "ghcr.io/berriai/litellm:main-latest",
+      "name": "LiteLLM Proxy",
+      "volumes": []
+    },
+    {
+      "category": "AI",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3020,
+      "env_vars": [
+        {
+          "default": "admin",
+          "label": "Username",
+          "name": "FLOWISE_USERNAME",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Password",
+          "name": "FLOWISE_PASSWORD",
+          "required": false,
+          "secret": true
+        }
+      ],
+      "id": "flowise",
+      "image": "flowiseai/flowise:latest",
+      "name": "Flowise",
+      "volumes": [
+        "/root/.flowise"
+      ]
+    },
+    {
+      "category": "AI",
+      "cmd": null,
+      "container_port": "7860/tcp",
+      "default_port": 7862,
+      "env_vars": [
+        {
+          "default": "false",
+          "label": "Auto Login",
+          "name": "LANGFLOW_AUTO_LOGIN",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "langflow",
+      "image": "langflowai/langflow:latest",
+      "name": "Langflow",
+      "volumes": [
+        "/app/langflow"
+      ]
+    },
+    {
+      "category": "AI",
+      "cmd": null,
+      "container_port": "5001/tcp",
+      "default_port": 5002,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Secret Key",
+          "name": "SECRET_KEY",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "dify",
+          "label": "Database Username",
+          "name": "DB_USERNAME",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Database Password",
+          "name": "DB_PASSWORD",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "localhost",
+          "label": "Database Host",
+          "name": "DB_HOST",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "localhost",
+          "label": "Redis Host",
+          "name": "REDIS_HOST",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "dify",
+      "image": "langgenius/dify-api:latest",
+      "name": "Dify",
+      "volumes": [
+        "/app/api/storage"
+      ]
+    },
+    {
+      "category": "AI",
+      "cmd": null,
+      "container_port": "8000/tcp",
+      "default_port": 8000,
+      "env_vars": [
+        {
+          "default": "meta-llama/Llama-3.2-1B-Instruct",
+          "label": "Model (HuggingFace ID)",
+          "name": "MODEL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "HuggingFace Token (gated models)",
+          "name": "HUGGING_FACE_HUB_TOKEN",
+          "required": false,
+          "secret": true
+        }
+      ],
+      "id": "vllm",
+      "image": "vllm/vllm-openai:latest",
+      "name": "vLLM",
+      "volumes": [
+        "/root/.cache/huggingface"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "8000/tcp",
+      "default_port": 8300,
+      "env_vars": [
+        {
+          "default": "root",
+          "label": "Root Username",
+          "name": "SURREAL_USER",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Root Password",
+          "name": "SURREAL_PASS",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "surrealdb",
+      "image": "surrealdb/surrealdb:latest",
+      "name": "SurrealDB",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "9000/tcp",
+      "default_port": 9009,
+      "env_vars": [],
+      "id": "questdb",
+      "image": "questdb/questdb:latest",
+      "name": "QuestDB",
+      "volumes": [
+        "/var/lib/questdb"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "5432/tcp",
+      "default_port": 5433,
+      "env_vars": [
+        {
+          "default": "postgres",
+          "label": "Username",
+          "name": "POSTGRES_USER",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Password",
+          "name": "POSTGRES_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "timescaledb",
+      "image": "timescale/timescaledb:latest-pg16",
+      "name": "TimescaleDB",
+      "volumes": [
+        "/var/lib/postgresql/data"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "6379/tcp",
+      "default_port": 6381,
+      "env_vars": [],
+      "id": "keydb",
+      "image": "eqalpha/keydb:latest",
+      "name": "KeyDB",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "6379/tcp",
+      "default_port": 6382,
+      "env_vars": [],
+      "id": "dragonflydb",
+      "image": "docker.dragonflydb.io/dragonflydb/dragonfly:latest",
+      "name": "DragonflyDB",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "9042/tcp",
+      "default_port": 9042,
+      "env_vars": [
+        {
+          "default": "DockPanelCluster",
+          "label": "Cluster Name",
+          "name": "CASSANDRA_CLUSTER_NAME",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "cassandra",
+      "image": "cassandra:5",
+      "name": "Apache Cassandra",
+      "volumes": [
+        "/var/lib/cassandra"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "7474/tcp",
+      "default_port": 7474,
+      "env_vars": [
+        {
+          "default": "neo4j/changeme",
+          "label": "Auth (user/pass)",
+          "name": "NEO4J_AUTH",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "neo4j",
+      "image": "neo4j:5",
+      "name": "Neo4j",
+      "volumes": [
+        "/data",
+        "/logs"
+      ]
+    },
+    {
+      "category": "Database",
+      "cmd": null,
+      "container_port": "8529/tcp",
+      "default_port": 8529,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Root Password",
+          "name": "ARANGO_ROOT_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "arangodb",
+      "image": "arangodb:3.12",
+      "name": "ArangoDB",
+      "volumes": [
+        "/var/lib/arangodb3",
+        "/var/lib/arangodb3-apps"
+      ]
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3030,
+      "env_vars": [],
+      "id": "gitness",
+      "image": "harness/gitness:latest",
+      "name": "Gitness",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "4873/tcp",
+      "default_port": 4873,
+      "env_vars": [],
+      "id": "verdaccio",
+      "image": "verdaccio/verdaccio:6",
+      "name": "Verdaccio",
+      "volumes": [
+        "/verdaccio/storage",
+        "/verdaccio/conf"
+      ]
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "8081/tcp",
+      "default_port": 8320,
+      "env_vars": [],
+      "id": "nexus",
+      "image": "sonatype/nexus3:latest",
+      "name": "Nexus Repository",
+      "volumes": [
+        "/nexus-data"
+      ]
+    },
+    {
+      "category": "Development",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 8301,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Agent Token",
+          "name": "BUILDKITE_AGENT_TOKEN",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "buildkite-agent",
+      "image": "buildkite/agent:3",
+      "name": "Buildkite Agent",
+      "volumes": [
+        "/buildkite/builds"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "5055/tcp",
+      "default_port": 5055,
+      "env_vars": [],
+      "id": "jellyseerr",
+      "image": "fallenbagel/jellyseerr:latest",
+      "name": "Jellyseerr",
+      "volumes": [
+        "/app/config"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "5055/tcp",
+      "default_port": 5056,
+      "env_vars": [
+        {
+          "default": "1000",
+          "label": "User ID",
+          "name": "PUID",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "1000",
+          "label": "Group ID",
+          "name": "PGID",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "overseerr",
+      "image": "lscr.io/linuxserver/overseerr:latest",
+      "name": "Overseerr",
+      "volumes": [
+        "/config"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "6767/tcp",
+      "default_port": 6767,
+      "env_vars": [
+        {
+          "default": "1000",
+          "label": "User ID",
+          "name": "PUID",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "1000",
+          "label": "Group ID",
+          "name": "PGID",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "bazarr",
+      "image": "lscr.io/linuxserver/bazarr:latest",
+      "name": "Bazarr",
+      "volumes": [
+        "/config",
+        "/movies",
+        "/tv"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "9696/tcp",
+      "default_port": 9696,
+      "env_vars": [
+        {
+          "default": "1000",
+          "label": "User ID",
+          "name": "PUID",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "1000",
+          "label": "Group ID",
+          "name": "PGID",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "prowlarr",
+      "image": "lscr.io/linuxserver/prowlarr:latest",
+      "name": "Prowlarr",
+      "volumes": [
+        "/config"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "7878/tcp",
+      "default_port": 7878,
+      "env_vars": [
+        {
+          "default": "1000",
+          "label": "User ID",
+          "name": "PUID",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "1000",
+          "label": "Group ID",
+          "name": "PGID",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "radarr",
+      "image": "lscr.io/linuxserver/radarr:latest",
+      "name": "Radarr",
+      "volumes": [
+        "/config",
+        "/movies",
+        "/downloads"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "8989/tcp",
+      "default_port": 8989,
+      "env_vars": [
+        {
+          "default": "1000",
+          "label": "User ID",
+          "name": "PUID",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "1000",
+          "label": "Group ID",
+          "name": "PGID",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "sonarr",
+      "image": "lscr.io/linuxserver/sonarr:latest",
+      "name": "Sonarr",
+      "volumes": [
+        "/config",
+        "/tv",
+        "/downloads"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "8686/tcp",
+      "default_port": 8686,
+      "env_vars": [
+        {
+          "default": "1000",
+          "label": "User ID",
+          "name": "PUID",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "1000",
+          "label": "Group ID",
+          "name": "PGID",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "lidarr",
+      "image": "lscr.io/linuxserver/lidarr:latest",
+      "name": "Lidarr",
+      "volumes": [
+        "/config",
+        "/music",
+        "/downloads"
+      ]
+    },
+    {
+      "category": "Media",
+      "cmd": null,
+      "container_port": "8181/tcp",
+      "default_port": 8183,
+      "env_vars": [
+        {
+          "default": "1000",
+          "label": "User ID",
+          "name": "PUID",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "1000",
+          "label": "Group ID",
+          "name": "PGID",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "tautulli",
+      "image": "lscr.io/linuxserver/tautulli:latest",
+      "name": "Tautulli",
+      "volumes": [
+        "/config"
+      ]
+    },
+    {
+      "category": "Monitoring",
+      "cmd": null,
+      "container_port": "5000/tcp",
+      "default_port": 8303,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Admin Password",
+          "name": "CMK_PASSWORD",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "cmk",
+          "label": "Site ID",
+          "name": "CMK_SITE_ID",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "checkmk",
+      "image": "checkmk/check-mk-raw:2.3.0-latest",
+      "name": "Checkmk",
+      "volumes": [
+        "/omd/sites"
+      ]
+    },
+    {
+      "category": "Monitoring",
+      "cmd": null,
+      "container_port": "9000/tcp",
+      "default_port": 9200,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Password Secret (16+ chars)",
+          "name": "GRAYLOG_PASSWORD_SECRET",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "",
+          "label": "Root Password SHA256 Hash",
+          "name": "GRAYLOG_ROOT_PASSWORD_SHA2",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "http://localhost:9000/",
+          "label": "External URI",
+          "name": "GRAYLOG_HTTP_EXTERNAL_URI",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "mongodb://mongo:27017/graylog",
+          "label": "MongoDB URI",
+          "name": "GRAYLOG_MONGODB_URI",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "http://elasticsearch:9200",
+          "label": "Elasticsearch Hosts",
+          "name": "GRAYLOG_ELASTICSEARCH_HOSTS",
+          "required": true,
+          "secret": false
+        }
+      ],
+      "id": "graylog",
+      "image": "graylog/graylog:6.1",
+      "name": "Graylog",
+      "volumes": [
+        "/usr/share/graylog/data"
+      ]
+    },
+    {
+      "category": "Monitoring",
+      "cmd": null,
+      "container_port": "8686/tcp",
+      "default_port": 8304,
+      "env_vars": [],
+      "id": "vector",
+      "image": "timberio/vector:latest-alpine",
+      "name": "Vector",
+      "volumes": [
+        "/etc/vector",
+        "/var/lib/vector"
+      ]
+    },
+    {
+      "category": "Productivity",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8305,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Database Host",
+          "name": "LEAN_DB_HOST",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "leantime",
+          "label": "Database User",
+          "name": "LEAN_DB_USER",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Database Password",
+          "name": "LEAN_DB_PASSWORD",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "leantime",
+          "label": "Database Name",
+          "name": "LEAN_DB_DATABASE",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "leantime",
+      "image": "leantime/leantime:latest",
+      "name": "Leantime",
+      "volumes": [
+        "/var/www/html/public/userfiles",
+        "/var/www/html/userfiles"
+      ]
+    },
+    {
+      "category": "Productivity",
+      "cmd": null,
+      "container_port": "8000/tcp",
+      "default_port": 8306,
+      "env_vars": [],
+      "id": "focalboard",
+      "image": "mattermost/focalboard:latest",
+      "name": "Focalboard",
+      "volumes": [
+        "/opt/focalboard/data"
+      ]
+    },
+    {
+      "category": "Productivity",
+      "cmd": null,
+      "container_port": "22300/tcp",
+      "default_port": 22300,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Base URL",
+          "name": "APP_BASE_URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "pg",
+          "label": "DB Client",
+          "name": "DB_CLIENT",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "PostgreSQL Host",
+          "name": "POSTGRES_HOST",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "5432",
+          "label": "PostgreSQL Port",
+          "name": "POSTGRES_PORT",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "joplin",
+          "label": "Database Name",
+          "name": "POSTGRES_DATABASE",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "joplin",
+          "label": "Database User",
+          "name": "POSTGRES_USER",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Database Password",
+          "name": "POSTGRES_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "joplin-server",
+      "image": "joplin/server:latest",
+      "name": "Joplin Server",
+      "volumes": []
+    },
+    {
+      "category": "Communication",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8307,
+      "env_vars": [],
+      "id": "element-web",
+      "image": "vectorim/element-web:latest",
+      "name": "Element Web",
+      "volumes": []
+    },
+    {
+      "category": "Communication",
+      "cmd": null,
+      "container_port": "8008/tcp",
+      "default_port": 8308,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Server Name",
+          "name": "SYNAPSE_SERVER_NAME",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "no",
+          "label": "Report Stats",
+          "name": "SYNAPSE_REPORT_STATS",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "synapse",
+      "image": "matrixdotorg/synapse:latest",
+      "name": "Matrix Synapse",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Networking",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8309,
+      "env_vars": [],
+      "id": "traefik",
+      "image": "traefik:v3",
+      "name": "Traefik",
+      "volumes": [
+        "/etc/traefik",
+        "/letsencrypt"
+      ]
+    },
+    {
+      "category": "Networking",
+      "cmd": null,
+      "container_port": "80/tcp",
+      "default_port": 8310,
+      "env_vars": [],
+      "id": "caddy",
+      "image": "caddy:2-alpine",
+      "name": "Caddy",
+      "volumes": [
+        "/etc/caddy",
+        "/data",
+        "/config"
+      ]
+    },
+    {
+      "category": "Networking",
+      "cmd": [
+        "tunnel",
+        "run"
+      ],
+      "container_port": "8080/tcp",
+      "default_port": 8311,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Tunnel Token",
+          "name": "TUNNEL_TOKEN",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "cloudflared",
+      "image": "cloudflare/cloudflared:latest",
+      "name": "Cloudflare Tunnel",
+      "volumes": []
+    },
+    {
+      "category": "Networking",
+      "cmd": null,
+      "container_port": "41641/udp",
+      "default_port": 8312,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Auth Key",
+          "name": "TS_AUTHKEY",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "dockpanel",
+          "label": "Hostname",
+          "name": "TS_HOSTNAME",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "tailscale",
+      "image": "tailscale/tailscale:latest",
+      "name": "Tailscale",
+      "volumes": [
+        "/var/lib/tailscale"
+      ]
+    },
+    {
+      "category": "Storage",
+      "cmd": null,
+      "container_port": "3900/tcp",
+      "default_port": 3900,
+      "env_vars": [],
+      "id": "garage",
+      "image": "dxflrs/garage:v2.3.0",
+      "name": "Garage",
+      "volumes": [
+        "/var/lib/garage/data",
+        "/var/lib/garage/meta",
+        "/etc/garage"
+      ]
+    },
+    {
+      "category": "Storage",
+      "cmd": null,
+      "container_port": "9333/tcp",
+      "default_port": 9333,
+      "env_vars": [],
+      "id": "seaweedfs",
+      "image": "chrislusf/seaweedfs:latest",
+      "name": "SeaweedFS",
+      "volumes": [
+        "/data"
+      ]
+    },
+    {
+      "category": "Security",
+      "cmd": null,
+      "container_port": "1514/tcp",
+      "default_port": 1514,
+      "env_vars": [],
+      "id": "wazuh",
+      "image": "wazuh/wazuh-manager:4.9.2",
+      "name": "Wazuh Manager",
+      "volumes": [
+        "/var/ossec/api/configuration",
+        "/var/ossec/etc",
+        "/var/ossec/logs",
+        "/var/ossec/queue"
+      ]
+    },
+    {
+      "category": "Security",
+      "cmd": [
+        "server",
+        "--listen",
+        "0.0.0.0:8080"
+      ],
+      "container_port": "8080/tcp",
+      "default_port": 8313,
+      "env_vars": [],
+      "id": "trivy",
+      "image": "aquasec/trivy:latest",
+      "name": "Trivy Server",
+      "volumes": [
+        "/root/.cache"
+      ]
+    },
+    {
+      "category": "Automation",
+      "cmd": null,
+      "container_port": "3000/tcp",
+      "default_port": 3021,
+      "env_vars": [
+        {
+          "default": "mysql2",
+          "label": "DB Adapter",
+          "name": "HUGINN_DATABASE_ADAPTER",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "DB Host",
+          "name": "HUGINN_DATABASE_HOST",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "huginn",
+          "label": "DB Name",
+          "name": "HUGINN_DATABASE_NAME",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "huginn",
+          "label": "DB Username",
+          "name": "HUGINN_DATABASE_USERNAME",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "DB Password",
+          "name": "HUGINN_DATABASE_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "huginn",
+      "image": "ghcr.io/huginn/huginn:latest",
+      "name": "Huginn",
+      "volumes": []
+    },
+    {
+      "category": "Automation",
+      "cmd": null,
+      "container_port": "8000/tcp",
+      "default_port": 8314,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "PostgreSQL URL",
+          "name": "DATABASE_URL",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "windmill",
+      "image": "ghcr.io/windmill-labs/windmill:main",
+      "name": "Windmill",
+      "volumes": []
+    },
+    {
+      "category": "Automation",
+      "cmd": null,
+      "container_port": "8233/tcp",
+      "default_port": 8315,
+      "env_vars": [
+        {
+          "default": "postgresql",
+          "label": "Database Type",
+          "name": "DB",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "PostgreSQL Host",
+          "name": "POSTGRES_SEEDS",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "temporal",
+          "label": "PostgreSQL User",
+          "name": "POSTGRES_USER",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "PostgreSQL Password",
+          "name": "POSTGRES_PWD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "temporal",
+      "image": "temporalio/auto-setup:latest",
+      "name": "Temporal Server",
+      "volumes": []
+    },
+    {
+      "category": "Analytics",
+      "cmd": null,
+      "container_port": "8088/tcp",
+      "default_port": 8321,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Secret Key",
+          "name": "SUPERSET_SECRET_KEY",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "admin",
+          "label": "Admin Username",
+          "name": "ADMIN_USERNAME",
+          "required": false,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Admin Password",
+          "name": "ADMIN_PASSWORD",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "superset",
+      "image": "apache/superset:latest",
+      "name": "Apache Superset",
+      "volumes": [
+        "/app/superset_home"
+      ]
+    },
+    {
+      "category": "Analytics",
+      "cmd": null,
+      "container_port": "5000/tcp",
+      "default_port": 5100,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "PostgreSQL URL",
+          "name": "REDASH_DATABASE_URL",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "redis://redis:6379/0",
+          "label": "Redis URL",
+          "name": "REDASH_REDIS_URL",
+          "required": true,
+          "secret": false
+        },
+        {
+          "default": "",
+          "label": "Secret Key",
+          "name": "REDASH_SECRET_KEY",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "id": "redash",
+      "image": "redash/redash:latest",
+      "name": "Redash",
+      "volumes": []
+    },
+    {
+      "category": "Analytics",
+      "cmd": null,
+      "container_port": "8000/tcp",
+      "default_port": 8316,
+      "env_vars": [
+        {
+          "default": "",
+          "label": "Secret Key",
+          "name": "SECRET_KEY",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "",
+          "label": "PostgreSQL URL",
+          "name": "DATABASE_URL",
+          "required": true,
+          "secret": true
+        },
+        {
+          "default": "redis://redis:6379/",
+          "label": "Redis URL",
+          "name": "REDIS_URL",
+          "required": false,
+          "secret": false
+        }
+      ],
+      "id": "posthog",
+      "image": "posthog/posthog:latest",
+      "name": "PostHog",
+      "volumes": []
+    }
+  ]
+}

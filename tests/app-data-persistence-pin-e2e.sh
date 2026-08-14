@@ -147,7 +147,15 @@ if S=$(subj "$AGENT_SVC"); then
   #                           There is no prior data by construction.
   #   read_file_from_image  — makes a throwaway container to read one file out of an
   #                           image and removes it. It never held app data.
-  EXEMPT="blue_green_update deploy_app read_file_from_image"
+  #   seed_volume_from_image — the same shape as read_file_from_image, for the same
+  #                           reason: it CREATES a container purely so Docker's copy
+  #                           API has a filesystem to read, never starts it, and
+  #                           removes it again. The container it removes is one it
+  #                           made microseconds earlier and nobody's data was ever
+  #                           in it. It is enumerated here because the census keys
+  #                           on remove+create, which is the right proxy for a
+  #                           recreate path and the wrong one for a probe.
+  EXEMPT="blue_green_update deploy_app read_file_from_image seed_volume_from_image"
 
   if [ "$n_recreate" -eq 0 ]; then
     bad "A0 enumeration found ZERO recreate paths — the census examined nothing"
@@ -302,21 +310,48 @@ echo "== §C  templates whose state lives in the container declare where =="
 
 if S=$(subj "$AGENT_SVC"); then
   # The template block for one id, bounded by the next AppTemplateDef.
+  #
+  # ⚠ It now really is bounded by the next AppTemplateDef, which is what this
+  # comment always claimed. It used to end the block at the first line matching
+  # `},` — fine while every entry wrote its env_vars inline, and wrong the moment
+  # one spelled them as a multi-line array, because each EnvVarDef closes with
+  # exactly that line. Capture then stopped INSIDE env_vars and the arm reported
+  # that the template did not declare a volume it declares four lines further
+  # down: a false RED, on correct code, from a template merely being reformatted.
+  # Lesson #172's shape — a delimiter guessed from today's formatting is not a
+  # declaration boundary.
   tmpl() {
     awk -v id="\"$1\"," '
-      /AppTemplateDef \{/ { buf=""; cap=1 }
-      cap { buf = buf $0 "\n" }
-      $0 ~ "id: " id { want=1 }
-      /^[[:space:]]*\},[[:space:]]*$/ { if (cap && want) { print buf; exit } cap=0; want=0 }
+      /AppTemplateDef \{/ { if (cap && want) { print buf; exit } buf=""; cap=1; want=0 }
+      cap { buf = buf $0 "\n"; if ($0 ~ "id: " id) want=1 }
+      END { if (cap && want) print buf }
     ' <<< "$S"
   }
+  # The `volumes:` array ONLY — never the whole template block.
+  #
+  # ⚠ This arm used to grep the block, and that made it unfalsifiable the moment
+  # a template mentioned its own data path anywhere else in its own declaration.
+  # Ghost now carries `/var/lib/ghost/content/data/ghost.db` as the default of a
+  # SQLite filename field, which contains the volume path as a substring — so
+  # deleting the volume outright left this arm GREEN. Caught by mutating the
+  # catalogue and watching the arm fail to notice (lesson #144: a check that
+  # cannot go red is not a check).
+  vols_of() {
+    awk '/volumes:[[:space:]]*&\[/ { cap=1 }
+         cap { buf = buf $0 "\n" }
+         cap && /\],[[:space:]]*$/ { print buf; exit }' <<< "$1"
+  }
+
   # id -> the path its data actually lives at, established upstream.
   while IFS='|' read -r id path; do
     [ -n "$id" ] || continue
     blk=$(tmpl "$id")
+    vols=$(vols_of "$blk")
     if [ -z "$blk" ]; then
       bad "C1 template '$id' not found in the catalogue"
-    elif grep -qF "$path" <<< "$blk"; then
+    elif [ -z "$vols" ]; then
+      bad "C1 $id — could not isolate a volumes: array, the arm examined nothing"
+    elif grep -qF "$path" <<< "$vols"; then
       ok "C1 $id declares $path"
     else
       bad "C1 $id does NOT declare $path — a recreate loses its data (#110)"

@@ -1,0 +1,103 @@
+name: Template Census
+
+# Does every one-click template still start and serve?
+#
+# The other workflows here run because something in this repository changed. That
+# is exactly why none of them can catch what this one is for. A catalogue entry
+# does not rot when we edit it — it rots when the image it names moves underneath
+# it. An upstream release adds a required setting, drops its embedded database, or
+# ships its default config somewhere new, and an entry that deployed correctly on
+# Tuesday deploys a crash loop on Wednesday with no commit in between.
+#
+# The record of what that costs is in the git log. The last three releases to
+# touch the catalogue each repaired it BY HAND, after a person read it: eighteen
+# image references that did not resolve (25b510e), thirty-one volumes the app
+# could not write (65092c2), data deleted on update (b538bc7). Every one of those
+# was found by reading. None of them could have been found by reading if the
+# defect had been "the image changed last week", and several were exactly that.
+#
+# `live-surfaces.yml` is the same idea for the published web surfaces — a check
+# that asserts things about TODAY rather than about this commit. This is its
+# counterpart for the catalogue, and it is the first check here that answers the
+# only question an operator actually asks: if I press Deploy, do I get a working
+# app?
+#
+# It is weekly rather than daily on purpose. The subject decays on the timescale
+# of upstream releases, and the run pulls and starts every image in the catalogue,
+# which is not a thing to do to Docker Hub every morning.
+
+on:
+  schedule:
+    # 04:20 UTC on Sundays. Off the hour because GitHub queues scheduled jobs by
+    # the minute and the top of the hour is heavily contended.
+    - cron: '20 4 * * 0'
+  workflow_dispatch:
+  # And whenever the catalogue itself changes, so a new or edited template is
+  # measured before it has a week to sit there being wrong.
+  push:
+    branches: [main]
+    paths:
+      - 'panel/agent/src/services/docker_apps.rs'
+      - 'tests/fixtures/app-templates.json'
+      - '.github/workflows/template-census.yml'
+
+concurrency:
+  group: template-census
+  cancel-in-progress: false
+
+jobs:
+  census:
+    name: Shard ${{ matrix.shard }} of 4 — the catalogue still deploys
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      # Never cancel the siblings: a single template that breaks the world should
+      # not hide the state of the other three quarters of the catalogue.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            panel/agent/target/
+          key: ${{ runner.os }}-cargo-census-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-census-
+
+      # A hosted runner starts with roughly 20 GB free, and the catalogue contains
+      # images considerably larger than any one template has a right to be. The
+      # census deletes each image after measuring it, so the steady state is small
+      # — but the peak is one image, and one image can be ten gigabytes.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - name: Run the census
+        env:
+          TEMPLATE_CENSUS: '1'
+          # Delete each image after measuring it. Right on a throwaway runner,
+          # wrong on a machine whose images somebody is using — which is why it is
+          # opt-in rather than the default.
+          TEMPLATE_CENSUS_PRUNE: '1'
+          TEMPLATE_CENSUS_SHARD: '${{ matrix.shard }}/4'
+        run: |
+          cargo test --manifest-path panel/agent/Cargo.toml \
+            template_census -- --ignored --nocapture
+
+      - name: Disk after
+        if: always()
+        run: df -h /

@@ -4,6 +4,90 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.113.0]
+
+### Fixed — a bind mount over a path the image ships files at deleted them, and 148 templates had never been run
+
+Every one-click template declares the paths its data lives at, and the panel
+bind-mounts a host directory over each one. Docker pre-populates an empty
+**named volume** from the image's contents at that path. It does not do that for
+a **bind mount**, and never has. So for every template whose image ships files
+where the catalogue mounts a directory, the app started with that directory
+empty — its own default config gone from its point of view.
+
+Same image, same path, same empty storage, differing only in mount type:
+
+```
+bind mount    caddy:2  exit 1   reading config from file: open /etc/caddy/Caddyfile: no such file or directory
+named volume  caddy:2  running  listening on :80, and Docker has put Caddyfile in the volume
+```
+
+Deploys now seed an empty volume directory from the image itself, which is what
+Docker would have done. It reads the image's own bytes rather than a starter
+config written here — a config this project maintained by hand would be a copy
+that rots the next time upstream changes its defaults. It writes only into a
+directory that is empty, so existing data is never touched, and it refuses any
+archive entry that tries to escape that directory.
+
+### Fixed — six templates that could not start
+
+Found by running all 148, not by reading them:
+
+- **Ghost** could never start. `ghost:5` sets `NODE_ENV=production`, whose default
+  database client is MySQL, so it dialled `127.0.0.1:3306` inside its own network
+  namespace and exited. The catalogue asked for a Site URL and nothing else —
+  there was no field an operator could have filled in. It now runs on SQLite, in
+  the volume the template already persists.
+- **Element Web** could not be *created*: its volume named `/app/config.json`, a
+  file, and Docker refuses to mount a directory onto a file. The deploy failed
+  before anything started.
+- **File Browser** had the same mistake one step later, exiting with
+  `open /database/filebrowser.db: is a directory`. It now mounts the parent
+  directory, which also means its users and shares survive an update.
+- **Traefik** published 8080, where nothing listens. Traefik with no configuration
+  creates exactly one entryPoint, on :80; the :8080 one exists only when the
+  insecure API is enabled. Corrected to 80 — deliberately not by enabling that
+  API, which would publish an unauthenticated admin interface.
+- **Caddy** and **Verdaccio** are fixed by the seeding above.
+
+### Fixed — Plausible pinned an abandoned image and asked for no database
+
+`plausible/analytics:v2`, `:v2.0`, `:v2.0.0` and `:latest` all resolve to one
+digest last pushed on **2023-07-12**, and nothing has been published to that
+repository since; the Docker Hub page carries no deprecation notice, so it still
+reads as the current install path. Upstream moved to
+`ghcr.io/plausible/community-edition`. The template also asked for neither of the
+two databases Plausible requires, so it defaulted to compose service names that
+resolve to nothing and crashed. It now pins the current image, asks for both
+database URLs, and runs upstream's own migration command.
+
+### Added — a weekly census that starts every template and checks it serves
+
+Every existing check over the catalogue reads the source. None could answer
+whether pressing Deploy produces something that works, and nothing in this
+repository changes when the answer stops being yes — an upstream image adds a
+required setting or drops its embedded database, and an entry that was correct
+last week is wrong today with no commit in between. The last three releases to
+touch this file each repaired it by hand, after a person read it.
+
+`Template Census` deploys every template through the real deploy path, weekly and
+on any change to the catalogue. Templates that genuinely cannot work standalone
+are listed in the source with the reason, so the check goes red on *new* breakage
+rather than staying permanently red — and it also reports when a listed template
+starts working, so the list cannot quietly stop describing anything.
+
+Nine templates remain broken and are recorded rather than claimed fixed: vector,
+garage, erpnext, azuracast, drone, dozzle, authelia, flowise and wazuh. Each row
+says what is actually wrong. Two of them — dozzle, which needs the Docker socket
+this panel deliberately does not mount, and erpnext, which needs a bench site no
+environment value can create — are candidates for withdrawal rather than repair.
+
+### Added — the catalogue is now emitted as data
+
+`tests/fixtures/app-templates.json` is generated from the catalogue, with a test
+that fails when the two disagree. Checks no longer have to parse Rust, which is
+why one of them had to open by asserting the catalogue still parses at all.
+
 ## [2.112.0]
 
 ### Fixed — setting `SECRETS_ENCRYPTION_KEY` destroyed every stored credential
