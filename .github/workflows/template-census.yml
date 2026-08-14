@@ -86,6 +86,15 @@ jobs:
                       /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
           df -h /
 
+      # AS ROOT, and not incidentally. `deploy_app` creates each app's data
+      # directory under /var/lib/dockpanel and chowns it to the uid the image
+      # names — both root-only operations, and the agent itself runs as root in
+      # production, so this is the faithful configuration rather than a
+      # convenience. The first run of this workflow proved it the expensive way:
+      # every template in two shards failed identically with
+      # `Volume path … inaccessible: No such file or directory`, because
+      # create_dir_all failed for a non-root runner and the error is swallowed
+      # (`.ok()`) before canonicalize reports the absence.
       - name: Run the census
         env:
           TEMPLATE_CENSUS: '1'
@@ -95,7 +104,8 @@ jobs:
           TEMPLATE_CENSUS_PRUNE: '1'
           TEMPLATE_CENSUS_SHARD: '${{ matrix.shard }}/4'
         run: |
-          cargo test --manifest-path panel/agent/Cargo.toml \
+          sudo -E env "PATH=$PATH" \
+            cargo test --manifest-path panel/agent/Cargo.toml \
             template_census -- --ignored --nocapture
 
       - name: Disk after

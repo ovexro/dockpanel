@@ -5157,19 +5157,37 @@ mod tests {
     // by a comma — and that suite does not strip comments. A tuple here, in code
     // or in this sentence, flattens to precisely that shape and turns another
     // suite red against correct code. Do not "tidy" these into tuples.
+    /// A template the census cannot judge because it needs something no automated
+    /// run can produce — and which the CATALOGUE does not already say so about.
+    ///
+    /// ⚠ It is deliberately tiny, and it must stay tiny. The first version of this
+    /// list was hand-written and named eight templates; **sixty-one** of the 148
+    /// require an operator-supplied value, so it was wrong by fifty-three the day
+    /// it shipped and would have reported every one of them BROKEN. A list that
+    /// has to enumerate a large, moving subset is a list that is always wrong —
+    /// derive the rule instead, which `census_needs_operator_input` now does.
+    /// What is left here is the residue that rule cannot see.
     static CENSUS_NEEDS_A_SERVICE_THE_CENSUS_CANNOT_SUPPLY: &[&str] = &[
-        "outline | Postgres and Redis, both requested by name on the form",
-        "rocketchat | MongoDB, requested by name on the form",
-        "authentik | Postgres and Redis, requested by name on the form",
-        "invoice-ninja | MySQL, requested by name on the form",
-        "mattermost | Postgres or MySQL, requested by name on the form",
-        "umami | Postgres, requested by name on the form",
-        "plausible | Postgres AND ClickHouse, both requested by name on the form",
         "vllm | an NVIDIA GPU. It exits with `Failed to infer device type` on a \
          CPU-only host, which is what a CI runner is. The catalogue already marks \
          it GPU-recommended, so this is the census lacking hardware rather than \
          the template being wrong",
     ];
+
+    /// Does deploying this template require a value only a human can supply?
+    ///
+    /// A required field with no default is exactly how the catalogue says "the
+    /// operator must type this" — the deploy form refuses to submit without it.
+    /// The census can only invent a syntactically plausible value, so for these
+    /// templates a failure says nothing: it is indistinguishable from the census
+    /// having guessed a database URL that points at nothing. Reporting them as
+    /// broken would be asserting something the run cannot support.
+    ///
+    /// Derived from the catalogue, so a template that gains or loses such a field
+    /// is reclassified automatically and no list has to be maintained.
+    fn census_needs_operator_input(t: &AppTemplateDef) -> bool {
+        t.env_vars.iter().any(|e| e.required && e.default.is_empty())
+    }
 
     /// Templates that genuinely do NOT work, are not fixed, and are recorded here
     /// rather than left to turn the census permanently red.
@@ -5198,12 +5216,6 @@ mod tests {
          nothing answers — and correcting the port alone would only expose the \
          second failure, which is that a frappe bench needs MariaDB, Redis and a \
          site that only `bench new-site` creates",
-        "azuracast | seeding got it past the empty /var/azuracast, and \
-         MARIADB_ROOT_PASSWORD past the database refusing to initialise. A third \
-         failure remains in its supervisord startup. Two of three fixed is not \
-         fixed, and it is recorded here rather than claimed",
-        "drone | exits with `source code management system not configured`. Needs \
-         a GitHub or GitLab OAuth client id and secret the template never asks for",
         "dozzle | exits with `Could not connect to any Docker Engine`. It reads the \
          Docker socket, and `deploy_app` deliberately does not mount it — that \
          auto-mount was REMOVED for security, because it is a host escape. So this \
@@ -5338,6 +5350,14 @@ mod tests {
                 !excused.contains_key(id),
                 "'{id}' is on BOTH census lists; they mean different things"
             );
+            let t = TEMPLATES.iter().find(|t| t.id == *id).expect("checked above");
+            assert!(
+                !census_needs_operator_input(t),
+                "'{id}' is listed as known-broken, but it has a required field with \
+                 no default — the census supplies a synthetic value for that, so it \
+                 cannot support the claim that the template is broken. Record it \
+                 outside this list."
+            );
         }
 
         // `TEMPLATE_CENSUS_ONLY=caddy,ghost` narrows to named templates, which is
@@ -5434,6 +5454,17 @@ mod tests {
             let _ = std::fs::remove_dir_all(&data_dir);
             if prune {
                 let _ = docker.remove_image(t.image, None, None).await;
+            }
+
+            // The derived rule first: a template the operator must configure is one
+            // this run cannot judge in EITHER direction, so it is reported and
+            // never asserted on.
+            if census_needs_operator_input(t) {
+                match outcome {
+                    Ok(()) => println!("  unjudged {} (serves anyway on a synthetic value)", t.id),
+                    Err(e) => println!("  unjudged {} (needs operator input; {e})", t.id),
+                }
+                continue;
             }
 
             let listed = excused.get(t.id).or_else(|| known_broken.get(t.id));

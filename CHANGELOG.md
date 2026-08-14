@@ -4,6 +4,37 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.113.1]
+
+### Fixed — the new template census could not run, and its exclusion list was wrong by fifty-three
+
+Both defects were in the census added in v2.113.0, and its own first run found
+them. Nothing about the catalogue changed.
+
+**It needs to run as root.** `deploy_app` creates each app's data directory under
+`/var/lib/dockpanel` and chowns it to the uid the image names — both root-only,
+and the agent runs as root in production, so root is the faithful configuration
+rather than a convenience. A GitHub runner is not root, `create_dir_all` fails
+there, and the error is swallowed before `canonicalize` reports the absence — so
+every template in two shards failed identically with
+`Volume path … inaccessible`.
+
+**The exclusion list could never have been right.** The census invents a
+plausible value for a required field the operator would type, so a failure on
+such a template says nothing — it cannot be told apart from a guessed database
+URL pointing at nothing. That set was hand-listed at eight templates. It is
+**sixty-one of the 148**, so the list was wrong by fifty-three the day it
+shipped and would have reported every one of them broken. It is now derived from
+the catalogue: a required field with no default *is* the catalogue saying an
+operator must supply it. A list that has to enumerate a large, moving subset is a
+list that is always wrong.
+
+Those templates are now reported as unjudged, with their failure printed, and
+never asserted on. A consistency check refuses to let a template be listed as
+known-broken when the census cannot support that claim — it caught two
+(`drone`, `azuracast`) immediately, and both are recorded in `FEATURES.md`
+instead.
+
 ## [2.113.0]
 
 ### Fixed — a bind mount over a path the image ships files at deleted them, and 148 templates had never been run
