@@ -5785,11 +5785,21 @@ mod tests {
         }
     }
 
+    /// ⚠ The template id here is deliberately one that does NOT exist, and that is
+    /// load-bearing rather than tidy.
+    ///
+    /// The guard runs before the catalogue lookup, so with the guard in place this
+    /// refuses on the NAME. With the guard removed — which is exactly what a mutation
+    /// test does to it — an id naming a real template would carry straight on into
+    /// `deploy_app`'s pull and `create_container`, and the "test" would deploy a real
+    /// container onto whatever box it was run on. That is not hypothetical: it happened
+    /// on this project's own demo host, and the run that did it reported a clean kill.
+    /// With an unknown id the mutant fails on `Unknown template` instead, so the
+    /// mutation is still caught and the daemon is never contacted either way.
     #[tokio::test]
     async fn an_app_may_not_be_named_so_it_shadows_another_apps_data_directory() {
-        // Refused before the daemon is even contacted, so this test needs no Docker.
         let err = deploy_app(
-            "ghost",
+            "dockpanel-no-such-template",
             "dockpanel-app-n8n",
             8080,
             HashMap::new(),
