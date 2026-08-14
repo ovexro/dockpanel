@@ -174,13 +174,86 @@ else
   ok "no world-writable fallback anywhere in the file"
 fi
 
-# Non-recursive by design: recursing would rewrite ownership of data a previous
-# deployment wrote.
-if grep -qE 'chown-R|WalkDir|read_dir\(\)\.map\(\|e\|chown' <<<"$FLAT"; then
-  bad "the chown looks recursive; it must touch only the volume directory itself"
+# Recursion is allowed in exactly ONE place and refused everywhere else, and the
+# difference is what is underneath rather than a matter of taste.
+#
+#   deploy_app  may be pointed at a directory a previous deployment wrote, so it
+#               chowns the directory ITSELF and nothing below it.
+#   the migration has just refused to touch a non-empty directory and then filled
+#               it with `docker cp`, so every path below it is one it created
+#               seconds ago — and it must chown all of them, because `docker cp`
+#               writes them as root (#110, s360).
+#
+# ⚠ THE ARM THIS REPLACES WAS A FALSE GREEN. It grepped for `chown-R`, `WalkDir`
+# or one exact `read_dir().map()` spelling, so it printed "the chown is not
+# recursive" against a file that had just grown a recursive chown written as an
+# ordinary stack walk. An absence arm keyed on three spellings of a thing cannot
+# see the fourth (lesson #490). Count the CALL SITES instead — a name has one
+# spelling and the compiler enforces it.
+#
+# The test module is raw source too and calls this function itself (s342), so the
+# count is taken over the shipping half only.
+SRC_ONLY=$(printf '%s\n' "$CODE" | sed '/#\[cfg(test)\]/,$d')
+FLAT_SRC=$(printf '%s' "$SRC_ONLY" | tr -d ' \t\n')
+SRC_LINES=$(printf '%s\n' "$SRC_ONLY" | wc -l)
+if [ "$SRC_LINES" -lt 1000 ] || [ "$SRC_LINES" -ge "$STRIPPED_LINES" ]; then
+  bad "could not isolate the shipping half ($SRC_LINES of $STRIPPED_LINES lines) — the count below would be meaningless"
 else
-  ok "the chown is not recursive"
+  ok "shipping half isolated: $SRC_LINES of $STRIPPED_LINES lines precede the test module"
 fi
+
+RECURSIVE_CALLS=$(printf '%s' "$FLAT_SRC" | grep -o 'chown_migrated_tree(' | wc -l)
+if [ "$RECURSIVE_CALLS" -eq 2 ]; then
+  ok "the recursive chown has exactly one call site plus its definition"
+else
+  bad "chown_migrated_tree appears $RECURSIVE_CALLS times in shipping code, expected 2 — a second caller means some other path recurses over a directory it did not create"
+fi
+
+case "$FLAT" in
+  *'chown_to(&resolved_str'*)
+    ok "the DEPLOY path still chowns the directory alone" ;;
+  *) bad "deploy_app no longer uses the non-recursive chown" ;;
+esac
+
+if grep -qE 'chown-R' <<<"$FLAT"; then
+  bad "a shell 'chown -R' appears; recursion must be the walk that refuses to follow symlinks"
+else
+  ok "no shell chown -R anywhere in the file"
+fi
+
+echo
+echo "§4b the migration chowns what it wrote, and cannot walk out through a symlink"
+
+# GitHub #110, second act. v2.111.0 rescued the data out of the writable layer and
+# then handed it back owned by root, so every non-root image died on its first
+# write — n8n on `EACCES .../crash.journal`, then `SQLITE_READONLY`. Reproduced end
+# to end at s360 with the real image before any of this was written.
+case "$FLAT" in
+  *'chown_migrated_tree(&resolved,owner)'*)
+    ok "the migration chowns the whole tree it just created" ;;
+  *) bad "the migration does not chown its tree — docker cp wrote it as root, so a non-root app cannot write the data just rescued (#110)" ;;
+esac
+
+case "$FLAT" in
+  *'std::fs::symlink_metadata(&path)?'*)
+    ok "the walk stats without following symlinks" ;;
+  *) bad "the walk follows symlinks and could chown outside the volume entirely" ;;
+esac
+
+case "$FLAT" in
+  *'libc::lchown('*)
+    ok "entries are lchowned, so a symlink is changed and never its target" ;;
+  *) bad "no lchown — a symlink in the app's own data would be followed" ;;
+esac
+
+# The precondition that BOUNDS the recursion. If this refusal ever goes, the walk
+# above stops being a walk over files we created and becomes one over somebody
+# else's data. The two must never drift apart.
+case "$FLAT" in
+  *'Refusingtomigrate'*)
+    ok "the migration still refuses a non-empty directory — what makes the recursion bounded" ;;
+  *) bad "the non-empty refusal is gone, so the recursive chown is no longer bounded by construction" ;;
+esac
 
 case "$FLAT" in
   *'fnuser_spec_is_root'*) ok "root images are recognised and left completely alone" ;;

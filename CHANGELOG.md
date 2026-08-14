@@ -4,6 +4,54 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.113.2]
+
+### Fixed — the update rescued an app's data and then handed it back unwritable
+
+v2.111.0 stopped `Update` from destroying the data of an app installed before its
+template declared a volume: on the way through, the data is copied out of the
+container's writable layer onto a bind mount before the container is removed.
+That part works. What it did not do was give the data back to the app.
+
+`docker cp` does not preserve ownership on the way out of a container. It writes
+as the user running it — root, for the agent — and `--archive` does not change
+that either. The migration then chowned the volume *directory* and nothing
+inside it, because that chown is deliberately not recursive on the deploy path,
+where the directory may hold data an earlier deployment wrote. So every file the
+migration had just rescued arrived owned by root, and any image running as a
+non-root user died on the first write it attempted.
+
+Reported on #110 by the same person who reported the original data loss, which is
+the uncomfortable part: the repair for their bug is what broke their app the
+second time. On `n8nio/n8n:1` the container exits 1 with
+`EACCES: permission denied, open '/home/node/.n8n/crash.journal'` and
+`SQLITE_READONLY: attempt to write a readonly database`; the panel serves 502.
+
+The migration now chowns every path it wrote, and only those — it already refuses
+to migrate into a directory that is not empty, so everything underneath is
+something it created seconds earlier, and the recursion is bounded by
+construction rather than by care. The walk uses `lchown` and never follows a
+symlink, so a link inside an app's data cannot redirect the chown out of the
+volume. `deploy_app`'s own chown is unchanged and still touches the directory
+alone.
+
+This affects every app whose image runs as a non-root user and was installed
+before its template declared the volume — exactly the population the v2.111.0
+migration exists to rescue. Apps whose images run as root were never affected.
+All three doors go through the one function, so `Update`, changing an app's
+image and editing its environment variables are fixed together.
+
+**Why nothing caught it.** The weekly Template Census only ever deploys fresh,
+into an empty directory the app then fills as itself. It cannot reach the
+migration path, and a green census said nothing about this.
+
+### Corrected
+
+The v2.113.1 note below says the census cannot judge **sixty-one** of the 148
+templates. The number is **sixty-two**, counted independently from the emitted
+catalogue and from the census's own run. The rule it is derived from is
+unchanged, and no template's classification moves.
+
 ## [2.113.1]
 
 ### Fixed — the new template census could not run, and its exclusion list was wrong by fifty-three

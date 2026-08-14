@@ -3057,6 +3057,62 @@ fn chown_to(path: &str, owner: &VolumeOwner) -> std::io::Result<()> {
     }
 }
 
+/// `chown` one path without ever following a symlink.
+///
+/// The same call as `chown_to`, except that a symlink is changed rather than the
+/// thing it points at. An app's data directory may legitimately contain one, and
+/// following it would apply the app's uid to whatever is on the other end.
+fn lchown_to(path: &std::path::Path, owner: &VolumeOwner) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::other("volume path contains a NUL byte"))?;
+    let gid = owner.gid.unwrap_or(u32::MAX);
+    if unsafe { libc::lchown(c_path.as_ptr(), owner.uid, gid) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// Give the app ownership of every file the migration just wrote for it.
+///
+/// **This is recursive, and `chown_to` is deliberately not. The difference is a
+/// difference in what is underneath, not a difference of opinion.** On the deploy
+/// path the directory may hold data an earlier deployment wrote, and rewriting
+/// that wholesale is a bigger operation than the defect there called for. Here
+/// the caller has already REFUSED to proceed unless the directory was empty and
+/// has then filled it itself, so every path underneath is one we created seconds
+/// ago. Recursing over exactly that set is bounded by construction.
+///
+/// It has to happen, because `docker cp` does not preserve ownership on the way
+/// out of a container. Copying a container's files to the host writes them as the
+/// user running the command — root, for the agent — and `--archive` does not
+/// change that (measured on docker 29.7.2: a file owned by 1000:1000 inside the
+/// container arrives 0:0 either way). Chowning only the directory leaves the app
+/// holding its own data owned by a user it is not, and a non-root image then dies
+/// on the first write it attempts. That is GitHub #110's second act: the update
+/// rescued the data and handed it back unwritable.
+///
+/// Returns how many paths were changed, so the log can evidence the work rather
+/// than merely claim it.
+fn chown_migrated_tree(root: &std::path::Path, owner: &VolumeOwner) -> std::io::Result<usize> {
+    let mut stack = vec![root.to_path_buf()];
+    let mut touched = 0usize;
+    while let Some(path) = stack.pop() {
+        // `symlink_metadata` does not follow, so a symlink to a directory is
+        // chowned as a link and never descended into.
+        let meta = std::fs::symlink_metadata(&path)?;
+        lchown_to(&path, owner)?;
+        touched += 1;
+        if meta.is_dir() {
+            for entry in std::fs::read_dir(&path)? {
+                stack.push(entry?.path());
+            }
+        }
+    }
+    Ok(touched)
+}
+
 /// Deploy an app from a template: pull image, create container, start it.
 pub async fn deploy_app(
     template_id: &str,
@@ -3714,8 +3770,14 @@ async fn migrate_unmounted_volumes(
 
         // `<container>:<path>/.` copies the CONTENTS of the directory, so the data lands
         // directly in the host directory instead of one level down inside a copy of it.
-        // `docker cp` preserves the numeric uid/gid the files carry in the container, so
-        // a non-root app keeps ownership of its own data.
+        //
+        // ⚠ It does NOT carry ownership across. This comment used to claim the
+        // opposite — that the numeric uid/gid survived the copy, so a non-root app
+        // kept ownership of its own data — and that was simply wrong. `docker cp`
+        // out of a container writes as the user running it, which for the agent is
+        // root, and `--archive` does not change it either (both measured). The tree
+        // is therefore chowned explicitly below; without that the app is handed
+        // back its own data owned by somebody else. See #110.
         let out = crate::safe_cmd::safe_command("docker")
             .args(["cp", &format!("{container_id}:{vol}/."), &resolved_str])
             .output()
@@ -3741,14 +3803,29 @@ async fn migrate_unmounted_volumes(
             );
         }
 
+        // Deliberately NOT fatal, and the reasoning is worth stating because the
+        // opposite reading is defensible. Aborting here would strand the copy: the
+        // host directory is now non-empty, so the refusal at the top of this loop
+        // would decline every later attempt, turning a recoverable state into a
+        // permanent one. As root, on a directory this function created moments ago,
+        // this call does not realistically fail — and if it somehow does, the app
+        // is broken in a way the operator must see, so it is logged at error rather
+        // than dressed down to a warning.
         if let Some(owner) = &owner {
-            if let Err(e) = chown_to(&resolved_str, owner) {
-                tracing::warn!(
-                    "Could not chown migrated volume {resolved_str} to {}: {e}. The app runs \
-                     as {:?} and may be unable to write its data directory.",
+            match chown_migrated_tree(&resolved, owner) {
+                Ok(touched) => tracing::info!(
+                    "Migrated volume {resolved_str}: {touched} path(s) chowned to {} for \
+                     image user {:?}",
                     owner.uid,
                     owner.spec
-                );
+                ),
+                Err(e) => tracing::error!(
+                    "Could not chown migrated volume {resolved_str} to {}: {e}. The app runs \
+                     as {:?} and WILL be unable to write the data just rescued — chown the \
+                     directory by hand and recreate the app.",
+                    owner.uid,
+                    owner.spec
+                ),
             }
         }
         binds.push(format!("{resolved_str}:{vol}"));
@@ -5025,6 +5102,52 @@ mod tests {
         let pad = body.len().div_ceil(512) * 512 - body.len();
         out.extend(std::iter::repeat_n(0u8, pad));
         out
+    }
+
+    /// The migration's chown must reach every file it just wrote, and must not
+    /// walk out of the directory through a symlink while doing it.
+    ///
+    /// Chowns to the CURRENT uid/gid on purpose. Setting a file you already own to
+    /// the owner it already has is permitted for an unprivileged user, so this runs
+    /// identically for root on a dev box and for a non-root CI runner — the #491
+    /// shape, where a harness passed locally only because root happened to be
+    /// load-bearing and nobody noticed. What it measures is the WALK, which is the
+    /// part that was wrong: the old code chowned the directory alone, and `docker
+    /// cp` had already written everything inside it as root.
+    #[test]
+    fn the_migrated_chown_reaches_every_file_and_never_follows_a_symlink() {
+        let base = std::env::temp_dir().join(format!("dp-chown-{}", uuid::Uuid::new_v4()));
+        let root = base.join("volume");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(root.join("sub")).expect("temp tree");
+        std::fs::create_dir_all(&outside).expect("temp tree");
+        std::fs::write(root.join("database.sqlite"), b"x").expect("file");
+        std::fs::write(root.join("sub").join("nested"), b"x").expect("nested file");
+        std::fs::write(outside.join("untouched"), b"x").expect("outside file");
+        std::os::unix::fs::symlink(&outside, root.join("link")).expect("symlink");
+
+        let owner = VolumeOwner {
+            uid: unsafe { libc::getuid() },
+            gid: Some(unsafe { libc::getgid() }),
+            spec: String::new(),
+        };
+        let touched = chown_migrated_tree(&root, &owner).expect("chowns the tree");
+
+        // The volume, its two files, its subdirectory, and the symlink AS a link:
+        // five. Four or fewer means it stopped at the directory, which is the
+        // defect. Six or more means it walked THROUGH the link, which would apply
+        // the app's uid to files outside the volume altogether.
+        assert_eq!(
+            touched, 5,
+            "expected the volume, its two files, its subdirectory and the symlink \
+             itself — got {touched}"
+        );
+        assert!(
+            outside.join("untouched").exists(),
+            "the symlink target must be left alone"
+        );
+
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
