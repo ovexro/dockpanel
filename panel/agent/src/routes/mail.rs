@@ -1647,12 +1647,29 @@ async fn webmail_install(Json(body): Json<serde_json::Value>) -> Result<Json<ser
 
     let _ = safe_command("docker").args(["rm", "-f", "dockpanel-roundcube"]).output().await;
 
+    // Webmail keeps its accounts, identities, contacts and preferences in a SQLite
+    // database, which its image places under this path whenever no external database is
+    // configured — and this install deliberately configures none. The image declares no
+    // volume there, so without this bind the whole lot lives in the container's writable
+    // layer, and the `rm -f` directly above (or any Update from the Apps page) takes it
+    // with the container. Bound under the app data directory, on the same
+    // `{APP_DATA_DIR}/{app}{path}` convention a template deploy uses, so the panel's own
+    // cleanup recognises it.
+    let webmail_db = format!(
+        "{}/roundcube/var/roundcube/db",
+        crate::services::docker_apps::APP_DATA_DIR
+    );
+    if let Err(e) = std::fs::create_dir_all(&webmail_db) {
+        tracing::warn!("Could not create {webmail_db} for webmail: {e}");
+    }
+
     let panel_host = panel_server_name();
     let mut args: Vec<String> = vec![
         "run".into(), "-d".into(),
         "--name".into(), "dockpanel-roundcube".into(),
         "--restart".into(), "unless-stopped".into(),
         "-p".into(), format!("127.0.0.1:{port}:80"),
+        "-v".into(), format!("{webmail_db}:/var/roundcube/db"),
         "-e".into(), format!("ROUNDCUBEMAIL_DEFAULT_HOST=ssl://{domain}"),
         "-e".into(), "ROUNDCUBEMAIL_DEFAULT_PORT=993".into(),
         "-e".into(), format!("ROUNDCUBEMAIL_SMTP_SERVER=tls://{domain}"),

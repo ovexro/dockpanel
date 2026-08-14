@@ -15,6 +15,14 @@ use tokio_stream::StreamExt;
 /// removal that decides whether this container is entitled to delete it.
 pub const APP_DATA_DIR: &str = "/var/lib/dockpanel/apps";
 
+/// What `deploy_app` puts in front of an app's name to make its container name.
+///
+/// Named for the same reason as the directory above: the two are NOT the same string,
+/// and every recreate path has an `info.name` (the container) in hand while every path
+/// that touches data needs the app. Confusing the two is what put a migrated app's data
+/// somewhere the panel could not find it — see `app_data_name`.
+pub const CONTAINER_NAME_PREFIX: &str = "dockpanel-app-";
+
 // ── Container auto-update detection ────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -307,6 +315,19 @@ static TEMPLATE_CMD: &[(&str, &[&str])] = &[
         ],
     ),
 ];
+
+/// The catalogue's command for whatever template a running container came from.
+///
+/// A recreate has the container's RESOLVED `Cmd` in hand, which is the old image's default
+/// whenever the catalogue overrode nothing — so carrying that forward would pin a departing
+/// image's command onto its replacement. Going back to the template label instead gives the
+/// override where one exists and nothing where it does not, which is what lets the new
+/// image's own default apply.
+fn catalogue_cmd_for(labels: Option<&HashMap<String, String>>) -> Option<Vec<String>> {
+    labels
+        .and_then(|l| l.get("dockpanel.app.template"))
+        .and_then(|template_id| template_cmd(template_id))
+}
 
 /// The `Cmd` to give a template's container, if the catalogue overrides it.
 fn template_cmd(id: &str) -> Option<Vec<String>> {
@@ -3251,6 +3272,20 @@ pub async fn deploy_app(
     gpu_enabled: bool,
     gpu_indices: Option<Vec<u32>>,
 ) -> Result<DeployResult, String> {
+    // Refused before anything is pulled or created. An app called
+    // `dockpanel-app-<something>` owns the very directory a recreate of the app
+    // `<something>` migrated into on releases v2.111.0 through v2.113.3, so the two would
+    // share one tree and deleting either would take the other's data. The migration no
+    // longer writes there, but the installs it already wrote cannot be un-written — so the
+    // name is closed rather than left as a collision waiting to be found.
+    if name.starts_with(CONTAINER_NAME_PREFIX) {
+        return Err(format!(
+            "'{name}' is not an available app name: it collides with the container naming \
+             this panel uses, and with the data directory of the app it would shadow. \
+             Choose a name that does not begin with that prefix."
+        ));
+    }
+
     let template = TEMPLATES
         .iter()
         .find(|t| t.id == template_id)
@@ -3279,7 +3314,7 @@ pub async fn deploy_app(
         return Err(format!("Image pull timed out for {}", template.image));
     }
 
-    let container_name = format!("dockpanel-app-{name}");
+    let container_name = format!("{CONTAINER_NAME_PREFIX}{name}");
 
     // Build environment variables: merge template defaults with user-supplied values
     let mut env_list: Vec<String> = Vec::new();
@@ -3821,16 +3856,70 @@ fn unmounted_declared_volumes(
     let Some(template_id) = labels.get("dockpanel.app.template") else {
         return Vec::new();
     };
-    let Some(template) = TEMPLATES.iter().find(|t| t.id == template_id) else {
-        return Vec::new();
+    let declared: &'static [&'static str] = match TEMPLATES.iter().find(|t| t.id == template_id) {
+        Some(template) => template.volumes,
+        // Not every managed container comes from the one-click catalogue, and the ones
+        // that do not were getting no migration at all — see `non_catalogue_volumes`.
+        None => non_catalogue_volumes(template_id),
     };
     let mounted = mounted_destinations(host_config);
-    template
-        .volumes
+    declared
         .iter()
         .copied()
         .filter(|vol| !mounted.iter().any(|d| d == vol))
         .collect()
+}
+
+/// Paths kept by a managed container whose template label names no catalogue row.
+///
+/// The label is not proof of a template. The mail stack installs its webmail container
+/// with `dockpanel.managed=true` and a template label of its own, and nothing in the
+/// catalogue answers to that name — so the lookup above found no row, returned no paths,
+/// and every recreate door removed the container with its writable layer and everything
+/// in it. That is #110 exactly, against a container the panel installs itself: the webmail
+/// app keeps its accounts, identities, contacts and preferences in a SQLite database, and
+/// the image declares no volume of its own to catch it.
+///
+/// The path is measured, not assumed. The image's entrypoint selects a local SQLite store
+/// under `/var/roundcube/db` whenever no database is configured by environment, and the
+/// mail stack configures none — so that directory is the whole of its state.
+///
+/// A compose service is the other container that reaches here, and it is genuinely fine:
+/// its mounts come from the stack's own YAML, so it arrives with its state already bound
+/// and has nothing for this function to rescue. It returns no paths by falling through,
+/// and that is a decision rather than an oversight.
+fn non_catalogue_volumes(template_id: &str) -> &'static [&'static str] {
+    match template_id {
+        "roundcube" => &["/var/roundcube/db"],
+        _ => &[],
+    }
+}
+
+/// The app's own name — the one whose directory under `APP_DATA_DIR` holds its data.
+///
+/// `deploy_app` creates the container as `dockpanel-app-<app>` but writes its volume
+/// directories at `{APP_DATA_DIR}/<app>{vol}`, and `removal_identity` looks for them
+/// under `{APP_DATA_DIR}/<app>`. Every recreate path reads `info.name`, which is the
+/// CONTAINER name, and handed that straight to the migration below — so a rescued app's
+/// data landed under a directory named for the container, where nothing else in the panel
+/// ever looks. The delete path could not find it to clean up, and because that directory
+/// never existed for an app deployed before its template declared a volume, not even the
+/// "leaving it in place" warning fired: the data was orphaned in silence.
+///
+/// The label is the app's real name. Stripping the container prefix is the fallback for a
+/// container that somehow carries no label, and it is a fallback rather than the rule
+/// because the label is what `removal_identity` reads.
+fn app_data_name(labels: Option<&HashMap<String, String>>, container_name: &str) -> String {
+    labels
+        .and_then(|l| l.get("dockpanel.app.name"))
+        .filter(|name| !name.is_empty())
+        .cloned()
+        .unwrap_or_else(|| {
+            container_name
+                .strip_prefix(CONTAINER_NAME_PREFIX)
+                .unwrap_or(container_name)
+                .to_string()
+        })
 }
 
 /// Carry an app's data out of the container's writable layer and onto a bind mount,
@@ -4270,6 +4359,8 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
         .trim_start_matches('/')
         .to_string();
     let image = config.image.clone().ok_or("No image found")?;
+    // The container is `dockpanel-app-<app>`; its DATA lives under the app's own name.
+    let app_name = app_data_name(config.labels.as_ref(), &name);
 
     // Anything this app's template calls persistent that the container does not mount is
     // living in the writable layer, which the recreate below deletes (#110). Decide that
@@ -4352,7 +4443,7 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
     // This is the only window in which it can be rescued, and a failure here MUST abort
     // before the remove below — the whole point is to not destroy what we came to save.
     let migrated =
-        migrate_unmounted_volumes(&docker, container_id, &name, &image, &unmounted, &mut host_config)
+        migrate_unmounted_volumes(&docker, container_id, &app_name, &image, &unmounted, &mut host_config)
             .await
             .map_err(|e| {
                 format!(
@@ -4446,8 +4537,18 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
 /// vars, and the `dockpanel.managed` labels (so the container vanished from the panel).
 /// This inspects the existing container and recreates it with the same `host_config`
 /// (caps, security_opt, port bindings, restart, resource limits, GPU device requests, binds),
-/// `labels`, `env`, and `exposed_ports`, only swapping the image. The new image's own
-/// cmd/entrypoint apply (a tag bump may change them), matching the original run semantics.
+/// `labels`, `env`, and `exposed_ports`, only swapping the image.
+///
+/// The new image's own entrypoint and working dir apply, because a tag bump may legitimately
+/// change them and `deploy_app` never overrode either. **Its command is a different case and
+/// used to be treated the same, wrongly.** For the handful of templates the catalogue gives an
+/// explicit command to, `deploy_app` sets that command precisely because the image's own
+/// default does not serve — it prints usage and exits, which restarts for ever (#101). Letting
+/// the image's default reassert itself here therefore broke every one of those templates the
+/// moment an operator changed its image, and the comment that used to sit on this line claimed
+/// the opposite was "the original run semantics". The command is re-derived from the template
+/// label below, so a template with no override still gets the new image's default and one with
+/// an override keeps working.
 pub async fn change_container_image(container_id: &str, new_image: &str) -> Result<String, String> {
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
@@ -4469,7 +4570,12 @@ pub async fn change_container_image(container_id: &str, new_image: &str) -> Resu
         return Err("Container not found".to_string());
     }
     let old_image = config.image.clone().unwrap_or_default();
+    let app_name = app_data_name(config.labels.as_ref(), &name);
     let unmounted = unmounted_declared_volumes(&config, &host_config);
+    // Read the override off the template label rather than carrying the old container's
+    // resolved Cmd forward: the resolved one may be the OLD image's default, and pinning
+    // that onto a new image is the very thing this path deliberately avoids.
+    let catalogue_cmd = catalogue_cmd_for(config.labels.as_ref());
 
     // Pull the new image. create_image's stream may emit non-fatal warnings, so verify the
     // image exists locally afterwards rather than trusting the stream's per-chunk results.
@@ -4506,7 +4612,7 @@ pub async fn change_container_image(container_id: &str, new_image: &str) -> Resu
     migrate_unmounted_volumes(
         &docker,
         container_id,
-        &name,
+        &app_name,
         &old_image,
         &unmounted,
         &mut host_config,
@@ -4541,6 +4647,7 @@ pub async fn change_container_image(container_id: &str, new_image: &str) -> Resu
         exposed_ports: config.exposed_ports,
         labels: config.labels,
         host_config: Some(host_config),
+        cmd: catalogue_cmd,
         ..Default::default()
     };
 
@@ -4611,10 +4718,45 @@ pub struct RemovalIdentity {
     /// compose service was deleting a template app's data directory while
     /// owning nothing under it.
     pub owns_app_dir: bool,
+    /// The directory the container's own binds prove it owns, when it owns one.
+    ///
+    /// Read from the binds rather than rebuilt from the name label, because the two
+    /// disagreed: releases v2.111.0 through v2.113.3 migrated an app's data into a
+    /// directory named for its CONTAINER, so the label-derived path pointed at nothing
+    /// and the data was left behind on delete without so much as a warning. Taking the
+    /// path from the mount that actually exists cleans up both spellings, and keeps the
+    /// compose protection above by construction — a bind outside `APP_DATA_DIR` yields
+    /// `None` and nothing is removed.
+    pub app_dir: Option<String>,
 }
 
 /// Gather [`RemovalIdentity`] for `container_id`. Never fails: an unreachable
 /// Docker yields all-none, which refuses every subsequent delete.
+/// Which directory under `APP_DATA_DIR` do this container's own binds prove it owns?
+///
+/// Two spellings are accepted, and only two: the one `deploy_app` writes, and the one the
+/// migration wrote on releases v2.111.0 through v2.113.3, when it was handed the container
+/// name instead of the app name. Accepting the second is what lets an install that was
+/// already migrated have its data cleaned up rather than orphaned.
+///
+/// Anything else is refused, which is what keeps a compose service from deleting a
+/// template app's tree: its binds live outside `APP_DATA_DIR` entirely, so nothing matches
+/// and the caller is told it owns nothing. The `{prefix}/` boundary is checked explicitly
+/// so a directory called `data` cannot answer for one called `database`.
+fn owned_app_dir(name: &str, binds: &[String]) -> Option<String> {
+    let candidates = [
+        format!("{APP_DATA_DIR}/{name}"),
+        format!("{APP_DATA_DIR}/{CONTAINER_NAME_PREFIX}{name}"),
+    ];
+    binds.iter().find_map(|bind| {
+        let source = bind.split(':').next().unwrap_or_default();
+        candidates
+            .iter()
+            .find(|dir| source == dir.as_str() || source.starts_with(&format!("{dir}/")))
+            .cloned()
+    })
+}
+
 pub async fn removal_identity(container_id: &str) -> RemovalIdentity {
     let mut id = RemovalIdentity::default();
     let Ok(docker) = Docker::connect_with_local_defaults() else {
@@ -4637,11 +4779,8 @@ pub async fn removal_identity(container_id: &str) -> RemovalIdentity {
         // bind of the directory itself counts, and the trailing boundary is
         // checked explicitly so `/apps/data` cannot answer for `/apps/database`.
         if let (Some(name), Some(binds)) = (id.name.as_deref(), host_config.binds.as_ref()) {
-            let prefix = format!("{APP_DATA_DIR}/{name}");
-            id.owns_app_dir = binds.iter().any(|b| {
-                let source = b.split(':').next().unwrap_or_default();
-                source == prefix || source.starts_with(&format!("{prefix}/"))
-            });
+            id.app_dir = owned_app_dir(name, binds);
+            id.owns_app_dir = id.app_dir.is_some();
         }
     }
 
@@ -4698,6 +4837,7 @@ pub async fn update_env(
         .trim_start_matches('/')
         .to_string();
     let image = config.image.clone().unwrap_or_default();
+    let app_name = app_data_name(config.labels.as_ref(), &name);
     let unmounted = unmounted_declared_volumes(&config, &host_config);
 
     // Build new env list, carrying over anything the caller sent back masked.
@@ -4723,7 +4863,7 @@ pub async fn update_env(
     migrate_unmounted_volumes(
         &docker,
         container_id,
-        &name,
+        &app_name,
         &image,
         &unmounted,
         &mut host_config,
@@ -5495,6 +5635,179 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    fn labels_of(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    /// The container is named for the app; the DATA is named for the app alone.
+    #[test]
+    fn the_data_directory_is_named_for_the_app_and_not_for_its_container() {
+        let labels = labels_of(&[("dockpanel.app.name", "n8n")]);
+        assert_eq!(app_data_name(Some(&labels), "dockpanel-app-n8n"), "n8n");
+
+        // No label: strip the prefix the deploy added rather than keeping it. Getting
+        // this wrong is the whole defect — the migration wrote under the container name.
+        assert_eq!(app_data_name(None, "dockpanel-app-ghost"), "ghost");
+        assert_eq!(app_data_name(None, "something-else"), "something-else");
+
+        // An empty label is not an answer.
+        let blank = labels_of(&[("dockpanel.app.name", "")]);
+        assert_eq!(app_data_name(Some(&blank), "dockpanel-app-gitea"), "gitea");
+
+        // The label WINS over the container name, because the label is what the removal
+        // path reads. A container renamed by hand must not move the data directory.
+        let renamed = labels_of(&[("dockpanel.app.name", "wiki")]);
+        assert_eq!(app_data_name(Some(&renamed), "dockpanel-app-old"), "wiki");
+    }
+
+    /// Both spellings are cleaned up; nothing else is touched.
+    #[test]
+    fn removal_follows_the_bind_and_accepts_the_directory_the_old_migration_wrote() {
+        let canonical = vec![format!("{APP_DATA_DIR}/n8n/home/node/.n8n:/home/node/.n8n")];
+        assert_eq!(
+            owned_app_dir("n8n", &canonical),
+            Some(format!("{APP_DATA_DIR}/n8n"))
+        );
+
+        // What v2.111.0 through v2.113.3 actually wrote. Before this, the delete path
+        // rebuilt the path from the label, found nothing there, and left the data behind
+        // without even warning — because the label-derived directory did not exist.
+        let legacy = vec![format!(
+            "{APP_DATA_DIR}/dockpanel-app-n8n/home/node/.n8n:/home/node/.n8n"
+        )];
+        assert_eq!(
+            owned_app_dir("n8n", &legacy),
+            Some(format!("{APP_DATA_DIR}/dockpanel-app-n8n"))
+        );
+
+        // A compose service binds outside the app directory entirely and must keep
+        // owning nothing, or it deletes the tree of the app it shares a name with.
+        let compose = vec!["/var/lib/dockpanel/compose/n8n/data:/data".to_string()];
+        assert_eq!(owned_app_dir("n8n", &compose), None);
+
+        // A neighbouring app's directory is not this app's, and a prefix that stops
+        // mid-segment must not match.
+        let neighbour = vec![format!("{APP_DATA_DIR}/n8n-staging/data:/data")];
+        assert_eq!(owned_app_dir("n8n", &neighbour), None);
+        assert_eq!(owned_app_dir("data", &vec![format!("{APP_DATA_DIR}/database/x:/x")]), None);
+
+        assert_eq!(owned_app_dir("n8n", &[]), None);
+    }
+
+    /// A managed container the catalogue never heard of still has data worth keeping.
+    #[test]
+    fn a_managed_container_outside_the_catalogue_still_declares_its_state() {
+        let config = bollard::models::ContainerConfig {
+            labels: Some(labels_of(&[
+                ("dockpanel.managed", "true"),
+                ("dockpanel.app.template", "roundcube"),
+                ("dockpanel.app.name", "roundcube"),
+            ])),
+            ..Default::default()
+        };
+
+        // Nothing mounted: the webmail database is in the writable layer, which every
+        // recreate deletes. Before this it reported nothing to migrate at all.
+        let bare = bollard::service::HostConfig::default();
+        assert_eq!(
+            unmounted_declared_volumes(&config, &bare),
+            vec!["/var/roundcube/db"]
+        );
+
+        // Once it is bound there is nothing left to rescue.
+        let bound = bollard::service::HostConfig {
+            binds: Some(vec![format!(
+                "{APP_DATA_DIR}/roundcube/var/roundcube/db:/var/roundcube/db"
+            )]),
+            ..Default::default()
+        };
+        assert!(unmounted_declared_volumes(&config, &bound).is_empty());
+
+        // A compose service brings its own mounts and is deliberately left alone.
+        let compose = bollard::models::ContainerConfig {
+            labels: Some(labels_of(&[
+                ("dockpanel.managed", "true"),
+                ("dockpanel.app.template", "compose"),
+            ])),
+            ..Default::default()
+        };
+        assert!(unmounted_declared_volumes(&compose, &bare).is_empty());
+
+        // And an unmanaged container is still none of our business.
+        let unmanaged = bollard::models::ContainerConfig {
+            labels: Some(labels_of(&[("dockpanel.app.template", "roundcube")])),
+            ..Default::default()
+        };
+        assert!(unmounted_declared_volumes(&unmanaged, &bare).is_empty());
+    }
+
+    /// The command comes back from the TEMPLATE, not from the departing image.
+    #[test]
+    fn a_recreate_re_derives_the_catalogue_command_from_the_template_label() {
+        // A template the catalogue gives a command to keeps it across an image change.
+        // Without this the image's own default reasserts itself, and for these templates
+        // that default prints usage and exits.
+        let ntfy = labels_of(&[("dockpanel.app.template", "ntfy")]);
+        assert_eq!(
+            catalogue_cmd_for(Some(&ntfy)),
+            Some(vec!["serve".to_string()])
+        );
+
+        // A template with no override gets none, so the NEW image's default applies —
+        // which is the behaviour this path always intended.
+        let ghost = labels_of(&[("dockpanel.app.template", "ghost")]);
+        assert_eq!(catalogue_cmd_for(Some(&ghost)), None);
+
+        assert_eq!(catalogue_cmd_for(None), None);
+        let unknown = labels_of(&[("dockpanel.app.template", "not-a-template")]);
+        assert_eq!(catalogue_cmd_for(Some(&unknown)), None);
+    }
+
+    /// Every template the catalogue gives a command to is one a recreate can recover it for.
+    #[test]
+    fn every_commanded_template_is_reachable_through_its_own_label() {
+        for (id, args) in TEMPLATE_CMD {
+            let labels = labels_of(&[("dockpanel.app.template", id)]);
+            let recovered = catalogue_cmd_for(Some(&labels));
+            assert_eq!(
+                recovered.as_deref(),
+                Some(
+                    args.iter()
+                        .map(|a| (*a).to_string())
+                        .collect::<Vec<_>>()
+                        .as_slice()
+                ),
+                "'{id}' has a catalogue command that a recreate cannot recover"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_app_may_not_be_named_so_it_shadows_another_apps_data_directory() {
+        // Refused before the daemon is even contacted, so this test needs no Docker.
+        let err = deploy_app(
+            "ghost",
+            "dockpanel-app-n8n",
+            8080,
+            HashMap::new(),
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .expect_err("a name that shadows another app's data directory must be refused");
+        assert!(
+            err.contains("not an available app name"),
+            "refusal should say why, got: {err}"
+        );
+    }
+
     // ── The runtime census ──────────────────────────────────────────────────
     //
     // Templates this census cannot judge, because serving requires a service the
@@ -5588,6 +5901,69 @@ mod tests {
          filebeat dials https://wazuh.indexer:9200, a compose service name that \
          resolves to nothing in a single-container deploy — the same shape as \
          plausible, and the template asks for no indexer",
+    ];
+
+    /// Templates known to leave state in an ANONYMOUS volume, and what is in it.
+    ///
+    /// An image may declare a path persistent on its own account. Docker honours that by
+    /// creating an anonymous volume for any such path the container does not otherwise
+    /// mount — and every recreate door builds the replacement from the original's
+    /// `HostConfig`, which carries binds and knows nothing about anonymous volumes. So the
+    /// replacement gets a brand-new empty one and the old one is orphaned: the app comes
+    /// back at first-run state with its data still on the disk and nothing pointing at it.
+    /// That is #110's mechanism again, arriving through the image rather than through the
+    /// catalogue, and the entries for two templates already fixed this way say so in their
+    /// own rows above the catalogue.
+    ///
+    /// ⚠ Like `CENSUS_KNOWN_BROKEN`, this is a REPAIR QUEUE and not an exemption. Each row
+    /// is a template whose catalogue entry should grow the path, measured rather than
+    /// guessed: every image in the catalogue had its config blob read from its registry,
+    /// and these are the declared paths the catalogue does not bind. The rows carry what is
+    /// actually lost, because "an anonymous volume exists" is not a severity — losing a
+    /// scratch directory every recreate is fine and losing a bundled database is not.
+    ///
+    /// The census reports BOTH directions, so a row that stops being true cannot sit here:
+    /// an unlisted template that produces one fails the run, and a listed template that
+    /// produces none is reported as a stale row. That second direction is what settles the
+    /// one question this list was NOT able to answer from the outside — whether a bind at a
+    /// parent path suppresses an image volume declared at a child of it, which is the whole
+    /// of the first entry below.
+    ///
+    /// ⚠ Spelled `id | reason`, for the reason given above `CENSUS_KNOWN_BROKEN`.
+    static CENSUS_ANONYMOUS_VOLUME_DEBT: &[&str] = &[
+        "azuracast | the image declares nine paths beneath /var/azuracast plus the MySQL \
+         it bundles, while the catalogue binds only the parent directory. Station media, \
+         listener uploads and the whole database are at stake, and whether the parent bind \
+         covers the children is exactly what this run answers",
+        "localai | models, data, configuration and backends are all declared by the image \
+         and none is bound. A downloaded model set runs to tens of gigabytes and is fetched \
+         again after every recreate",
+        "huginn | the image bundles its own MySQL and the catalogue binds nothing at all, so \
+         the entire database is anonymous and every recreate starts an empty one",
+        "gitness | every repository lives under /git, which the image declares and the \
+         catalogue does not bind. Only the /data path is bound",
+        "immich | the image declares /data while the catalogue binds the upload directory \
+         alone",
+        "mattermost | operator-installed plugins live in the two plugin directories, both \
+         declared by the image and neither bound",
+        "paperless-ngx | the consume drop folder and the export directory are declared by \
+         the image and unbound, so a document waiting to be ingested does not survive",
+        "plausible | the image declares /var/lib/plausible and the catalogue does not bind it",
+        "wikijs | page content is declared by the image at a path the catalogue does not bind",
+        "filebrowser | the image declares /config, which the catalogue does not bind, so the \
+         server's own configuration resets",
+        "influxdb | the image declares its configuration directory and the catalogue binds \
+         only the data",
+        "mongo | the config-server metadata directory is declared by the image; the data \
+         directory beside it is bound",
+        "buildkite-agent | the image declares /buildkite and the catalogue binds nothing there",
+        "sonarqube | scratch space only. The image declares a temp directory, and losing it \
+         on a recreate costs nothing — recorded so the row is not mistaken for an omission",
+        "searxng | a cache directory only, rebuilt on demand. Recorded for the same reason \
+         as the row above",
+        "erpnext | the bench log directory only. This template cannot start at all for the \
+         reason recorded above, so the row is about completeness rather than data",
+        "surrealdb | a log directory only",
     ];
 
     fn census_free_port() -> u16 {
@@ -5691,7 +6067,12 @@ mod tests {
         };
         let excused = parse_rows(CENSUS_NEEDS_A_SERVICE_THE_CENSUS_CANNOT_SUPPLY);
         let known_broken = parse_rows(CENSUS_KNOWN_BROKEN);
-        for id in excused.keys().chain(known_broken.keys()) {
+        let anon_debt = parse_rows(CENSUS_ANONYMOUS_VOLUME_DEBT);
+        for id in excused
+            .keys()
+            .chain(known_broken.keys())
+            .chain(anon_debt.keys())
+        {
             assert!(
                 TEMPLATES.iter().any(|t| t.id == *id),
                 "the census names '{id}', which is not in the catalogue"
@@ -5753,6 +6134,8 @@ mod tests {
         let docker = Docker::connect_with_local_defaults().expect("a Docker daemon");
         let mut broken: Vec<String> = Vec::new();
         let mut unexpectedly_fine: Vec<String> = Vec::new();
+        let mut anon_unlisted: Vec<String> = Vec::new();
+        let mut anon_stale: Vec<String> = Vec::new();
 
         for t in subjects {
             let name = format!("census-{}", t.id);
@@ -5765,9 +6148,17 @@ mod tests {
             }
 
             // Leave nothing behind from an interrupted earlier run.
-            let _ = remove_app(&format!("dockpanel-app-{name}")).await;
+            let _ = remove_app(&format!("{CONTAINER_NAME_PREFIX}{name}")).await;
             let data_dir = format!("{APP_DATA_DIR}/{name}");
             let _ = std::fs::remove_dir_all(&data_dir);
+
+            // Every mount Docker gave the container that is NOT one of our binds. Read
+            // from the container rather than computed from the image, because the
+            // question this answers — which declared paths end up as an anonymous
+            // volume — depends on how the daemon resolves a declaration against the
+            // mounts already present, and the daemon is the only honest source for that.
+            let mut anonymous: Vec<String> = Vec::new();
+            let mut deployed_ok = false;
 
             let outcome = match deploy_app(
                 t.id, &name, port, env, None, None, None, None, false, None,
@@ -5776,14 +6167,36 @@ mod tests {
             {
                 Err(e) => Err(format!("deploy refused: {e}")),
                 Ok(deployed) => {
+                    deployed_ok = true;
                     let served =
                         census_wait_until_listening(&docker, &deployed.container_id, t.container_port)
                             .await;
-                    let state = docker
+                    let info = docker
                         .inspect_container(&deployed.container_id, None)
                         .await
-                        .ok()
-                        .and_then(|c| c.state);
+                        .ok();
+                    anonymous = info
+                        .as_ref()
+                        .and_then(|c| c.mounts.as_ref())
+                        .map(|mounts| {
+                            mounts
+                                .iter()
+                                .filter(|m| {
+                                    m.typ != Some(bollard::service::MountPointTypeEnum::BIND)
+                                })
+                                .map(|m| {
+                                    format!(
+                                        "{} ({})",
+                                        m.destination.clone().unwrap_or_default(),
+                                        m.typ
+                                            .map(|v| format!("{v:?}").to_ascii_lowercase())
+                                            .unwrap_or_else(|| "unknown".to_string())
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let state = info.and_then(|c| c.state);
                     let status = state
                         .as_ref()
                         .and_then(|s| s.status.map(|v| v.to_string()))
@@ -5808,6 +6221,33 @@ mod tests {
             let _ = std::fs::remove_dir_all(&data_dir);
             if prune {
                 let _ = docker.remove_image(t.image, None, None).await;
+            }
+
+            // ── Does anything this app writes end up somewhere a recreate cannot follow?
+            //
+            // Judged for EVERY template that produced a container, deliberately ahead of
+            // the operator-input skip below. Whether a template can be judged on SERVING
+            // and whether its data survives an update are different questions, and the
+            // second one is answerable for a template the census cannot configure — it
+            // only has to start, and Docker creates the volume either way.
+            if deployed_ok {
+                match (anonymous.is_empty(), anon_debt.get(t.id)) {
+                    (true, None) => {}
+                    (false, Some(why)) => {
+                        println!("  anonvol {} ({}) — recorded: {why}", t.id, anonymous.join(", "))
+                    }
+                    (false, None) => {
+                        println!("  ANONVOL {} — {}", t.id, anonymous.join(", "));
+                        anon_unlisted.push(format!("{} — {}", t.id, anonymous.join(", ")));
+                    }
+                    (true, Some(why)) => {
+                        // The other direction, and the one that keeps the list honest:
+                        // this template was recorded as leaving data in an anonymous
+                        // volume and no longer does.
+                        println!("  ANONFIXED {} (recorded: {why})", t.id);
+                        anon_stale.push(format!("{} — recorded: {why}", t.id));
+                    }
+                }
             }
 
             // The derived rule first: a template the operator must configure is one
@@ -5853,6 +6293,22 @@ mod tests {
              serve. Good news, and the list is stale — delete the rows:\n  {}",
             unexpectedly_fine.len(),
             unexpectedly_fine.join("\n  ")
+        );
+        assert!(
+            anon_unlisted.is_empty(),
+            "{} template(s) put data in an anonymous volume that no recreate carries \
+             across, and are not recorded as doing so. Every one of these loses whatever \
+             is at that path the next time its operator presses Update — declare the path \
+             in the template, or record it with what is actually lost:\n  {}",
+            anon_unlisted.len(),
+            anon_unlisted.join("\n  ")
+        );
+        assert!(
+            anon_stale.is_empty(),
+            "{} template(s) are recorded as leaving data in an anonymous volume and no \
+             longer do. Good news, and the row is stale — delete it:\n  {}",
+            anon_stale.len(),
+            anon_stale.join("\n  ")
         );
     }
 

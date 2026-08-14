@@ -1015,20 +1015,27 @@ async fn remove(
     // service carries a caller-supplied `container_name` in the same label while
     // its own data lives under /var/lib/dockpanel/compose, so removing it used
     // to delete the identically-named template app's entire data tree.
-    if let Some(ref name) = identity.name {
-        let volume_dir = format!("{}/{}", docker_apps::APP_DATA_DIR, name);
-        if std::path::Path::new(&volume_dir).exists() {
-            if identity.owns_app_dir {
-                std::fs::remove_dir_all(&volume_dir).ok();
-                tracing::info!("Volume cleanup: removed {volume_dir}");
-            } else {
+    // The directory comes from the container's OWN binds, never from its name label.
+    // Rebuilding it from the label missed anything the v2.111.0-v2.113.3 migration had
+    // moved — that wrote under a directory named for the CONTAINER — so a migrated app's
+    // data survived its own deletion, and silently: the label-derived path did not exist,
+    // so even the warning below never printed.
+    match (identity.app_dir.as_ref(), identity.name.as_ref()) {
+        (Some(volume_dir), _) if std::path::Path::new(volume_dir).exists() => {
+            std::fs::remove_dir_all(volume_dir).ok();
+            tracing::info!("Volume cleanup: removed {volume_dir}");
+        }
+        (None, Some(name)) => {
+            let label_dir = format!("{}/{}", docker_apps::APP_DATA_DIR, name);
+            if std::path::Path::new(&label_dir).exists() {
                 tracing::warn!(
-                    "Volume cleanup: LEAVING {volume_dir} in place — this container \
+                    "Volume cleanup: LEAVING {label_dir} in place — this container \
                      had no bind mount under it, so the directory belongs to a \
                      different app."
                 );
             }
         }
+        _ => {}
     }
 
     Ok(Json(response))

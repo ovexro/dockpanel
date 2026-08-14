@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.113.3.** The version stamp, the template count and every
+> **Reflects v2.114.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -372,7 +372,7 @@ found things from coming back.
 
 **On every commit** (`ci.yml`, `codeql.yml`):
 
-- **539 unit tests** across the crates — 351 in the backend, 188 in the agent.
+- **545 unit tests** across the crates — 351 in the backend, 194 in the agent.
   (The CLI crate carries none of its own today.) Re-derive rather than trust
   this line: `for c in agent backend cli; do (cd panel/$c && cargo test
   --release); done` and sum the `test result:` lines. Nothing recomputes this

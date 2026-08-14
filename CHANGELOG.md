@@ -4,7 +4,69 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [2.113.3]
+## [2.114.0]
+
+### Fixed — an updated app's rescued data was left where the panel could not find it
+
+When an app is updated, DockPanel moves any data its template calls persistent out
+of the container's writable layer and onto a directory you can see and back up. It
+was naming that directory after the **container** rather than after the app — so the
+data went to `/var/lib/dockpanel/apps/dockpanel-app-<app>/…` while every other part
+of the panel looks under `/var/lib/dockpanel/apps/<app>/…`.
+
+The app kept working, because its mount pointed at the real location. What broke was
+everything else that needed to find it. Deleting the app left the data behind on disk,
+and did so **silently**: the cleanup checked the directory it expected, found nothing
+there, and had nothing to warn about. An app deployed before its template declared a
+volume — the exact population the rescue exists for — was the population it happened to.
+
+Three changes, and the second is what reaches installs already affected:
+
+- The migration is given the app's own name, so new rescues land in the right place.
+- Deletion now follows the container's **mounts** instead of rebuilding a path from its
+  name, and recognises both spellings — so an app migrated by v2.111.0 through v2.113.3
+  has its data cleaned up properly when you remove it, instead of orphaned.
+- An app may no longer be named so that it shadows another app's data directory.
+
+### Fixed — changing an app's image dropped the command it needs to start
+
+Six templates in the catalogue are given an explicit command, because their images
+default to printing usage and exiting. Updating an app kept that command; **changing
+its image discarded it**, so the container came back running the image's own default
+and stopped serving. The comment on that code claimed dropping it matched the original
+deploy — it did the opposite.
+
+The command is now re-derived from the app's template when its image changes. Templates
+without an override still get the new image's own default, which was always the intent.
+
+Affected: ntfy, trivy, minio, cloudflared, keycloak and plausible.
+
+### Fixed — the webmail container lost its accounts on every update
+
+The Roundcube container installed by the Mail stack carries DockPanel's own management
+labels, so it appears on the Apps page and can be updated from there. It named no
+template in the catalogue, and the migration only knew how to preserve data for
+templates it could look up — so it preserved nothing at all. Its image declares no
+volume either, which left its entire SQLite database in the writable layer that a
+recreate deletes: accounts, identities, contacts and preferences, gone on the first
+Update, with no warning.
+
+Webmail now stores that database under `/var/lib/dockpanel/apps/roundcube/`, and an
+existing install has it migrated there the next time it is updated rather than lost.
+
+### Added — the template census now reports data that a recreate cannot follow
+
+An image can declare a path persistent on its own account. Docker honours that with an
+anonymous volume, and a recreate builds the replacement from the original's mounts —
+which know nothing about anonymous volumes. The replacement gets an empty one and the
+app returns at first-run state, its data still on the disk with nothing pointing at it.
+That is the same mechanism as the data loss fixed in v2.111.0, arriving through the
+image rather than through the catalogue, and nothing here looked for it.
+
+The weekly census now inspects every deployed container's own mount table and reports
+any such path. Seventeen templates are recorded as affected today, each with what is
+actually at stake — a scratch directory is not a bundled database — and the census
+fails if an unrecorded one appears, or if a recorded one stops being true.
 
 ### Fixed — pressing Update now repairs an app the earlier migration already broke
 

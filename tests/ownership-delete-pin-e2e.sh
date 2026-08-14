@@ -259,7 +259,12 @@ if derives "$RA_VHOST" 'if +[^;]*ownership::app_vhost[^;]*may_delete'; then
 else
   bad "B2 app removal deletes the vhost without the guard's answer reaching the branch"
 fi
-if derives "$RA" 'owns_app_dir'; then
+# The handler used to gate on the BOOLEAN and then delete a path it rebuilt from
+# the name label — so it asked the right question and acted on the wrong answer.
+# That is how a data directory the migration had written under the CONTAINER name
+# survived its own app's deletion, silently. The arm follows the value that is
+# actually deleted: the directory the container's own binds proved.
+if derives "$RA" 'identity\.app_dir'; then
   ok "B3 app removal deletes the data dir only when the container mounts it"
 else
   bad "B3 app removal deletes /var/lib/dockpanel/apps/{name} on an unvalidated label"
@@ -271,7 +276,14 @@ RI=$(fnbody "$AS" "removal_identity")
 # Keyed on the ASSIGNMENT, not on the word `binds` appearing somewhere in the
 # body: the first draft still saw `binds` in the destructuring `let` after the
 # value had been replaced with a constant, and passed.
-OAD_ASSIGN=$(grep -E 'owns_app_dir *=' <<< "$RI" || true)
+# Repointed from `owns_app_dir` onto the field that now carries the evidence —
+# the boolean is derived FROM it, so keying on the boolean would measure a line
+# that no longer reads the mounts at all. Extracting a helper moves the subject
+# of every pin that measured it (the same note as CRONTAB_SVC above); the
+# receiver is still `removal_identity`, so the caller is still what is proved.
+# Qualified with `id.` because `owns_app_dir` ends in the shorter name and an
+# unqualified pattern would match the derived line and pass on it.
+OAD_ASSIGN=$(grep -E 'id\.app_dir *=' <<< "$RI" || true)
 if [ -n "$OAD_ASSIGN" ] && has "$OAD_ASSIGN" 'binds' && live "$RI"; then
   ok "B4 owns_app_dir is ASSIGNED from the container's bind mounts"
 else
