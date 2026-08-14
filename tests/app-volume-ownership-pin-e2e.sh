@@ -255,6 +255,47 @@ case "$FLAT" in
   *) bad "the non-empty refusal is gone, so the recursive chown is no longer bounded by construction" ;;
 esac
 
+echo
+echo "§4c the repair reaches installs the migration already broke — on ALL three doors"
+
+# v2.113.2 fixed the migration and could not undo it: the migration runs only for a
+# volume that is MISSING, and the bad migration is what supplied the mount. So the
+# harmed population and the fixed population were disjoint, and the only remedy was
+# an operator running chown -R over SSH. This is the half that reaches them.
+REPAIR_CALLS=$(printf '%s' "$FLAT_SRC" | grep -o 'repair_root_owned_volumes(' | wc -l)
+if [ "$REPAIR_CALLS" -eq 4 ]; then
+  ok "the repair is wired to all three recreate doors (plus its definition)"
+else
+  bad "repair_root_owned_volumes appears $REPAIR_CALLS times in shipping code, expected 4 — update_app, change_container_image and update_env must ALL call it or one door silently leaves apps broken"
+fi
+
+# The narrowest rule that repairs what we did: reclaim root and nothing else. An
+# ownership somebody chose deliberately is not ours to rewrite.
+case "$FLAT" in
+  *'ifmeta.uid()==0{'*)
+    ok "the repair reclaims ONLY root-owned paths" ;;
+  *) bad "the repair is not filtered to root-owned paths — it would rewrite an ownership a human chose" ;;
+esac
+
+# Root-run images have nothing to repair, and resolve_volume_owner is what says so.
+case "$FLAT" in
+  *'letSome(owner)=resolve_volume_owner(docker,image).awaitelse{'*)
+    ok "a root-run image is skipped — the resolver's None is the discriminator" ;;
+  *) bad "the repair does not consult resolve_volume_owner, so it would act on root-run images" ;;
+esac
+
+# Same prefix discipline as every other writer into APP_DATA_DIR.
+REPAIR_BODY=$(printf '%s' "$FLAT_SRC" | sed -n 's/.*asyncfnrepair_root_owned_volumes\(.*\)fnchown_root_owned_entries.*/\1/p')
+if [ -z "$REPAIR_BODY" ]; then
+  bad "could not isolate repair_root_owned_volumes — the arms below would pass on nothing"
+else
+  case "$REPAIR_BODY" in
+    *'canonicalize'*'starts_with(&prefix)'*)
+      ok "the repair canonicalises and re-checks the APP_DATA_DIR prefix" ;;
+    *) bad "the repair writes without canonicalising and re-checking the prefix" ;;
+  esac
+fi
+
 case "$FLAT" in
   *'fnuser_spec_is_root'*) ok "root images are recognised and left completely alone" ;;
   *) bad "nothing distinguishes a root image, so every deploy would chown" ;;

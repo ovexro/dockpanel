@@ -528,6 +528,7 @@ async fn update(
         "container_id": result.container_id,
         "blue_green": result.blue_green,
         "migrated_volumes": result.migrated_volumes,
+        "repaired_volumes": result.repaired_volumes,
     })))
 }
 

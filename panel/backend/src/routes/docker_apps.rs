@@ -933,6 +933,30 @@ pub async fn update_app(
                         )),
                     );
                 }
+                let repaired: Vec<String> = result
+                    .get("repaired_volumes")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !repaired.is_empty() {
+                    emit(
+                        "repair",
+                        "Repaired file ownership on the app's data",
+                        "done",
+                        Some(format!(
+                            "DockPanel v2.111.0 to v2.113.1 moved this app's data onto \
+                             persistent storage but left every file owned by root, so an app \
+                             that does not run as root could not write it — if this one has \
+                             been failing to start since it was last updated, that is why. \
+                             Ownership has been given back to the account the app runs as: {}",
+                            repaired.join(", ")
+                        )),
+                    );
+                }
                 if blue_green {
                     emit("health", "Health check passed", "done", None);
                     emit("swap", "Traffic swapped (zero-downtime)", "done", None);

@@ -341,6 +341,13 @@ pub struct UpdateResult {
     /// path — see `migrate_unmounted_volumes`. Reported so the operator learns their
     /// app just became durable rather than having it happen silently.
     pub migrated_volumes: Vec<String>,
+    /// Host paths this update handed back to the uid the image runs as, because an
+    /// EARLIER release migrated them with `docker cp` and left every file owned by
+    /// root — see `repair_root_owned_volumes`. Non-empty only on an install that
+    /// was actually damaged, and reported for the same reason as the field above:
+    /// an operator whose app has been failing since it was last updated deserves to
+    /// be told that this is what was wrong with it.
+    pub repaired_volumes: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3113,6 +3120,124 @@ fn chown_migrated_tree(root: &std::path::Path, owner: &VolumeOwner) -> std::io::
     Ok(touched)
 }
 
+/// Give back what the broken migration took, on an install it already broke.
+///
+/// v2.111.0 through v2.113.1 copied an app's data onto a bind mount with
+/// `docker cp` — which writes as root — and then chowned only the directory, so
+/// every file underneath came back owned by root and a non-root image could not
+/// write its own data (#110). v2.113.2 stopped that happening. It could not undo
+/// it: `migrate_unmounted_volumes` runs only for a volume that is MISSING, and
+/// the bad migration is precisely what supplied the mount. So the population that
+/// was harmed and the population the fix reached were disjoint, and the only
+/// remedy was an operator running `chown -R` over SSH.
+///
+/// This is the other half. It runs on the recreate paths, where the container is
+/// stopped and its data is not being written.
+///
+/// **It chowns only entries currently owned by root, and only to the uid the
+/// image itself declares.** That is the narrowest rule that repairs what we did:
+/// a file owned by any third uid is left exactly as it was, so an ownership
+/// somebody chose deliberately is never disturbed. It is also a de-escalation in
+/// every case — from root to the unprivileged account the app already runs as,
+/// inside that app's own data directory. Root-run images are skipped entirely,
+/// because `resolve_volume_owner` returns `None` for them and there is nothing
+/// here to repair.
+async fn repair_root_owned_volumes(
+    docker: &Docker,
+    image: &str,
+    host_config: &bollard::service::HostConfig,
+) -> Vec<String> {
+    let prefix = format!("{APP_DATA_DIR}/");
+    let sources: Vec<String> = host_config
+        .binds
+        .iter()
+        .flatten()
+        .filter_map(|bind| bind.split(':').next())
+        .filter(|src| src.starts_with(&prefix))
+        .map(|src| src.to_string())
+        .collect();
+    if sources.is_empty() {
+        return Vec::new();
+    }
+    let Some(owner) = resolve_volume_owner(docker, image).await else {
+        return Vec::new();
+    };
+
+    let mut repaired = Vec::new();
+    for src in sources {
+        // Canonicalize then re-check the prefix, exactly as every other writer
+        // here does — the check is what proves the path is one of ours, and it
+        // only means anything after symlinks are resolved.
+        let Ok(resolved) = std::fs::canonicalize(&src) else {
+            continue;
+        };
+        let resolved_str = resolved.to_string_lossy().to_string();
+        if !resolved_str.starts_with(&prefix) {
+            continue;
+        }
+        match chown_root_owned_entries(&resolved, &owner) {
+            Ok(0) => {}
+            Ok(count) => {
+                tracing::info!(
+                    "Repaired {resolved_str}: {count} root-owned path(s) given back to {} \
+                     for image user {:?} — this app was migrated by a release that left \
+                     its data unwritable (#110)",
+                    owner.uid,
+                    owner.spec
+                );
+                repaired.push(format!("{resolved_str} ({count})"));
+            }
+            Err(e) => tracing::warn!("Could not repair ownership under {resolved_str}: {e}"),
+        }
+    }
+    repaired
+}
+
+/// `lchown` every root-owned path under `root`, leaving every other owner alone.
+///
+/// The top level is probed first and the walk is skipped when nothing there is
+/// root-owned. A healthy app therefore pays one `read_dir` per update instead of
+/// a full tree walk, which matters for a database whose data directory holds tens
+/// of thousands of files.
+fn chown_root_owned_entries(
+    root: &std::path::Path,
+    owner: &VolumeOwner,
+) -> std::io::Result<usize> {
+    use std::os::unix::fs::MetadataExt;
+
+    let mut worth_walking = std::fs::symlink_metadata(root)?.uid() == 0;
+    if !worth_walking {
+        for entry in std::fs::read_dir(root)? {
+            if std::fs::symlink_metadata(entry?.path())?.uid() == 0 {
+                worth_walking = true;
+                break;
+            }
+        }
+    }
+    if !worth_walking {
+        return Ok(0);
+    }
+
+    let mut stack = vec![root.to_path_buf()];
+    let mut changed = 0usize;
+    while let Some(path) = stack.pop() {
+        let meta = std::fs::symlink_metadata(&path)?;
+        if meta.uid() == 0 {
+            lchown_to(&path, owner)?;
+            changed += 1;
+        }
+        // Descend into real directories only. A symlink is chowned as a link when
+        // it is root-owned and is never followed, so this cannot walk out of the
+        // volume.
+        if meta.is_dir() {
+            for entry in std::fs::read_dir(&path)? {
+                stack.push(entry?.path());
+            }
+        }
+    }
+    Ok(changed)
+}
+
 /// Deploy an app from a template: pull image, create container, start it.
 pub async fn deploy_app(
     template_id: &str,
@@ -4120,6 +4245,7 @@ async fn blue_green_update(
         blue_green: true,
         // Blue-green is only reached when nothing needed migrating — see `update_app`.
         migrated_volumes: Vec::new(),
+        repaired_volumes: Vec::new(),
     })
 }
 
@@ -4235,6 +4361,11 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
                 )
             })?;
 
+    // Same window, the other direction: give back ownership of data an EARLIER
+    // release migrated and left root-owned. Not fatal — an app that is already
+    // broken must not have its update refused as well.
+    let repaired = repair_root_owned_volumes(&docker, &image, &host_config).await;
+
     docker
         .remove_container(
             container_id,
@@ -4289,10 +4420,19 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
             migrated.join(", ")
         );
     }
+    if !repaired.is_empty() {
+        tracing::info!(
+            "App {name}: ownership repaired on {} path(s) left root-owned by an earlier \
+             release: {}",
+            repaired.len(),
+            repaired.join(", ")
+        );
+    }
     Ok(UpdateResult {
         container_id: container.id,
         blue_green: false,
         migrated_volumes: migrated,
+        repaired_volumes: repaired,
     })
 }
 
@@ -4378,6 +4518,10 @@ pub async fn change_container_image(container_id: &str, new_image: &str) -> Resu
              stopped and intact; start it again with `docker start {name}`."
         )
     })?;
+
+    // Repair against the image the container is about to RUN, not the one it is
+    // leaving — the uid that has to be able to write this data is the new one.
+    let _ = repair_root_owned_volumes(&docker, new_image, &host_config).await;
     docker
         .remove_container(
             container_id,
@@ -4591,6 +4735,8 @@ pub async fn update_env(
              is stopped and intact; start it again with `docker start {name}`."
         )
     })?;
+
+    let _ = repair_root_owned_volumes(&docker, &image, &host_config).await;
     docker
         .remove_container(
             container_id,
@@ -5102,6 +5248,91 @@ mod tests {
         let pad = body.len().div_ceil(512) * 512 - body.len();
         out.extend(std::iter::repeat_n(0u8, pad));
         out
+    }
+
+    /// The repair must touch root-owned paths and nothing else.
+    ///
+    /// ⚠ SPLIT IN TWO, AND THE HALVES DEFEND DIFFERENT THINGS. Say which, because
+    /// the first version of this comment claimed the unprivileged half carried the
+    /// `uid() == 0` filter and mutation testing showed it does not:
+    ///
+    ///   * **unprivileged half** — defends the cheap top-level probe. A tree with
+    ///     nothing root-owned must come back 0 and be left completely alone.
+    ///   * **root half** — defends the filter itself (a third party's uid survives
+    ///     untouched), that root-owned paths really are handed over, and that a
+    ///     second pass is a no-op.
+    ///
+    /// Dropping the filter therefore goes RED only under root: the probe returns
+    /// early for an unprivileged runner, so the walk it guards is never reached.
+    /// Verified by planting exactly that and running BOTH ways.
+    ///
+    /// Root is never load-bearing for a PASS — the unprivileged half asserts a real
+    /// invariant and says out loud what it skipped, which is #491 from the far side.
+    #[test]
+    fn the_repair_touches_only_root_owned_paths() {
+        use std::os::unix::fs::MetadataExt;
+        let base = std::env::temp_dir().join(format!("dp-repair-{}", uuid::Uuid::new_v4()));
+        let root = base.join("volume");
+        std::fs::create_dir_all(root.join("sub")).expect("temp tree");
+        std::fs::write(root.join("mine.db"), b"x").expect("file");
+        std::fs::write(root.join("sub").join("nested"), b"x").expect("nested file");
+
+        let me = unsafe { libc::getuid() };
+        let owner = VolumeOwner {
+            uid: me,
+            gid: Some(unsafe { libc::getgid() }),
+            spec: String::new(),
+        };
+
+        // Nothing here is root-owned (unless the suite itself runs as root, in
+        // which case everything just created is — handled below).
+        if me != 0 {
+            assert_eq!(
+                chown_root_owned_entries(&root, &owner).expect("walks"),
+                0,
+                "a tree with no root-owned path must be left completely alone"
+            );
+            eprintln!("note: the positive half needs root; skipped for uid {me}");
+            std::fs::remove_dir_all(&base).ok();
+            return;
+        }
+
+        // As root, the target must be an UNPRIVILEGED uid — the real case is an
+        // image running as somebody other than root, and chowning root to root
+        // would make the whole exercise an identity operation. (The first draft of
+        // this test did exactly that and its second pass still found four.)
+        let app_uid: u32 = 4242;
+        let owner = VolumeOwner { uid: app_uid, gid: Some(app_uid), spec: String::new() };
+
+        // A path owned by a third party, established BEFORE the repair runs.
+        let third = root.join("third-party");
+        std::fs::write(&third, b"x").expect("file");
+        let sentinel: u32 = 12345;
+        lchown_to(
+            &third,
+            &VolumeOwner { uid: sentinel, gid: Some(sentinel), spec: String::new() },
+        )
+        .expect("chown to the sentinel uid");
+
+        // volume, mine.db, sub, sub/nested — four root-owned paths. NOT third-party.
+        let claimed = chown_root_owned_entries(&root, &owner).expect("walks");
+        assert_eq!(claimed, 4, "expected the volume, two files and the subdirectory");
+        assert_eq!(
+            std::fs::symlink_metadata(&third).expect("still there").uid(),
+            sentinel,
+            "a path owned by a third uid was rewritten; the repair must only reclaim root"
+        );
+        assert_eq!(
+            std::fs::symlink_metadata(root.join("mine.db")).expect("still there").uid(),
+            app_uid,
+            "a root-owned file was not handed to the app"
+        );
+
+        // Idempotent: nothing root-owned is left, so the cheap probe exits at once.
+        let after = chown_root_owned_entries(&root, &owner).expect("walks again");
+        assert_eq!(after, 0, "a second pass has nothing left to reclaim, got {after}");
+
+        std::fs::remove_dir_all(&base).ok();
     }
 
     /// The migration's chown must reach every file it just wrote, and must not

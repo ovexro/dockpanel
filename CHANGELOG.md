@@ -4,6 +4,46 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.113.3]
+
+### Fixed — pressing Update now repairs an app the earlier migration already broke
+
+v2.113.2 stopped the migration handing an app its data back owned by root. It
+could not undo it for anyone it had already happened to, and that limitation was
+stated rather than fixed: `migrate_unmounted_volumes` runs only for a declared
+volume that is **missing**, and the bad migration is precisely what supplied the
+mount. So the people who were harmed and the people the fix reached were
+disjoint sets, and the only remedy was an operator running `chown -R` over SSH —
+which assumes they knew that was the problem.
+
+Updating an app now repairs it. In the same window the migration already uses —
+container stopped, not yet removed — DockPanel walks the app's own data
+directories and hands any **root-owned** path back to the account the image
+declares it runs as. If your app has been failing to start since the last time
+you updated it, this is the release that fixes it, and the update log now says so
+in as many words instead of leaving you to guess.
+
+The rule is deliberately the narrowest one that works:
+
+- **only paths currently owned by root** are reclaimed. A file owned by any other
+  user is left exactly as it is, so an ownership somebody chose on purpose is
+  never rewritten.
+- **only apps whose image runs as a non-root user.** A root-run app has nothing
+  to repair and is not touched at all.
+- **only directories under the panel's own app-data root**, canonicalised and
+  re-checked afterwards, and walked with `lchown` so a symlink in an app's data
+  cannot redirect the change outside the volume.
+- it is a **de-escalation** in every case — from root to the unprivileged account
+  the app already runs as, inside that app's own data directory.
+
+A healthy app pays one directory read per update: the top level is probed first
+and the walk is skipped entirely when nothing there is root-owned, which matters
+for a database whose data directory holds tens of thousands of files.
+
+All three doors that recreate a container — Update, changing the image, and
+editing environment variables — do this, because all three could have caused the
+original damage.
+
 ## [2.113.2]
 
 ### Fixed — the update rescued an app's data and then handed it back unwritable
