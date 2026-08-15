@@ -309,7 +309,22 @@ Create a git deployment.
 ```
 
 ### `POST /api/git-deploys/{id}/deploy`
-Trigger a build + deploy. Returns `202`. Stream via `GET /api/git-deploys/deploy/{deploy_id}/log` (SSE).
+Trigger a build + deploy. Returns `202` in **two different shapes**, and a client that
+reads only `deploy_id` will treat the second as a silent success:
+
+```json
+{ "deploy_id": "…", "message": "Deployment started" }
+```
+The build has started. Stream it via `GET /api/git-deploys/deploy/{deploy_id}/log` (SSE).
+
+```json
+{ "status": "pending_approval", "message": "Deploy requires approval from another admin …" }
+```
+The deployment has `deploy_protected` set, so **nothing was built**. A request was filed
+and a different administrator must resolve it — see *Deploy Approvals* below. There is no
+`deploy_id`, and none exists until the approval is granted. Filing a request is
+idempotent: a deployment may have only one waiting at a time, and a repeat call says so
+rather than queueing a second.
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -788,11 +803,32 @@ Create a webhook integration.
 
 ## Deploy Approvals
 
+A Git deployment with `deploy_protected` set will not build when its owner asks. The
+request is filed here and a **different** administrator has to resolve it — the panel
+surfaces this as *Pending Approvals* on the Git Deploy page.
+
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/deploy-approvals` | List pending approvals |
-| POST | `/api/deploy-approvals/{id}/approve` | Approve deploy |
-| POST | `/api/deploy-approvals/{id}/reject` | Reject deploy |
+| POST | `/api/deploy-approvals/{id}/approve` | Approve, and start the deploy |
+| POST | `/api/deploy-approvals/{id}/reject` | Reject, or withdraw your own |
+
+`GET /api/deploy-approvals` returns only requests whose deployment is **still** protected,
+on machines this administrator operates — this box, or a server they registered
+themselves. Each row carries `id`, `deploy_id`, `deploy_name`, `repo_url`, `branch`,
+`requested_by`, `requested_by_email`, `status` and `created_at`.
+
+`approve` answers `202` with a fresh `deploy_id` you can stream, and refuses with:
+
+| Code | When |
+|---|---|
+| `403` | you filed the request yourself |
+| `409` | the request is already resolved, the deployment is no longer protected, or a build is already running |
+| `404` | the request is not on a machine you operate |
+
+`reject` is terminal — the requester has to ask again. It carries **no** self-rejection
+rule, deliberately: withdrawing your own request is the only exit on an install with a
+single administrator, where nobody else can ever approve it.
 
 ---
 

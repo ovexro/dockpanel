@@ -132,6 +132,33 @@ When a branch is deleted in GitHub/GitLab, the webhook notification automaticall
 
 If you push new commits to a preview branch, the TTL timer resets. The preview stays alive as long as the branch is active.
 
+## Deploy Protection (two-person rule)
+
+Tick **Require another admin's approval before deploy** on a deployment and pressing
+Deploy no longer builds anything. It files a request, and a *different* administrator has
+to approve it.
+
+1. The owner presses **Deploy**. The panel confirms that a request will be filed rather
+   than a deploy started, and the other administrators are notified once.
+2. The request appears under **Pending Approvals** at the top of the Git Deploy page,
+   naming the deployment, the repository and branch, and who asked.
+3. A second administrator presses **Approve** — which starts the build — or **Reject**,
+   which is final; the requester has to ask again.
+
+Notes worth knowing before you rely on it:
+
+- **You cannot approve your own request.** On an install with only one administrator
+  nobody can ever approve, so the owner gets a **Withdraw** button instead. That is the
+  only way out — a deployment may have just one request waiting at a time.
+- **It covers the Deploy button only.** Webhook deploys, scheduled (cron and one-time)
+  deploys, and rollbacks all still deploy without approval. If you need those covered,
+  turn them off on the deployment as well.
+- **Any administrator can switch the setting off**, including the owner it constrains, and
+  doing so cancels whatever was waiting. Treat it as a guard against acting alone by
+  accident, not as a control over an administrator who does not want it.
+- Approvals and rejections are kept as a record of who decided what, and survive the
+  deletion of the account that made them.
+
 ## Rollback
 
 Every deployment is tracked in the deploy history with a build hash and timestamp.

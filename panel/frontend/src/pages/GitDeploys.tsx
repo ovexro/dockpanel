@@ -52,6 +52,23 @@ interface GitPreview {
   created_at: string;
 }
 
+// A protected deployment does not deploy when its owner presses Deploy — it files
+// one of these, and a DIFFERENT administrator has to resolve it. The three
+// endpoints behind it (list / approve / reject) shipped fully built and scoped and
+// no screen ever called them, so the only way to finish a protected deploy was a
+// pair of hand-written curls against ids nothing displayed.
+interface DeployApproval {
+  id: string;
+  deploy_id: string;
+  requested_by: string;
+  requested_by_email: string;
+  status: string;
+  deploy_name: string;
+  repo_url: string;
+  branch: string;
+  created_at: string;
+}
+
 interface DeployHistory {
   id: string;
   git_deploy_id: string;
@@ -97,6 +114,8 @@ export default function GitDeploys() {
   const [showLogs, setShowLogs] = useState(false);
   const [containerLogs, setContainerLogs] = useState("");
   const [previews, setPreviews] = useState<GitPreview[]>([]);
+  const [approvals, setApprovals] = useState<DeployApproval[]>([]);
+  const [resolving, setResolving] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<{ type: string; id: string; label: string } | null>(null);
 
   // Form state
@@ -144,8 +163,18 @@ export default function GitDeploys() {
     }
   };
 
+  // Approvals are not scoped to the selected row — the server returns every
+  // pending request on the machines this administrator operates, and the bell
+  // notification an approver follows links here with nothing selected. So it
+  // loads with the page, not with the detail panel.
+  const loadApprovals = async () => {
+    try { setApprovals(await api.get<DeployApproval[]>("/deploy-approvals")); }
+    catch { setApprovals([]); }
+  };
+
   useEffect(() => {
     loadDeploys();
+    loadApprovals();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -256,22 +285,74 @@ export default function GitDeploys() {
     }
   };
 
-  const handleDeploy = async (id: string) => {
-    const deploy = deploys.find(d => d.id === id);
-    if (deploy?.deploy_protected) {
-      setPendingConfirm({ type: "deploy", id, label: `Protected deploy: "${deploy.name}" to production` });
-      return;
-    }
+  // Both Deploy buttons land here, and the response has two shapes. Only one of
+  // them carries a `deploy_id`: a protected deployment answers 202 with the reason
+  // instead. Reading only the id is what left the button spinning while the
+  // server's own sentence — the one naming the second administrator — was thrown
+  // away, so the branch is written once and both call sites use it.
+  const startDeploy = async (id: string) => {
     setDeploying(id);
     setMessage({ text: "", type: "" });
     try {
-      const result = await api.post<{ deploy_id: string }>(`/git-deploys/${id}/deploy`);
+      const result = await api.post<{ deploy_id?: string; status?: string; message?: string }>(`/git-deploys/${id}/deploy`);
       if (result.deploy_id) {
         setDeployId(result.deploy_id);
+      } else {
+        setDeploying(null);
+        setMessage({ text: result.message || "Queued for approval by another administrator.", type: "success" });
+        loadApprovals();
       }
     } catch (err) {
       setMessage({ text: err instanceof Error ? err.message : "Deploy failed", type: "error" });
       setDeploying(null);
+    }
+  };
+
+  const handleDeploy = async (id: string) => {
+    const deploy = deploys.find(d => d.id === id);
+    if (deploy?.deploy_protected) {
+      setPendingConfirm({
+        type: "deploy",
+        id,
+        label: `"${deploy.name}" is protected — this files a request for another administrator. It does not deploy now.`,
+      });
+      return;
+    }
+    // Not the same as "this row is unprotected": the list can be stale if another
+    // admin just turned protection on, and then this POST takes the 202 too.
+    await startDeploy(id);
+  };
+
+  // Approving IS the production deploy the protected flag deferred, and rejecting
+  // is terminal — `reject_deploy` refuses anything not 'pending', so the requester
+  // must start over. Both are routed through the page's own confirmation bar for
+  // that reason, the same way Delete and Rollback are.
+  const resolveApproval = async (approvalId: string, action: "approve" | "reject") => {
+    const approval = approvals.find((a) => a.id === approvalId);
+    setResolving(approvalId);
+    setMessage({ text: "", type: "" });
+    try {
+      const result = await api.post<{ deploy_id?: string; message?: string }>(`/deploy-approvals/${approvalId}/${action}`);
+      // Approve answers with a fresh deploy id and registers the APPROVER as the
+      // provision log's owner, so this admin is the one who can watch the build
+      // they just authorised.
+      if (result.deploy_id) {
+        setDeployId(result.deploy_id);
+        if (approval) setDeploying(approval.deploy_id);
+      }
+      // The server calls both outcomes "rejected"; for your own request the honest
+      // word is withdrawn, and the operator just pressed a button that said so.
+      const withdrew = action === "reject" && approval?.requested_by === user.id;
+      setMessage({
+        text: withdrew ? "Your deploy request was withdrawn." : (result.message || "Request resolved."),
+        type: "success",
+      });
+      loadApprovals();
+      loadDeploys();
+    } catch (err) {
+      setMessage({ text: err instanceof Error ? err.message : `Could not ${action} the request`, type: "error" });
+    } finally {
+      setResolving(null);
     }
   };
 
@@ -354,15 +435,11 @@ export default function GitDeploys() {
     const { type, id } = pendingConfirm;
     setPendingConfirm(null);
     if (type === "deploy") {
-      setDeploying(id);
-      setMessage({ text: "", type: "" });
-      try {
-        const result = await api.post<{ deploy_id: string }>(`/git-deploys/${id}/deploy`);
-        if (result.deploy_id) setDeployId(result.deploy_id);
-      } catch (err) {
-        setMessage({ text: err instanceof Error ? err.message : "Deploy failed", type: "error" });
-        setDeploying(null);
-      }
+      await startDeploy(id);
+    } else if (type === "approve-request") {
+      await resolveApproval(id, "approve");
+    } else if (type === "reject-request") {
+      await resolveApproval(id, "reject");
     } else if (type === "delete") {
       await executeDelete(id);
     } else if (type === "rollback") {
@@ -412,9 +489,12 @@ export default function GitDeploys() {
       {/* Inline confirmation bar */}
       {pendingConfirm && (
         <div className={`mb-4 px-4 py-3 rounded-lg border flex items-center justify-between ${
-          pendingConfirm.type === "deploy" ? "border-warn-500/30 bg-warn-500/5" : "border-danger-500/30 bg-danger-500/5"
+          pendingConfirm.type === "deploy" || pendingConfirm.type === "approve-request"
+            ? "border-warn-500/30 bg-warn-500/5" : "border-danger-500/30 bg-danger-500/5"
         }`}>
-          <span className={`text-xs font-mono ${pendingConfirm.type === "deploy" ? "text-warn-400" : "text-danger-400"}`}>
+          <span className={`text-xs font-mono ${
+            pendingConfirm.type === "deploy" || pendingConfirm.type === "approve-request" ? "text-warn-400" : "text-danger-400"
+          }`}>
             {pendingConfirm.label}
           </span>
           <div className="flex items-center gap-2 shrink-0 ml-4">
@@ -436,9 +516,102 @@ export default function GitDeploys() {
             setDeployId(null);
             setDeploying(null);
             loadDeploys();
+            loadApprovals();
             if (selected) loadHistory(selected.id);
           }}
         />
+      )}
+
+      {/* Pending deploy approvals.
+          Installation-wide for the machines this administrator operates — not a
+          property of the selected row — and the bell notification an approver
+          follows links to this page with nothing selected. So it sits above the
+          list, where it is the first thing on screen. */}
+      {approvals.length > 0 && (
+        <div className="mb-4 bg-dark-800 rounded-lg border border-warn-500/30 overflow-hidden">
+          <div className="px-5 py-4 border-b border-dark-600">
+            <h2 className="text-xs font-medium text-warn-400 uppercase font-mono tracking-widest">
+              Pending Approvals ({approvals.length})
+            </h2>
+            <p className="text-xs text-dark-200 mt-1">
+              Protected deployments waiting on a second administrator. You cannot approve a request you filed yourself.
+            </p>
+          </div>
+          <div className="divide-y divide-dark-600">
+            {approvals.map((a) => {
+              const own = a.requested_by === user.id;
+              return (
+                <div key={a.id} className="px-5 py-3 flex items-center justify-between gap-4">
+                  {/* The deployment list is scoped to its owner, so the approving
+                      administrator has usually never seen this deployment anywhere
+                      else in the panel. Naming the requester, the repository and
+                      the branch is what makes the second signature a review rather
+                      than a formality. */}
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-warn-500/15 text-warn-400 shrink-0">
+                        awaiting approval
+                      </span>
+                      <code className="text-sm text-dark-50 font-mono truncate">{a.deploy_name}</code>
+                      <span className="text-xs text-dark-300 shrink-0 hidden sm:inline">{new Date(a.created_at).toLocaleString()}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-dark-200 font-mono truncate">
+                      {a.requested_by_email} &middot; {a.repo_url.replace(/^https?:\/\//, "").replace(/\.git$/, "")} &middot; {a.branch}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {own ? (
+                      // Not a dead end. `reject_deploy` has no self-rejection ban, so
+                      // the requester may withdraw — and on a single-admin install
+                      // that is the ONLY exit: nobody else exists to approve, and the
+                      // one-pending-per-deployment index means pressing Deploy again
+                      // cannot replace the row either.
+                      <>
+                        <span className="text-xs text-dark-300 font-mono hidden md:inline">your request — another admin must approve it</span>
+                        <button
+                          onClick={() => setPendingConfirm({
+                            type: "reject-request",
+                            id: a.id,
+                            label: `Withdraw your own deploy request for "${a.deploy_name}"?`,
+                          })}
+                          disabled={resolving === a.id}
+                          className="px-3 py-1 bg-dark-700 text-dark-100 rounded-md text-xs font-medium hover:bg-dark-600 disabled:opacity-50 transition-colors"
+                        >
+                          {resolving === a.id ? "Working..." : "Withdraw"}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => setPendingConfirm({
+                            type: "approve-request",
+                            id: a.id,
+                            label: `Approve and deploy "${a.deploy_name}" to production now.`,
+                          })}
+                          disabled={resolving === a.id}
+                          className="px-3 py-1 bg-rust-500/15 text-rust-400 rounded-md text-xs font-medium hover:bg-rust-500/25 disabled:opacity-50 transition-colors"
+                        >
+                          {resolving === a.id ? "Working..." : "Approve"}
+                        </button>
+                        <button
+                          onClick={() => setPendingConfirm({
+                            type: "reject-request",
+                            id: a.id,
+                            label: `Reject the deploy request for "${a.deploy_name}"? This is final — the requester has to ask again.`,
+                          })}
+                          disabled={resolving === a.id}
+                          className="px-3 py-1 bg-danger-500/10 text-danger-400 rounded-md text-xs font-medium hover:bg-danger-500/20 disabled:opacity-50 transition-colors"
+                        >
+                          Reject
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
 
       {/* Deploy list */}
@@ -483,7 +656,7 @@ export default function GitDeploys() {
                   <td className="px-5 py-4 text-sm font-medium text-dark-50 font-mono">
                     {d.name}
                     {d.deploy_protected && (
-                      <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-warn-500/15 text-warn-400" title="Deploy protection enabled">
+                      <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-warn-500/15 text-warn-400" title="Protected: pressing Deploy files a request that a second administrator must approve">
                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" /></svg>
                         Protected
                       </span>
@@ -563,7 +736,7 @@ export default function GitDeploys() {
                   { label: "Build Context", value: selected.build_context || "." },
                   { label: "GitHub", value: selected.github_token ? "Connected" : "Not configured" },
                   { label: "Deploy Schedule", value: selected.deploy_cron || "\u2014" },
-                  { label: "Deploy Protection", value: selected.deploy_protected ? "Enabled" : "Disabled" },
+                  { label: "Deploy Protection", value: selected.deploy_protected ? "Second admin must approve" : "Disabled" },
                 ].map((field) => (
                   <div key={field.label}>
                     <span className="block text-xs font-medium text-dark-300 mb-0.5">{field.label}</span>
@@ -1048,9 +1221,18 @@ export default function GitDeploys() {
                     onChange={(e) => setFormProtected(e.target.checked)}
                     className="w-4 h-4 text-warn-500 border-dark-500 rounded focus:ring-accent-500"
                   />
-                  <span className="text-sm text-dark-100">Require confirmation before deploy</span>
+                  <span className="text-sm text-dark-100">Require another admin's approval before deploy</span>
                 </label>
-                <p className="text-xs text-dark-300 mt-1 ml-6">Shows a confirmation prompt before deploying to prevent accidental deployments</p>
+                {/* The copy here used to describe a client-side are-you-sure dialog.
+                    The server does something else entirely: it files a request and
+                    refuses to build until a DIFFERENT administrator signs it off.
+                    (The old wording is not quoted — a pin arm greps raw source and
+                    would match the quotation.) */}
+                <p className="text-xs text-dark-300 mt-1 ml-6">
+                  Pressing Deploy files a request instead of building. A different administrator must approve it under
+                  Pending Approvals — nobody can approve their own request. Webhook, scheduled and rollback deploys are
+                  not covered.
+                </p>
               </div>
 
               {/* Preview TTL */}

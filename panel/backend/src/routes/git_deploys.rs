@@ -696,6 +696,31 @@ pub async fn update(
     .await
     .map_err(|e| internal_error("update git_deploys", e))?;
 
+    // Switching protection OFF must resolve anything still waiting on it.
+    //
+    // Nothing used to read these rows, so a request left behind by a flag that
+    // had since been cleared was inert. It is not inert now: the panel lists
+    // pending requests and offers Approve, and `approve_deploy` takes its target
+    // from the row rather than re-deciding whether the deployment is protected.
+    // A stale row would therefore sit in front of a second administrator, under a
+    // deployment the same screen calls unprotected, one click from a production
+    // deploy of whatever HEAD had become in the meantime.
+    //
+    // Resolved rather than deleted, for the same reason the migration keeps
+    // resolved rows: they are the record of who decided what. 'cancelled' is a
+    // third terminal state, distinct from a colleague's 'rejected'.
+    if !deploy.deploy_protected {
+        if let Err(e) = sqlx::query(
+            "UPDATE deploy_approvals SET status = 'cancelled', resolved_at = NOW() \
+             WHERE deploy_id = $1 AND status = 'pending'"
+        )
+        .bind(id)
+        .execute(&state.db).await
+        {
+            tracing::warn!("Failed to cancel pending approvals for {id}: {e}");
+        }
+    }
+
     Ok(Json(deploy))
 }
 
@@ -829,24 +854,45 @@ pub async fn deploy(
 
     // Protected deploy: require approval from another admin
     if config.deploy_protected {
-        // Create pending approval instead of deploying immediately
-        sqlx::query(
-            "INSERT INTO deploy_approvals (deploy_id, requested_by) VALUES ($1, $2)"
+        // File one pending request per deployment, not one per click.
+        //
+        // The conflict clause below lands on the partial unique index added with
+        // this change, so the collapse is atomic rather than a read-then-write
+        // that two concurrent clicks could both win. `rows_affected` is therefore
+        // the honest answer to "did I create a request, or was one already
+        // waiting?" — and the requester is told which, because the reason this
+        // mattered is that they could not tell (see the migration).
+        //
+        // The clause is deliberately not spelled in this comment: a pin arm greps
+        // raw source, and a quotation here would satisfy it while the code changed.
+        let filed = sqlx::query(
+            "INSERT INTO deploy_approvals (deploy_id, requested_by) VALUES ($1, $2) \
+             ON CONFLICT DO NOTHING"
         )
         .bind(id).bind(claims.sub)
         .execute(&state.db).await
-        .map_err(|e| internal_error("deploy", e))?;
+        .map_err(|e| internal_error("deploy", e))?
+        .rows_affected() > 0;
 
-        notifications::notify_panel(
-            &state.db, None,
-            "Deploy approval needed",
-            &format!("Deploy to {} requires approval", config.name),
-            "warning", "deploy", Some("/git-deploys"),
-        ).await;
+        // Only a NEW request is worth waking every administrator for. Re-announcing
+        // one that is already waiting teaches the approvers to ignore the bell,
+        // which costs more than the missing notification would have.
+        if filed {
+            notifications::notify_panel(
+                &state.db, None,
+                "Deploy approval needed",
+                &format!("Deploy to {} requires approval", config.name),
+                "warning", "deploy", Some("/git-deploys"),
+            ).await;
+        }
 
         return Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
             "status": "pending_approval",
-            "message": "Deploy requires approval from another admin",
+            "message": if filed {
+                "Deploy requires approval from another admin \u{2014} the request is now waiting in Pending Approvals."
+            } else {
+                "This deployment already has a request waiting in Pending Approvals; another admin has not resolved it yet."
+            },
         }))));
     }
 
@@ -3114,11 +3160,26 @@ pub async fn list_approvals(
     // `u.role` is read from the DATABASE, not from `claims.role`, for the reason
     // stated there: a JWT keeps asserting the role it was minted with until it
     // expires, so a demoted account would otherwise keep approving all session.
-    let rows: Vec<(Uuid, Uuid, Uuid, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT da.id, da.deploy_id, da.requested_by, da.status, g.name, da.created_at \
+    // `g.deploy_protected` is part of the predicate, not just of the write path.
+    // A request survives its flag being switched off — `update()` now resolves
+    // those, but an install that flipped the flag before this release still holds
+    // them, and a row whose deployment is no longer protected must not be offered
+    // for approval by a screen that shows the same deployment as unprotected.
+    //
+    // The requester's EMAIL and the deployment's repo/branch travel with the row
+    // because a signature without them is not a review: `list()` scopes the deploy
+    // table to its owner, so the approving administrator has usually never seen
+    // this deployment anywhere else in the panel and would be authorising a
+    // production build of a repository the screen never named. The email also
+    // replaces nothing — the raw requester id was already on the wire — and it is
+    // the less identifying of the two for an operator reading it.
+    let rows: Vec<(Uuid, Uuid, Uuid, String, String, String, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT da.id, da.deploy_id, da.requested_by, da.status, g.name, \
+                u2.email, g.repo_url, g.branch, da.created_at \
          FROM deploy_approvals da \
          JOIN git_deploys g ON g.id = da.deploy_id \
-         WHERE da.status = 'pending' AND EXISTS (\
+         JOIN users u2 ON u2.id = da.requested_by \
+         WHERE da.status = 'pending' AND g.deploy_protected AND EXISTS (\
              SELECT 1 FROM users u, servers sv WHERE u.id = $1 AND u.role = 'admin' \
              AND sv.id = g.server_id AND (sv.is_local OR sv.user_id = u.id)) \
          ORDER BY da.created_at DESC"
@@ -3127,16 +3188,20 @@ pub async fn list_approvals(
     .fetch_all(&state.db).await
     .map_err(|e| internal_error("list approvals", e))?;
 
-    let result: Vec<serde_json::Value> = rows.into_iter().map(|(id, deploy_id, requested_by, status, name, created_at)| {
-        serde_json::json!({
-            "id": id,
-            "deploy_id": deploy_id,
-            "requested_by": requested_by,
-            "status": status,
-            "deploy_name": name,
-            "created_at": created_at,
-        })
-    }).collect();
+    let result: Vec<serde_json::Value> = rows.into_iter()
+        .map(|(id, deploy_id, requested_by, status, name, requested_by_email, repo_url, branch, created_at)| {
+            serde_json::json!({
+                "id": id,
+                "deploy_id": deploy_id,
+                "requested_by": requested_by,
+                "requested_by_email": requested_by_email,
+                "status": status,
+                "deploy_name": name,
+                "repo_url": repo_url,
+                "branch": branch,
+                "created_at": created_at,
+            })
+        }).collect();
 
     Ok(Json(result))
 }
@@ -3203,6 +3268,19 @@ pub async fn approve_deploy(
     .map_err(|e| internal_error("approve deploy", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
+    // The flag is re-read here, not assumed from the row's existence. `deploy()`
+    // checked it when the request was filed, and an owner may have cleared it
+    // since; `update()` now cancels those requests, but an install that flipped
+    // the flag before this release still holds them. Approving one would deploy a
+    // deployment nobody currently requires review for, on the strength of a review
+    // requirement that no longer exists.
+    if !config.deploy_protected {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "Deploy protection is no longer enabled on this deployment; the request is obsolete",
+        ));
+    }
+
     // The build runs on the server the deployment lives on — see `deploy()`, of
     // which this is the deferred half. It carried the sharper version of the bug:
     // the requester and the approver are different people, so the approver's server
@@ -3214,21 +3292,33 @@ pub async fn approve_deploy(
     )
     .await?;
 
-    // Mark as approved
+    // The SAME atomic deploy lock `deploy()` takes, and taken BEFORE the approval
+    // is consumed, for the reason the comment above already gives for the agent:
+    // a losing caller must leave the request retryable rather than burn it.
+    //
+    // This path used to flip the status unconditionally and merely warn on error,
+    // so two administrators resolving the queue at the same moment — or an
+    // approval landing while an unprotected sibling deploy was mid-build — each
+    // spawned a full production build against one working tree. The condition is
+    // copied from `deploy()` verbatim, including the 30-minute self-heal for a
+    // crashed build, so the two doors cannot drift into disagreeing about what
+    // "already in progress" means.
+    match sqlx::query(
+        "UPDATE git_deploys SET status = 'building', updated_at = NOW() \
+         WHERE id = $1 AND (status IS DISTINCT FROM 'building' OR updated_at < NOW() - INTERVAL '30 minutes')"
+    ).bind(deploy_id).execute(&state.db).await {
+        Ok(r) if r.rows_affected() == 0 => return Err(err(StatusCode::CONFLICT, "Deploy already in progress")),
+        Ok(_) => {}
+        Err(e) => return Err(internal_error("deploy lock", e)),
+    }
+
+    // Mark as approved. After the lock, so a refused approval stays pending.
     sqlx::query(
         "UPDATE deploy_approvals SET status = 'approved', approved_by = $1, resolved_at = NOW() WHERE id = $2"
     )
     .bind(claims.sub).bind(approval_id)
     .execute(&state.db).await
     .map_err(|e| internal_error("approve deploy", e))?;
-
-    // Update status to building
-    if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
-        .bind(deploy_id)
-        .execute(&state.db).await
-    {
-        tracing::warn!("Failed to update git deploy status: {e}");
-    }
 
     let new_deploy_id = Uuid::new_v4();
     // The approver, not the requester — and deliberately so. `new_deploy_id`

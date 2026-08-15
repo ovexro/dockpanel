@@ -4,6 +4,100 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.115.0]
+
+### Added — the second administrator can finally sign off
+
+Turning on deploy protection for a Git deployment does not add a confirmation dialog.
+It files a request that a **different** administrator has to approve, and the panel
+refuses to build until they do. That has been true since the feature shipped — and the
+panel never gave anyone a way to do it.
+
+The three endpoints behind it were complete and carefully scoped: they list the requests
+waiting on the machines you operate, they refuse to let you approve your own, and they
+refuse to let an administrator sign off on hardware somebody else registered. No screen
+in the panel called any of them. The only way to finish a protected deploy was two
+hand-written API calls against an id nothing displayed.
+
+Git Deploy now shows **Pending Approvals** at the top of the page — which deployment is
+waiting, who asked, from which repository and branch, since when, and Approve / Reject.
+It is the page the approval notification has always linked to.
+
+The requester and the repository are shown because a signature without them is not a
+review: deployments are listed per owner, so the approving administrator has usually
+never seen this one anywhere else in the panel.
+
+A request you filed yourself is listed as yours with no Approve button, and a
+**Withdraw** button instead. On a single-administrator install that is the only exit —
+nobody else exists to approve, and a deployment may only have one request waiting.
+
+### Fixed — pressing Deploy on a protected deployment said nothing at all
+
+The server answers a protected deploy with "this deploy requires approval from another
+admin". The panel read only the field carrying a deploy id, found none, and did nothing
+further: the button stayed disabled and spinning, the message bar was cleared, and the
+sentence explaining what had happened was discarded.
+
+So the deploy looked stuck. The reasonable response to a stuck button is to press it
+again — and every press filed **another** approval request, each one separately
+approvable, each approval starting its own deployment. A few presses of a button that
+appeared to do nothing could put several copies of the same commit into production, one
+after another, whenever a colleague worked down the queue.
+
+The panel now says what the server said. A deployment can have only one request waiting
+at a time — enforced by the database rather than by checking first, so two simultaneous
+clicks cannot both win — and pressing Deploy again reports that the request is already
+there instead of filing a second. Installs that have already accumulated duplicates have
+them collapsed to the original request on upgrade; approved and rejected requests are
+kept, because they are the record of who decided what.
+
+Only a genuinely new request notifies the other administrators. Re-announcing one that is
+already waiting is how a notification stops being read.
+
+### Fixed — a request could outlive the setting that required it
+
+Switching deploy protection off left any waiting request in place. That was harmless
+while nothing could act on one. It stops being harmless the moment the panel lists them:
+a second administrator would have been shown a request to approve, under a deployment the
+same screen calls unprotected, one click from deploying whatever the branch had become
+since.
+
+Clearing the setting now resolves what was waiting on it, approving re-reads the setting
+rather than trusting the request, and the list only offers requests whose deployment is
+still protected. The resolved rows stay — they are the audit trail.
+
+### Fixed — approving could start a second build over a running one
+
+Four paths start a production build. Three took an atomic lock that refuses to begin one
+while another is in flight; approving a request flipped the status unconditionally and
+merely logged a failure. Two administrators working down the queue at the same moment
+could each start a full build against one working tree.
+
+Approval now takes the same lock, and takes it **before** consuming the request, so an
+approval refused because a build is already running stays pending and can be tried again
+rather than being spent.
+
+### Fixed — the administrator who approved a deploy could not be deleted afterwards
+
+Approval records name the approver, and that column had no delete behaviour, so retiring
+that administrator later failed with an internal error and rolled back the whole account
+deletion. The record hangs off somebody else's deployment, so nothing cleaned it up, and
+no screen could clear it.
+
+The name is now cleared when the account is deleted and the record itself survives.
+Nothing in the field was affected, because until this release no approval could be
+recorded at all.
+
+### Changed — the deploy-protection copy describes the feature it turns on
+
+The checkbox offered to show a confirmation prompt to prevent accidental deployments.
+That describes a dialog in your own browser. What the setting actually does is require a
+second person.
+
+It now says so, and it also names what it does **not** cover: webhook deploys, scheduled
+deploys and rollbacks all still deploy without approval. A control whose limits are
+undisclosed reads as broader than it is.
+
 ## [2.114.0]
 
 ### Fixed — an updated app's rescued data was left where the panel could not find it
