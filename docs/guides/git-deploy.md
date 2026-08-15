@@ -153,9 +153,12 @@ Notes worth knowing before you rely on it:
 - **It covers the Deploy button only.** Webhook deploys, scheduled (cron and one-time)
   deploys, and rollbacks all still deploy without approval. If you need those covered,
   turn them off on the deployment as well.
-- **Any administrator can switch the setting off**, including the owner it constrains, and
-  doing so cancels whatever was waiting. Treat it as a guard against acting alone by
-  accident, not as a control over an administrator who does not want it.
+- **The deployment's owner can switch the setting off** — the administrator it constrains,
+  and no other: editing a deployment is scoped to the account that owns it, so a second
+  administrator cannot clear the flag on someone else's. Doing so cancels whatever was
+  waiting, and is written to the security audit log, which cannot be edited or deleted.
+  Treat it as a guard against acting alone by accident, not as a control over an
+  administrator who does not want it.
 - Approvals and rejections are kept as a record of who decided what, and survive the
   deletion of the account that made them.
 

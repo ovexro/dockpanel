@@ -236,7 +236,7 @@ List running containers.
 | POST | `/api/apps/{container_id}/start` | Start |
 | POST | `/api/apps/{container_id}/stop` | Stop |
 | POST | `/api/apps/{container_id}/restart` | Restart |
-| POST | `/api/apps/{container_id}/update` | Pull latest image + redeploy |
+| POST | `/api/apps/{container_id}/update` | Pull latest image + redeploy. Refuses, leaving the container running, when the image cannot be pulled and the local copy is either absent or already the one in use |
 | DELETE | `/api/apps/{container_id}` | Remove |
 | GET | `/api/apps/{container_id}/logs` | Container logs |
 | GET | `/api/apps/{container_id}/stats` | CPU/memory/network stats |

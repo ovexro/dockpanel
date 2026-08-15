@@ -1568,6 +1568,19 @@ volumes:
                             Update
                           </span>
                         )}
+                        {/* The agent reports why a version check failed and the
+                            panel used to drop it, so an app whose tag had been
+                            deleted from the registry looked exactly like one that
+                            was up to date — no badge, ordinary Update button. */}
+                        {updateInfo[app.container_id]?.check_error && (
+                          <span
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-warn-500/15 text-warn-400"
+                            title={`Could not check for a newer image: ${updateInfo[app.container_id]?.check_error}`}
+                          >
+                            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" /></svg>
+                            Check failed
+                          </span>
+                        )}
                         {app.image && (() => {
                           const f = scanFindings[app.image];
                           const label = scanSeverityLabel(f);

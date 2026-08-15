@@ -178,14 +178,39 @@ check "approve re-reads the flag rather than trusting the row" \
       "$(grep -c 'if !config.deploy_protected {' "$API")" "1"
 check "clearing the flag resolves what was waiting on it" \
       "$(grep -c "SET status = 'cancelled', resolved_at = NOW()" "$API")" "1"
-# FOUR doors spawn a production build — deploy, webhook, trigger_deploy_task and
-# approve. Three took the atomic lock; approve flipped the status unconditionally
-# and merely warned on error, so it was the one door on a second administrator's
-# authority that could start a build over a running one.
-check "all four deploy doors take the atomic build lock" \
-      "$(grep -c "status IS DISTINCT FROM 'building'" "$API")" "4"
+# FIVE doors replace the running container — deploy, webhook, trigger_deploy_task,
+# approve and rollback. This read FOUR until s364: approve was fixed at s362, and
+# rollback was still writing the status unconditionally and merely warning on
+# error, so a rollback could start on top of a running build and each would swap
+# the container out from under the other.
+check "all five container-replacing doors take the atomic build lock" \
+      "$(grep -c "status IS DISTINCT FROM 'building'" "$API")" "5"
 check "the approver's name surviving their deletion is the FK's job" \
       "$(grep -c 'ON DELETE SET NULL' "$MIG")" "1"
+
+echo
+echo "── G: disarming the requirement leaves a trace that cannot be edited ──"
+# The flag was the one edit on this handler that removes a control while leaving
+# no record: the row simply changed. Without this the feature is a preference,
+# because nothing could afterwards say when it stopped applying or who did it.
+# ⚠ The closing quote is part of the pattern. Without it a mutation renaming the
+# event to `git_deploy.protection_changedX` left this arm green — the mutated
+# spelling still contains the shorter one. Same defect as C1 in the s364 suite,
+# in both cases found by the mutation battery rather than by review.
+check "clearing or setting the flag is written to the audit log" \
+      "$(grep -c '"git_deploy.protection_changed"' "$API")" "1"
+# It goes to the immutable table specifically. The activity feed is editable
+# state; the point of the record is that the account disarming its own guard
+# cannot then remove the evidence.
+check "the record goes to the immutable log, not the activity feed" \
+      "$(grep -c 'security_hardening::audit_log' "$API")" "1"
+# A COALESCE write cannot tell "set to true" from "left true", so the previous
+# value has to be read for the comparison to mean anything. Without this the
+# log would fire on every unrelated field edit.
+check "the previous value is fetched so an unchanged flag logs nothing" \
+      "$(grep -c 'deploy_protected != was_protected' "$API")" "1"
+check "  [control] the flag is still selected alongside the other current values" \
+      "$(grep -c 'SELECT domain, deploy_cron, deploy_protected FROM git_deploys' "$API")" "1"
 
 echo
 echo "══ $PASS passed, $FAIL failed ══"

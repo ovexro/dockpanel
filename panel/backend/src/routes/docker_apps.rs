@@ -976,7 +976,17 @@ pub async fn update_app(
                 );
             }
             Err(e) => {
-                emit("pull", "Pulling latest image", "error", Some(format!("{e}")));
+                // This arm catches every way the update can fail — the image
+                // refusing to resolve, the migration aborting, the remove, the
+                // create, the start. It used to file all of them under the step
+                // that pulls the image, so an operator whose migration aborted
+                // was told the pull had failed and went looking at the registry.
+                //
+                // The agent's message already names what actually happened, so
+                // the step only has to stop asserting one it may never have
+                // reached. Classifying it here would mean matching on the
+                // wording of another process's error strings.
+                emit("update", "Updating app", "error", Some(format!("{e}")));
                 emit("complete", "Update failed", "error", None);
                 tracing::error!("App update failed: {cid}: {e}");
             }

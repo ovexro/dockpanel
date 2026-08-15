@@ -4,6 +4,61 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.117.0]
+
+### Fixed — Update said "App updated" when it had updated nothing
+
+Pressing **Update** on a Docker app pulls the image, then stops the container,
+migrates its data, removes it and creates it again. If the pull failed — the tag
+deleted upstream, the registry unreachable, a rate limit — the agent wrote one line
+to its own log and carried on regardless. The app went down, came back rebuilt from
+the copy already on disk, and the panel reported success. Nothing told you the image
+you are running can no longer be fetched.
+
+Update now decides before it touches anything:
+
+- If the image cannot be pulled **and no copy of it exists on this server**, it
+  refuses and the app keeps running. This is the case that used to destroy apps: the
+  old container is removed before the new one is created, so with nothing to create
+  from, the app simply stopped existing.
+- If the image cannot be pulled but the local copy is already what the container is
+  running, it refuses — there is nothing to update, and the outage would buy nothing.
+- If the image cannot be pulled but the local copy *differs* from what is running,
+  the update goes ahead. An earlier pull did succeed and that update is still waiting
+  to be applied.
+
+The door that changes an app's image to a different one has always refused like this.
+This is the same guard on the door beside it.
+
+### Fixed — a failed version check is no longer invisible
+
+The agent has always recorded *why* it could not check an app for a newer image, and
+the panel has always received it and thrown it away. An app whose tag had been deleted
+from its registry looked exactly like an app that was perfectly up to date: no badge,
+an ordinary Update button. The Apps list now shows a **Check failed** badge carrying
+the registry's own reason.
+
+### Fixed — a failed update blamed the wrong step
+
+Every way an update could fail — the image, the data migration, the remove, the create,
+the start — was reported under the step "Pulling latest image". An operator whose data
+migration aborted was sent to go and look at their registry.
+
+### Fixed — turning off the deploy approval requirement left no trace
+
+Requiring a second administrator's approval before a deploy could be switched off with
+nothing recorded anywhere, which made it a preference rather than a control. Switching
+it on or off is now written to the security audit log, which cannot be edited or
+deleted. The guide also said *any* administrator could switch it off; in fact only the
+deployment's owner can, and it now says so.
+
+### Fixed — a rollback could start on top of a running build
+
+Four of the five paths that replace a deployment's container took an atomic lock first.
+Rollback wrote its status unconditionally and only logged a warning if that failed, so
+a rollback and a deploy could run at once and swap the container out from under each
+other. It now takes the same lock and answers 409 if one is already in progress.
+
 ## [2.116.0]
 
 ### Fixed — the deploy form asked for your domain and then threw it away

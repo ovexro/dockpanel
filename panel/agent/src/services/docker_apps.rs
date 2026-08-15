@@ -4514,6 +4514,46 @@ async fn blue_green_update(
     })
 }
 
+/// What an update should do once the pull attempt has finished.
+///
+/// Kept separate from Docker so all four cases can be exercised as a unit test:
+/// reaching them for real needs a registry that refuses, which no test here has.
+#[derive(Debug, PartialEq, Eq)]
+enum PullVerdict {
+    /// The pull reported no error. Carry on.
+    Proceed,
+    /// The pull failed, but what the tag resolves to on this server is not what
+    /// the container is running — so an update really is waiting on disk and
+    /// applying it is the point of the button.
+    ProceedFromLocal,
+    /// The pull failed and the tag resolves to nothing on this server. The
+    /// recreate would remove a container that cannot then be rebuilt.
+    RefuseMissing,
+    /// The pull failed and the local copy is byte-for-byte what the container is
+    /// already running. Recreating spends an outage to arrive where it started.
+    RefuseNoChange,
+}
+
+/// Decide the verdict above from three facts the caller reads out of Docker.
+///
+/// `running_image` being absent is treated as "not equal", which lands on
+/// `ProceedFromLocal`: the image exists locally, so nothing can be destroyed,
+/// and refusing on missing metadata would block an update that would work.
+fn pull_verdict(
+    pull_error: Option<&str>,
+    local_image: Option<&str>,
+    running_image: Option<&str>,
+) -> PullVerdict {
+    if pull_error.is_none() {
+        return PullVerdict::Proceed;
+    }
+    match local_image {
+        None => PullVerdict::RefuseMissing,
+        Some(local) if Some(local) == running_image => PullVerdict::RefuseNoChange,
+        Some(_) => PullVerdict::ProceedFromLocal,
+    }
+}
+
 /// Update an app by pulling the latest image.
 /// Uses blue-green deployment (zero-downtime) when the app has a domain with nginx reverse proxy.
 /// Falls back to stop/start when no reverse proxy is configured.
@@ -4526,6 +4566,11 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
         .inspect_container(container_id, None)
         .await
         .map_err(|e| format!("Failed to inspect container: {e}"))?;
+
+    // Read before the fields below are moved out of `info`. This is the image the
+    // container is actually running, which the verdict compares against whatever
+    // the tag resolves to locally.
+    let running_image = info.image.clone();
 
     let config = info.config.ok_or("No container config found")?;
     let mut host_config = info.host_config.ok_or("No host config found")?;
@@ -4562,9 +4607,50 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
         None,
         None,
     );
+    let mut pull_error: Option<String> = None;
     while let Some(result) = pull.next().await {
         if let Err(e) = result {
-            tracing::warn!("Image pull warning: {e}");
+            pull_error = Some(e.to_string());
+        }
+    }
+
+    // A failed pull used to be one line in the agent's log and nothing more, so
+    // the recreate below ran regardless: stop, migrate, remove, create. When the
+    // tag had gone away that spent a real outage rebuilding the container from
+    // what was already on disk, and the operator was told the app had updated.
+    // The other door that replaces an image has always refused instead; this is
+    // the same guard, on this one.
+    //
+    // Decided before anything is stopped, so a refusal costs the app nothing.
+    let local_image = docker.inspect_image(&image).await.ok().and_then(|i| i.id);
+    let pull_failure = pull_error.as_deref().unwrap_or("unknown error");
+    match pull_verdict(
+        pull_error.as_deref(),
+        local_image.as_deref(),
+        running_image.as_deref(),
+    ) {
+        PullVerdict::Proceed => {}
+        PullVerdict::ProceedFromLocal => {
+            tracing::warn!(
+                "App {name}: '{image}' could not be pulled ({pull_failure}), but the copy on \
+                 this server differs from what the container is running, so the update \
+                 continues from it"
+            );
+        }
+        PullVerdict::RefuseMissing => {
+            return Err(format!(
+                "'{image}' could not be pulled and no copy of it exists on this server, so \
+                 {name} was left untouched — recreating it would have removed a container \
+                 that could not be rebuilt. The app is still running. Pull error: \
+                 {pull_failure}"
+            ));
+        }
+        PullVerdict::RefuseNoChange => {
+            return Err(format!(
+                "'{image}' could not be pulled, and the copy on this server is already what \
+                 {name} is running, so there is nothing to update. The app is still running \
+                 and was left untouched. Pull error: {pull_failure}"
+            ));
         }
     }
 
@@ -5220,6 +5306,63 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect()
+    }
+
+    // ── What Update does when the image will not pull ────────────────────────
+
+    /// Before this the pull error was logged and discarded, and the recreate ran
+    /// anyway. These four cases are the whole of the decision, and none of them
+    /// is reachable from a test that needs a registry to refuse.
+
+    #[test]
+    fn a_pull_that_worked_is_not_second_guessed() {
+        assert_eq!(
+            pull_verdict(None, Some("sha256:aaa"), Some("sha256:aaa")),
+            PullVerdict::Proceed
+        );
+        // Even with nothing resolvable locally: a successful pull put it there,
+        // and the inspect that follows is not the authority on that.
+        assert_eq!(pull_verdict(None, None, None), PullVerdict::Proceed);
+    }
+
+    #[test]
+    fn a_dead_tag_with_no_local_copy_leaves_the_container_alone() {
+        // The one case that used to destroy the app: the remove succeeds, the
+        // create then fails on an image that is nowhere, and nothing puts it
+        // back.
+        assert_eq!(
+            pull_verdict(Some("manifest unknown"), None, Some("sha256:aaa")),
+            PullVerdict::RefuseMissing
+        );
+    }
+
+    #[test]
+    fn a_dead_tag_whose_local_copy_is_already_running_is_not_worth_an_outage() {
+        assert_eq!(
+            pull_verdict(Some("no such host"), Some("sha256:aaa"), Some("sha256:aaa")),
+            PullVerdict::RefuseNoChange
+        );
+    }
+
+    #[test]
+    fn a_dead_tag_still_applies_an_update_that_is_already_on_disk() {
+        // An earlier pull succeeded and the container was never recreated, so
+        // pressing Update has real work to do even though today's pull failed.
+        // Refusing here would be a regression, not a guard.
+        assert_eq!(
+            pull_verdict(Some("timeout"), Some("sha256:bbb"), Some("sha256:aaa")),
+            PullVerdict::ProceedFromLocal
+        );
+    }
+
+    #[test]
+    fn an_unreadable_running_image_never_blocks_an_update_it_cannot_destroy() {
+        // The copy exists, so the recreate can complete; with no id to compare
+        // against, refusing would block on missing metadata alone.
+        assert_eq!(
+            pull_verdict(Some("timeout"), Some("sha256:bbb"), None),
+            PullVerdict::ProceedFromLocal
+        );
     }
 
     // ── Domain-derived template env (GitHub #111) ────────────────────────────

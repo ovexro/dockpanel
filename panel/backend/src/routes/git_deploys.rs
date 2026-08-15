@@ -584,8 +584,12 @@ pub async fn update(
     // may exist once across the whole installation, and a Docker app holding it
     // is invisible to SQL on any host), so there is no per-server question left
     // for this handler to answer and nothing here would use the value.
-    let existing: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT domain, deploy_cron FROM git_deploys WHERE id = $1 AND user_id = $2",
+    // The protection flag is fetched for one reason only: to tell a request that
+    // changed it from one that merely re-sent it. The write below COALESCEs an
+    // absent field onto the stored value, so "still true" and "set to true"
+    // arrive here identically and only the previous value separates them.
+    let existing: Option<(Option<String>, Option<String>, bool)> = sqlx::query_as(
+        "SELECT domain, deploy_cron, deploy_protected FROM git_deploys WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
     .bind(claims.sub)
@@ -593,7 +597,7 @@ pub async fn update(
     .await
     .map_err(|e| internal_error("update git_deploys", e))?;
 
-    let (cur_domain, cur_cron) = match existing {
+    let (cur_domain, cur_cron, was_protected) = match existing {
         Some(row) => row,
         None => return Err(err(StatusCode::NOT_FOUND, "Git deploy not found")),
     };
@@ -695,6 +699,34 @@ pub async fn update(
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("update git_deploys", e))?;
+
+    // Turning the review requirement off is the one edit on this handler that
+    // removes a control, and until now it was the only one that left no trace:
+    // the row simply changed. It goes to the immutable log rather than the
+    // activity feed because that table refuses UPDATE and DELETE, which is the
+    // property an account disarming its own guard would otherwise exploit.
+    //
+    // Both directions are recorded. Only knowing when protection was switched
+    // off tells you it was off; it does not tell you when it came back.
+    if deploy.deploy_protected != was_protected {
+        let (verb, severity) = if deploy.deploy_protected {
+            ("enabled", "info")
+        } else {
+            ("disabled", "warning")
+        };
+        crate::services::security_hardening::audit_log(
+            &state.db,
+            "git_deploy.protection_changed",
+            Some(&claims.email),
+            crate::routes::client_ip(&headers).as_deref(),
+            Some("git_deploy"),
+            Some(&deploy.name),
+            Some(&format!("Deploy approval requirement {verb}")),
+            None,
+            severity,
+        )
+        .await;
+    }
 
     // Switching protection OFF must resolve anything still waiting on it.
     //
@@ -1076,13 +1108,17 @@ pub async fn rollback(
     )
     .await?;
 
-    // Update status to building
-    if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'building', updated_at = NOW() WHERE id = $1")
-        .bind(id)
-        .execute(&state.db)
-        .await
-    {
-        tracing::warn!("Failed to update git deploy status: {e}");
+    // The same lock the other three build doors take, and for the same reason —
+    // this one wrote the status unconditionally and only warned on failure, so a
+    // rollback could start on top of a running build and each would swap the
+    // container out from under the other. It is the last door that acquired it.
+    match sqlx::query(
+        "UPDATE git_deploys SET status = 'building', updated_at = NOW() \
+         WHERE id = $1 AND (status IS DISTINCT FROM 'building' OR updated_at < NOW() - INTERVAL '30 minutes')"
+    ).bind(id).execute(&state.db).await {
+        Ok(r) if r.rows_affected() == 0 => return Err(err(StatusCode::CONFLICT, "A deploy or rollback is already in progress")),
+        Ok(_) => {}
+        Err(e) => return Err(internal_error("rollback lock", e)),
     }
 
     let deploy_id = Uuid::new_v4();
