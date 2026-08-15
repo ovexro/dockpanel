@@ -20,6 +20,9 @@ interface EnvVar {
   default: string;
   required: boolean;
   secret: boolean;
+  /** Server fills this in from the domain claimed above; the catalogue default
+   *  shown here is the no-domain fallback. See TEMPLATE_DOMAIN_ENV in the agent. */
+  domain_derived?: boolean;
 }
 
 interface AppTemplate {
@@ -443,7 +446,11 @@ export default function Apps() {
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
   const [envLoading, setEnvLoading] = useState(false);
   const [envEditing, setEnvEditing] = useState(false);
-  const [envEditValues, setEnvEditValues] = useState<Record<string, string>>({});
+  // Rows, not a keyed record: a record cannot express an added variable (every
+  // new row would collide on the empty-string key) nor a removed one, which is
+  // why the modal could only ever edit the values of keys the container already
+  // had (GitHub #111).
+  const [envEditRows, setEnvEditRows] = useState<{ key: string; value: string }[]>([]);
   const [envSaving, setEnvSaving] = useState(false);
   // Update SSE state
   const [updateDeployId, setUpdateDeployId] = useState<string | null>(null);
@@ -775,9 +782,23 @@ export default function Apps() {
 
   const handleEnvSave = async () => {
     if (!envTarget) return;
+    // A blank key is an added row the operator never filled in — dropping it is
+    // what "Add variable then change your mind" has to mean.
+    const rows = envEditRows.filter(r => r.key.trim() !== "");
+    const names = rows.map(r => r.key.trim());
+    const duplicate = names.find((n, i) => names.indexOf(n) !== i);
+    if (duplicate) {
+      // Refused rather than silently collapsed: building the record from
+      // duplicate rows would keep the last one and discard the other without
+      // saying so, and the operator cannot see which value survived.
+      setMessage({ text: `Duplicate variable name: ${duplicate}`, type: "error" });
+      return;
+    }
     setEnvSaving(true);
     try {
-      await api.put(`/apps/${envTarget}/env`, { env: envEditValues });
+      const payload: Record<string, string> = {};
+      rows.forEach(r => { payload[r.key.trim()] = r.value; });
+      await api.put(`/apps/${envTarget}/env`, { env: payload });
       setMessage({ text: "Environment variables updated. Container was recreated.", type: "success" });
       setEnvTarget(null);
       setEnvEditing(false);
@@ -2315,6 +2336,15 @@ volumes:
                             </button>
                           )}
                         </div>
+                        {/* Say it rather than let the operator read a localhost
+                            default the deploy is about to replace. Only shown
+                            once a domain is actually claimed, because without
+                            one the default IS what gets used. */}
+                        {v.domain_derived && appDomain.trim() !== "" && (
+                          <p className="text-[10px] text-accent-400 mt-0.5">
+                            Set automatically from {appDomain.trim()} — change it only to override.
+                          </p>
+                        )}
                         {selected.id === "vllm" && v.name === "MODEL" && (
                           <datalist id="vllm-models">
                             <option value="meta-llama/Llama-3.2-1B-Instruct" />
@@ -2387,13 +2417,17 @@ volumes:
                 Environment Variables
               </h3>
               <div className="flex items-center gap-2">
-                {!envEditing && envVars.length > 0 && (
+                {/* Deliberately ungated on how many variables are already set:
+                    a container with none is exactly the case that needs the
+                    editor most, and that gate was half of why an arbitrary key
+                    could never be added. The condition is not spelled in this
+                    comment because a pin arm greps raw source and a quotation
+                    here would satisfy it while the code changed. */}
+                {!envEditing && (
                   <button
                     onClick={() => {
                       setEnvEditing(true);
-                      const vals: Record<string, string> = {};
-                      envVars.forEach(ev => { vals[ev.key] = ev.value; });
-                      setEnvEditValues(vals);
+                      setEnvEditRows(envVars.map(ev => ({ key: ev.key, value: ev.value })));
                     }}
                     className="px-2 py-1 text-xs font-medium bg-accent-600/15 text-accent-400 rounded hover:bg-accent-600/25"
                   >
@@ -2423,23 +2457,61 @@ volumes:
                 <svg className="w-5 h-5 animate-spin mr-2" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
                 Loading...
               </div>
-            ) : envVars.length === 0 ? (
-              <div className="text-center py-8 text-dark-300 text-sm">No environment variables set</div>
             ) : envEditing ? (
+              /* Editing is checked BEFORE the empty case: a container with no
+                 variables set is precisely where Add is needed, and testing
+                 emptiness first would render "none set" over the editor. */
               <div className="space-y-2">
-                {envVars.map((ev, i) => (
+                {envEditRows.map((row, i) => (
                   <div key={i} className="flex gap-2 items-start">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-mono text-dark-200 truncate">{ev.key}</div>
-                      <input
-                        type="text"
-                        value={envEditValues[ev.key] || ""}
-                        onChange={(e) => setEnvEditValues({ ...envEditValues, [ev.key]: e.target.value })}
-                        className="w-full text-xs font-mono text-dark-100 bg-dark-900 rounded px-2 py-1.5 mt-0.5 border border-dark-600 focus:ring-1 focus:ring-accent-500 focus:border-accent-500"
-                      />
-                    </div>
+                    <input
+                      type="text"
+                      value={row.key}
+                      placeholder="KEY"
+                      spellCheck={false}
+                      onChange={(e) => {
+                        const n = [...envEditRows];
+                        n[i] = { ...n[i], key: e.target.value };
+                        setEnvEditRows(n);
+                      }}
+                      className="w-1/3 text-xs font-mono text-dark-100 bg-dark-900 rounded px-2 py-1.5 border border-dark-600 focus:ring-1 focus:ring-accent-500 focus:border-accent-500"
+                    />
+                    <input
+                      type="text"
+                      value={row.value}
+                      placeholder="value"
+                      spellCheck={false}
+                      onChange={(e) => {
+                        const n = [...envEditRows];
+                        n[i] = { ...n[i], value: e.target.value };
+                        setEnvEditRows(n);
+                      }}
+                      className="flex-1 min-w-0 text-xs font-mono text-dark-100 bg-dark-900 rounded px-2 py-1.5 border border-dark-600 focus:ring-1 focus:ring-accent-500 focus:border-accent-500"
+                    />
+                    <button
+                      onClick={() => setEnvEditRows(envEditRows.filter((_, j) => j !== i))}
+                      aria-label={`Remove ${row.key || "variable"}`}
+                      className="px-1.5 py-1.5 text-danger-400 hover:text-danger-300 text-sm"
+                    >
+                      &times;
+                    </button>
                   </div>
                 ))}
+                <button
+                  onClick={() => setEnvEditRows([...envEditRows, { key: "", value: "" }])}
+                  className="text-xs text-accent-400 hover:text-accent-300"
+                >
+                  + Add variable
+                </button>
+                {/* The container is the only store of an app's environment, so
+                    a value the read masked comes back as the mask and means
+                    "leave this one alone" — the server resolves it. Removing a
+                    row removes the variable. */}
+                <p className="text-[11px] text-dark-400 pt-1">
+                  Saving recreates the container. Values shown as
+                  {" "}<span className="font-mono">{ENV_MASK}</span>{" "}
+                  are unchanged unless you edit them.
+                </p>
                 <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-dark-600">
                   <button onClick={() => setEnvEditing(false)} className="px-3 py-1.5 text-xs text-dark-300 border border-dark-600 rounded hover:text-dark-100">
                     Cancel
@@ -2453,6 +2525,8 @@ volumes:
                   </button>
                 </div>
               </div>
+            ) : envVars.length === 0 ? (
+              <div className="text-center py-8 text-dark-300 text-sm">No environment variables set</div>
             ) : (
               <div className="space-y-2">
                 {envVars.map((ev, i) => (

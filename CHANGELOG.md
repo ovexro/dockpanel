@@ -4,6 +4,65 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.116.0]
+
+### Fixed — the deploy form asked for your domain and then threw it away
+
+Six one-click templates ship an environment variable holding the app's own public
+address — Ghost's `url`, Plausible's `BASE_URL`, Drone's `DRONE_SERVER_HOST`,
+PhotoPrism's `PHOTOPRISM_SITE_URL`, Graylog's `GRAYLOG_HTTP_EXTERNAL_URI` — and every
+one of them defaulted to `localhost`. The app came up, served fine through the domain
+you claimed, and handed out URLs pointing at a machine your visitors are not on:
+webhook registrations, OAuth callbacks, password-reset links.
+
+The panel had the right answer the whole time. You type the domain into the deploy form,
+it is validated, claimed, and passed to the agent — which used it to write one container
+label and ignored it everywhere else.
+
+Those variables are now filled in from the domain you claimed. A value you change
+yourself always wins; this only fills in a field you left alone, and a deploy with no
+domain keeps the `localhost` default, which is correct there. The deploy form says which
+fields it is going to fill in, rather than showing you a `localhost` default it is about
+to replace.
+
+### Fixed — n8n could not be configured at all (#111)
+
+n8n was the worst case of the above, because its template declares no environment
+variables, so there was no field to correct. Behind the panel's own reverse proxy it
+printed `Editor is now accessible via: http://localhost:5678`, registered webhooks
+against that address — Telegram and every other webhook-based trigger failed with
+`HTTPS URL must be provided for webhook` — and threw
+`ERR_ERL_UNEXPECTED_X_FORWARDED_FOR` on every request, because nothing had told it to
+trust the proxy in front of it.
+
+It now receives `N8N_HOST`, `N8N_PROTOCOL`, `WEBHOOK_URL` and `N8N_PROXY_HOPS` from the
+domain claimed at deploy time. Reported by **@munoz-dev**, with a reproduction, logs and
+two proposed fixes — both of which are in this release.
+
+### Added — the app environment editor can add and remove variables
+
+An app's Environment Variables dialog could edit the values of variables the container
+already had, and nothing else. The key was fixed text, there was no way to add one, and
+the Edit button did not appear at all for a container with none set. Anything the
+template did not declare was unreachable from the panel — which is why the reporter
+above had to rebuild his container by hand with `docker run`.
+
+It now works like the equivalent editor on the Sites page: names are editable, `+ Add
+variable` appends a row, and a row can be removed. A blank name is discarded; a repeated
+one is refused rather than silently collapsed onto whichever value came last.
+
+Saving still recreates the container, and a value shown as `********` still means
+"leave this one alone".
+
+### Security — the environment editor now has the same limits as the deploy form
+
+`PUT /api/apps/{id}/env` never bounded what it accepted, which was survivable only
+because the dialog could only send back keys that already existed. Now that it can
+compose an arbitrary name, that door enforces what the deploy path has always enforced:
+at most 50 variables, names up to 255 characters, values up to 4KB. Names containing
+`=` or a null byte are refused, because Docker splits on the first `=` and would
+otherwise set a variable other than the one you named.
+
 ## [2.115.0]
 
 ### Added — the second administrator can finally sign off

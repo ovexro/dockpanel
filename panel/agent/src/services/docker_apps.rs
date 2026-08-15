@@ -290,6 +290,185 @@ static GPU_RECOMMENDED_TEMPLATES: &[&str] = &[
 /// (issue #101). `/data` is the path the template already mounts a volume at, so the
 /// served directory and the persisted directory are the same one; a `server` command
 /// pointed anywhere else would come up healthy and lose every object on restart.
+/// What a domain-derived env var should be filled in with.
+///
+/// The variants are the shapes real apps ask for, and they are not
+/// interchangeable: n8n wants the bare host in `N8N_HOST` and a full URL in
+/// `WEBHOOK_URL`, and drone splits host and scheme across two variables the
+/// same way. A single "the app's URL" variant would be wrong for four of the
+/// eleven entries below.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DomainEnv {
+    /// Bare hostname — `example.com`.
+    Host,
+    /// `https` or `http`, as a word.
+    Scheme,
+    /// `https://example.com`, no trailing slash.
+    Url,
+    /// `https://example.com/`. Separate from [`DomainEnv::Url`] because
+    /// n8n concatenates `WEBHOOK_URL` with a path and emits a double slash
+    /// without it, while Ghost rejects a trailing slash in `url`.
+    UrlSlash,
+    /// Reverse-proxy hops between the client and the app.
+    ///
+    /// Always exactly 1: `deploy_app` binds every container to `127.0.0.1`
+    /// (see the port-binding block below), so the panel's own nginx is the only
+    /// thing that can reach it, and that nginx appends exactly one entry
+    /// (`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for` in both
+    /// `templates/nginx/proxy.conf` and `https.conf`). An operator who puts
+    /// Cloudflare in front adds a second entry; the value still makes the app
+    /// trust the proxy, it only shifts which entry it reads as the client — so
+    /// this is right where it matters and imprecise where it does not.
+    ProxyHops,
+}
+
+/// Env vars whose correct value is the domain the operator claimed on the
+/// deploy form.
+///
+/// Kept as a keyed list rather than a per-template field for the reason given
+/// above `GPU_RECOMMENDED_TEMPLATES` — every static declaration in the
+/// catalogue would otherwise have to be edited to add a field all but six
+/// leave empty.
+///
+/// **Why this exists.** Every entry names a variable the app uses to build its
+/// OWN absolute URLs: webhook registrations, OAuth callbacks, password-reset
+/// links. Left at the catalogue's `localhost:<port>` default, the app comes up
+/// and serves fine — and every URL it hands out points somewhere the visitor's
+/// browser cannot follow. The deploy form has collected the domain all along;
+/// until this change `deploy_app` used it for one container label and threw it
+/// away, so the operator had to know to retype it into a second field, and for
+/// n8n there was no field to retype it into (GitHub #111).
+///
+/// An operator value that differs from the catalogue default always wins — see
+/// the merge in [`deploy_app`]. This only fills a field nobody filled in.
+static TEMPLATE_DOMAIN_ENV: &[(&str, &[(&str, DomainEnv)])] = &[
+    // n8n declares no env vars at all, so all four of these are additions the
+    // deploy form could not have offered. Without them n8n prints
+    // `Editor is now accessible via: http://localhost:5678`, registers webhooks
+    // against that address, and throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR on
+    // every request because express-rate-limit does not trust the proxy.
+    (
+        "n8n",
+        &[
+            ("N8N_HOST", DomainEnv::Host),
+            ("N8N_PROTOCOL", DomainEnv::Scheme),
+            ("WEBHOOK_URL", DomainEnv::UrlSlash),
+            ("N8N_PROXY_HOPS", DomainEnv::ProxyHops),
+        ],
+    ),
+    ("ghost", &[("url", DomainEnv::Url)]),
+    ("plausible", &[("BASE_URL", DomainEnv::Url)]),
+    (
+        "drone",
+        &[
+            ("DRONE_SERVER_HOST", DomainEnv::Host),
+            ("DRONE_SERVER_PROTO", DomainEnv::Scheme),
+        ],
+    ),
+    ("photoprism", &[("PHOTOPRISM_SITE_URL", DomainEnv::Url)]),
+    (
+        "graylog",
+        &[("GRAYLOG_HTTP_EXTERNAL_URI", DomainEnv::UrlSlash)],
+    ),
+];
+
+/// The values [`TEMPLATE_DOMAIN_ENV`] resolves to for one deploy.
+///
+/// `https` is not a guess. A claimed domain reaches the app through the panel's
+/// nginx either way: with `external_tls` the operator terminates TLS upstream,
+/// and without it the backend requests a certificate as part of the same deploy
+/// (see `deploy_ssl_email` in the backend route). Both paths are public https.
+/// The one case this is optimistic about is a certificate that fails to issue,
+/// which leaves the derived value ahead of reality until it does — and an app
+/// on a domain with no certificate is already broken in more visible ways.
+fn domain_env_for(template_id: &str, domain: &str) -> Vec<(&'static str, String)> {
+    TEMPLATE_DOMAIN_ENV
+        .iter()
+        .find(|(id, _)| *id == template_id)
+        .map(|(_, vars)| {
+            vars.iter()
+                .map(|(name, kind)| {
+                    let value = match kind {
+                        DomainEnv::Host => domain.to_string(),
+                        DomainEnv::Scheme => "https".to_string(),
+                        DomainEnv::Url => format!("https://{domain}"),
+                        DomainEnv::UrlSlash => format!("https://{domain}/"),
+                        DomainEnv::ProxyHops => "1".to_string(),
+                    };
+                    (*name, value)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Assemble a deploy's `KEY=value` list from the template's declared vars, what
+/// the operator submitted, and whatever [`domain_env_for`] derived.
+///
+/// Pure so the precedence can be tested without Docker. Called from
+/// [`deploy_app`] and nowhere else.
+///
+/// Precedence, highest first:
+/// 1. An operator value that DIFFERS from the catalogue default — a deliberate
+///    choice, and it wins even over a derived value.
+/// 2. The derived value, when this template has one for the name.
+/// 3. The operator's value (i.e. one equal to the default).
+/// 4. The catalogue default.
+///
+/// Rule 1 is the load-bearing one. Without it, an operator who typed their own
+/// `WEBHOOK_URL` would have it silently overwritten by the domain — which is
+/// the same class of bug as shipping `localhost`, just pointing the other way.
+fn merge_deploy_env(
+    env_vars: &[EnvVarDef],
+    env: &HashMap<String, String>,
+    derived: &[(&'static str, String)],
+) -> Vec<String> {
+    let mut env_list: Vec<String> = Vec::new();
+    for ev in env_vars {
+        let supplied = env.get(ev.name);
+        let value = match supplied {
+            Some(v) if v != ev.default => v.clone(),
+            _ => derived
+                .iter()
+                .find(|(n, _)| *n == ev.name)
+                .map(|(_, v)| v.clone())
+                .or_else(|| supplied.cloned())
+                .unwrap_or_else(|| ev.default.to_string()),
+        };
+        if !value.is_empty() {
+            env_list.push(format!("{}={}", ev.name, value));
+        }
+    }
+    // Include any extra env vars the user passed that aren't in the template
+    for (k, v) in env {
+        if !env_vars.iter().any(|ev| ev.name == k.as_str()) {
+            env_list.push(format!("{k}={v}"));
+        }
+    }
+    // Derived vars the template does not declare at all. n8n is the reason this
+    // loop exists: its catalogue row is `env_vars: &[]`, so all four of its
+    // domain-derived vars are additions no form field could have carried and
+    // the loop above could never have reached. Skipped when the operator sent
+    // the key themselves — the extras loop directly above already emitted it,
+    // and appending here as well would set the variable twice.
+    for (name, value) in derived {
+        if !env_vars.iter().any(|ev| ev.name == *name) && !env.contains_key(*name) {
+            env_list.push(format!("{name}={value}"));
+        }
+    }
+    env_list
+}
+
+/// Whether this template fills `name` in from the claimed domain — the flag the
+/// deploy form uses to tell the operator so, instead of showing them a
+/// `localhost` default it is about to override.
+fn is_domain_derived(template_id: &str, name: &str) -> bool {
+    TEMPLATE_DOMAIN_ENV
+        .iter()
+        .find(|(id, _)| *id == template_id)
+        .is_some_and(|(_, vars)| vars.iter().any(|(n, _)| *n == name))
+}
+
 static TEMPLATE_CMD: &[(&str, &[&str])] = &[
     ("minio", &["server", "/data", "--console-address", ":9001"]),
     // Each entry below was established by RUNNING the image and observing it
@@ -344,6 +523,11 @@ pub struct EnvVar {
     pub default: String,
     pub required: bool,
     pub secret: bool,
+    /// True when `deploy_app` fills this in from the claimed domain, so the
+    /// deploy form can say so rather than presenting a `localhost` default it
+    /// is about to replace. See [`TEMPLATE_DOMAIN_ENV`].
+    #[serde(default)]
+    pub domain_derived: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -2538,6 +2722,7 @@ fn to_app_template(def: &AppTemplateDef) -> AppTemplate {
                 default: ev.default.to_string(),
                 required: ev.required,
                 secret: ev.secret,
+                domain_derived: is_domain_derived(def.id, ev.name),
             })
             .collect(),
         volumes: def.volumes.iter().map(|v| v.to_string()).collect(),
@@ -3316,23 +3501,14 @@ pub async fn deploy_app(
 
     let container_name = format!("{CONTAINER_NAME_PREFIX}{name}");
 
+    // Values this template wants filled in from the domain the operator claimed.
+    // Empty for 142 of the 148 templates, and for every deploy without a domain.
+    let derived: Vec<(&'static str, String)> = domain
+        .map(|d| domain_env_for(template_id, d))
+        .unwrap_or_default();
+
     // Build environment variables: merge template defaults with user-supplied values
-    let mut env_list: Vec<String> = Vec::new();
-    for ev in template.env_vars {
-        let value = env
-            .get(ev.name)
-            .cloned()
-            .unwrap_or_else(|| ev.default.to_string());
-        if !value.is_empty() {
-            env_list.push(format!("{}={}", ev.name, value));
-        }
-    }
-    // Include any extra env vars the user passed that aren't in the template
-    for (k, v) in &env {
-        if !template.env_vars.iter().any(|ev| ev.name == k.as_str()) {
-            env_list.push(format!("{k}={v}"));
-        }
-    }
+    let env_list = merge_deploy_env(template.env_vars, &env, &derived);
 
     // Port bindings
     let mut port_bindings = HashMap::new();
@@ -5044,6 +5220,199 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect()
+    }
+
+    // ── Domain-derived template env (GitHub #111) ────────────────────────────
+
+    /// The catalogue rows these tests assert against, so a template edit that
+    /// breaks the derivation fails here rather than in the field.
+    fn template_by_id(id: &str) -> &'static AppTemplateDef {
+        TEMPLATES
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap_or_else(|| panic!("template {id} missing from the catalogue"))
+    }
+
+    #[test]
+    fn n8n_gets_all_four_of_its_url_vars_from_the_claimed_domain() {
+        // n8n's row declares `env_vars: &[]`, so before this every one of these
+        // was unreachable from the panel: the deploy form renders inputs only
+        // from the template list, and the edit modal could not compose a new
+        // key. The reporter had to rebuild the container by hand (#111).
+        let t = template_by_id("n8n");
+        assert!(
+            t.env_vars.is_empty(),
+            "n8n declaring env vars would change which merge branch fills these in"
+        );
+
+        let derived = domain_env_for("n8n", "n8n.example.com");
+        let out = merge_deploy_env(t.env_vars, &env(&[]), &derived);
+
+        assert!(
+            out.contains(&"N8N_HOST=n8n.example.com".to_string()),
+            "{out:?}"
+        );
+        assert!(out.contains(&"N8N_PROTOCOL=https".to_string()), "{out:?}");
+        // Trailing slash: n8n appends a path to WEBHOOK_URL.
+        assert!(
+            out.contains(&"WEBHOOK_URL=https://n8n.example.com/".to_string()),
+            "{out:?}"
+        );
+        assert!(out.contains(&"N8N_PROXY_HOPS=1".to_string()), "{out:?}");
+        assert_eq!(out.len(), 4, "nothing else should be emitted: {out:?}");
+    }
+
+    #[test]
+    fn no_domain_means_no_derivation_and_the_catalogue_default_still_stands() {
+        // A deploy without a domain is reachable only on localhost, so the
+        // localhost defaults are correct there and must survive untouched.
+        let t = template_by_id("ghost");
+        let out = merge_deploy_env(t.env_vars, &env(&[]), &[]);
+        assert!(
+            out.contains(&"url=http://localhost:2368".to_string()),
+            "{out:?}"
+        );
+
+        // And n8n, which declares nothing, must emit nothing at all.
+        let n8n = merge_deploy_env(template_by_id("n8n").env_vars, &env(&[]), &[]);
+        assert!(n8n.is_empty(), "{n8n:?}");
+    }
+
+    #[test]
+    fn an_operator_value_that_differs_from_the_default_beats_the_derived_one() {
+        // The rule that stops this fix becoming the same bug pointing the other
+        // way. Someone running Ghost behind their own CDN types a different
+        // URL; the domain must not silently overwrite it.
+        let t = template_by_id("ghost");
+        let derived = domain_env_for("ghost", "blog.example.com");
+        let out = merge_deploy_env(
+            t.env_vars,
+            &env(&[("url", "https://cdn.example.net")]),
+            &derived,
+        );
+
+        assert!(
+            out.contains(&"url=https://cdn.example.net".to_string()),
+            "operator value must win: {out:?}"
+        );
+        assert!(
+            !out.iter().any(|e| e == "url=https://blog.example.com"),
+            "derived value must not also be emitted: {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_submitted_value_still_equal_to_the_default_is_treated_as_untouched() {
+        // The deploy form seeds every field from `default` and posts all of
+        // them, so "the operator left it alone" arrives as the default value,
+        // not as an absent key. If this branch broke, the fix would do nothing
+        // for the five templates that DO declare the var — which is the
+        // majority of the affected catalogue.
+        let t = template_by_id("ghost");
+        let derived = domain_env_for("ghost", "blog.example.com");
+        let out = merge_deploy_env(
+            t.env_vars,
+            &env(&[("url", "http://localhost:2368")]),
+            &derived,
+        );
+        assert!(
+            out.contains(&"url=https://blog.example.com".to_string()),
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn a_derived_var_the_operator_also_sent_is_emitted_exactly_once() {
+        // Both the extras loop and the derived-append loop can reach a name the
+        // template does not declare. Emitting it twice would put two entries
+        // for one key into the container's env.
+        let t = template_by_id("n8n");
+        let derived = domain_env_for("n8n", "n8n.example.com");
+        let out = merge_deploy_env(
+            t.env_vars,
+            &env(&[("N8N_HOST", "manual.example.com")]),
+            &derived,
+        );
+
+        let hosts: Vec<_> = out.iter().filter(|e| e.starts_with("N8N_HOST=")).collect();
+        assert_eq!(hosts.len(), 1, "{out:?}");
+        assert_eq!(hosts[0], "N8N_HOST=manual.example.com");
+    }
+
+    #[test]
+    fn every_domain_derived_name_exists_on_the_template_it_is_keyed_to() {
+        // A severed pair guard. Renaming or dropping a catalogue env var while
+        // leaving its TEMPLATE_DOMAIN_ENV entry behind would derive a value
+        // nothing reads — the GPU_RECOMMENDED_TEMPLATES /
+        // stable-diffusion-webui shape, which sat undetected for 19 releases.
+        // n8n is the deliberate exception: it declares none of its four, which
+        // is the whole reason they are derived.
+        for (template_id, vars) in TEMPLATE_DOMAIN_ENV {
+            let t = template_by_id(template_id);
+            if *template_id == "n8n" {
+                continue;
+            }
+            for (name, _) in *vars {
+                assert!(
+                    t.env_vars.iter().any(|ev| ev.name == *name),
+                    "{template_id} has no env var {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_domain_derived_template_still_exists_in_the_catalogue() {
+        // The other half of the same severed pair: a template withdrawn from
+        // the catalogue must not leave an entry here. `template_by_id` panics
+        // with the offending id.
+        for (template_id, _) in TEMPLATE_DOMAIN_ENV {
+            let _ = template_by_id(template_id);
+        }
+    }
+
+    #[test]
+    fn the_derived_flag_the_form_reads_matches_what_deploy_actually_derives() {
+        // `domain_derived` is what the deploy form uses to tell the operator a
+        // field is filled in for them. If it disagreed with the derivation, the
+        // form would either promise something that does not happen or show a
+        // localhost default it is about to overwrite.
+        for t in TEMPLATES {
+            let derived = domain_env_for(t.id, "example.com");
+            for ev in t.env_vars {
+                assert_eq!(
+                    is_domain_derived(t.id, ev.name),
+                    derived.iter().any(|(n, _)| *n == ev.name),
+                    "{}.{} flag disagrees with derivation",
+                    t.id,
+                    ev.name
+                );
+            }
+        }
+        // And the flag is false for a template with no entry at all.
+        assert!(!is_domain_derived("postgres", "POSTGRES_PASSWORD"));
+    }
+
+    #[test]
+    fn a_derived_url_never_carries_the_container_port() {
+        // The catalogue defaults embed the container port because without a
+        // domain that is how you reach the app. Through the panel's nginx the
+        // public URL has no port, and shipping one produces a URL that resolves
+        // to nothing — the failure this change exists to remove, reintroduced.
+        for (template_id, vars) in TEMPLATE_DOMAIN_ENV {
+            let derived = domain_env_for(template_id, "example.com");
+            assert_eq!(derived.len(), vars.len());
+            for (name, value) in &derived {
+                assert!(
+                    !value.contains("example.com:"),
+                    "{template_id}.{name} = {value} carries a port"
+                );
+                assert!(
+                    !value.contains("localhost"),
+                    "{template_id}.{name} = {value} still points at localhost"
+                );
+            }
+        }
     }
 
     #[test]

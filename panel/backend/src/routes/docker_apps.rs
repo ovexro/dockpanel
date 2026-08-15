@@ -1025,6 +1025,38 @@ pub async fn update_env(
     if !is_valid_container_id(&container_id) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
     }
+
+    // Same bounds the deploy door has enforced all along (see `deploy`, above).
+    // This door never had them because until now the edit dialog could only
+    // send back keys the container already had, so the only reachable input was
+    // a value the operator typed over an existing one. It can compose arbitrary
+    // keys now, which makes the two doors equally reachable and the asymmetry
+    // indefensible: without this, PUT /env is the one env door with no length
+    // cap, no count cap and no value-size cap.
+    if let Some(env) = body.get("env").and_then(|e| e.as_object()) {
+        if env.len() > 50 {
+            return Err(err(StatusCode::BAD_REQUEST, "Too many environment variables (max 50)"));
+        }
+        for (key, value) in env {
+            if key.is_empty() || key.len() > 255 {
+                return Err(err(StatusCode::BAD_REQUEST, "Invalid environment variable name"));
+            }
+            // Docker splits on the first `=`, so a key containing one silently
+            // becomes a different variable than the one the operator named. The
+            // deploy door never had to refuse this because its keys came from
+            // the catalogue; this one takes them from a text input.
+            if key.contains('=') || key.contains('\0') {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "Environment variable name may not contain '=' or a null byte",
+                ));
+            }
+            if value.as_str().is_some_and(|v| v.len() > 4096) {
+                return Err(err(StatusCode::BAD_REQUEST, "Environment variable value too large (max 4KB)"));
+            }
+        }
+    }
+
     // Long verb: saving env recreates the container, and may first copy the app's data
     // out of its writable layer onto a bind mount (#110).
     let result = agent

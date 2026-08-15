@@ -246,6 +246,22 @@ List running containers.
 | GET | `/api/apps/{container_id}/volumes` | Volume mounts |
 | POST | `/api/apps/{container_id}/snapshot` | Create backup image |
 
+`PUT /api/apps/{container_id}/env` replaces the container's environment with the
+object you send: a name you omit is removed, and a value sent back as `********`
+means "leave this one alone" (the container is the only place an app's
+environment is stored, so the masked read is what the panel has to reconcile
+against). Names may be added freely — the same bounds the deploy endpoint
+enforces apply here: at most 50 variables, names up to 255 characters, values up
+to 4KB, and a name may not contain `=` or a null byte.
+
+**Domain-derived variables.** When a template declares a variable holding the
+app's own public address and you claim a domain at deploy time, `POST
+/api/apps/deploy` fills that variable in from the domain rather than leaving the
+template's `localhost` default. It applies to `n8n`, `ghost`, `plausible`,
+`drone`, `photoprism` and `graylog`; a value you send explicitly always wins.
+The template objects returned by `GET /api/apps/templates` mark such variables
+with `domain_derived: true`.
+
 ### Docker Compose
 
 | Method | Path | Purpose |
