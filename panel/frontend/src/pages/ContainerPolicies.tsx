@@ -277,10 +277,17 @@ export default function ContainerPolicies() {
       <div className="bg-dark-800 rounded-lg border border-dark-500 p-5">
         <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-3">How It Works</h3>
         <div className="space-y-2 text-sm text-dark-200">
-          <p><strong className="text-dark-100">Container limits</strong> — Maximum number of Docker containers a user can deploy.</p>
-          <p><strong className="text-dark-100">Memory &amp; CPU</strong> — Maximum resources per container deployment.</p>
-          <p><strong className="text-dark-100">Allowed images</strong> — Restrict which Docker images a user can deploy. Leave empty for no restriction.</p>
-          <p className="text-xs text-dark-400 mt-2">Users without a policy have no container limits applied.</p>
+          <p><strong className="text-dark-100">Container limits</strong> — Maximum number of Docker containers a user can deploy. Counted when deploying from a template; a Compose file or a stack is not counted against it.</p>
+          <p><strong className="text-dark-100">Memory &amp; CPU</strong> — Maximum resources per container deployment, applied to template deploys.</p>
+          <p><strong className="text-dark-100">Allowed images</strong> — Comma-separated. Checked wherever an image is chosen: template deploys, changing an app&rsquo;s image, Compose and stacks. Leave empty for no restriction.</p>
+          <p className="text-xs text-dark-400">
+            An entry matches the whole reference (<span className="font-mono">nginx:1.27</span>), or the repository it
+            tags (<span className="font-mono">nginx</span> allows <span className="font-mono">nginx:1.27</span> but not
+            <span className="font-mono"> evil/nginx-backdoor</span>), or a repository prefix ending in
+            <span className="font-mono"> /*</span> (<span className="font-mono">ghcr.io/myorg/*</span>). A template&rsquo;s
+            own id is also accepted, exactly. <span className="font-mono">*</span> allows everything.
+          </p>
+          <p className="text-xs text-dark-400 mt-2">Users without a policy have no container limits applied. Only administrators can deploy containers, so a policy on any other account has nothing to restrict.</p>
         </div>
       </div>
     </div>

@@ -300,6 +300,67 @@ eq "E2 the image probes take their anonymous volumes with them" \
 eq "E3 the file-read probe takes its anonymous volumes with them" \
    "$(/usr/bin/sed -n '/async fn read_file_from_image/,/^}/p' panel/agent/src/services/docker_apps.rs | $G -c 'v: true,')" "1"
 
+# ── §F the migration wizard reports what it actually stored (s369) ──────────
+#
+# `INSERT INTO databases` in the import loop omitted `site_id`, which is NOT NULL
+# with no default — so the statement could never succeed — and discarded its own
+# result, so the loop carried on and announced "Imported" over a row that was
+# never written. The operator was left with a running database container the
+# panel could not list, reach or delete, holding a password that existed nowhere
+# else. `ON CONFLICT DO NOTHING` arbitrates unique conflicts and does not soften
+# a not-null violation.
+#
+# A CLASS arm: it enumerates every INSERT INTO databases in the tree rather than
+# naming the one that was wrong, and fails on an implausibly small subject.
+DB_INSERTS=$($G -rn "INSERT INTO databases" panel/backend/src --include=*.rs | wc -l)
+if [ "$DB_INSERTS" -ge 3 ]; then
+  ok "F0 discovered $DB_INSERTS INSERT INTO databases sites (>= 3 known to exist)"
+else
+  bad "F0 only $DB_INSERTS INSERT INTO databases sites" "the scan broke; F1 is vacuous"
+fi
+eq "F1 every INSERT INTO databases names the NOT NULL site_id" \
+   "$($G -rn "INSERT INTO databases" panel/backend/src --include=*.rs | $G -cv "site_id")" "0"
+eq "F2 the import's insert is checked rather than discarded" \
+   "$(/usr/bin/sed -n '/Insert the DB record/,/^            let landed/p' panel/backend/src/routes/migration.rs | $G -c 'fetch_optional')" "1"
+eq "F3 a database that cannot be recorded has its container taken back down" \
+   "$(/usr/bin/sed -n '/if !landed {/,/^            }/p' panel/backend/src/routes/migration.rs | $G -c 'agent.delete')" "1"
+# The site a database belongs to is resolved BEFORE the container is created, or
+# the failure it prevents has already happened by the time it is detected.
+RESOLVE_LINE=$($G -n "Which site does this database belong to" panel/backend/src/routes/migration.rs | cut -d: -f1)
+CREATE_LINE=$($G -n 'agent.post("/databases"' panel/backend/src/routes/migration.rs | cut -d: -f1)
+if [ -n "$RESOLVE_LINE" ] && [ -n "$CREATE_LINE" ] && [ "$RESOLVE_LINE" -lt "$CREATE_LINE" ]; then
+  ok "F4 the site is resolved before the container is created"
+else
+  bad "F4 the site resolution moved after the container creation" "resolve=$RESOLVE_LINE create=$CREATE_LINE"
+fi
+
+# ── §G Update does not also START an app the operator stopped (s369) ────────
+#
+# All three recreate doors started the new container unconditionally, so
+# pressing Update on something deliberately stopped brought it back up. The
+# fourth start is inside `blue_green_update`, which is the branch taken for any
+# app with a domain — the normal case — so guarding only the three visible
+# stop/start sites would have missed the majority of installs.
+#
+# CLASS arm: it enumerates every start_container in the recreate file rather
+# than naming the four that were wrong.
+ADS=panel/agent/src/services/docker_apps.rs
+STARTS=$($G -c "\.start_container(" "$ADS")
+if [ "$STARTS" -ge 5 ]; then
+  ok "G0 discovered $STARTS start_container sites (>= 5 known to exist)"
+else
+  bad "G0 only $STARTS start_container sites" "the scan broke; G1 is vacuous"
+fi
+eq "G1 the pre-update state is captured on all three recreate doors" \
+   "$($G -c 'let was_running = matches!(' "$ADS")" "3"
+eq "G2 every recreate door's start is guarded by it" \
+   "$($G -c '^    if was_running {' "$ADS")" "3"
+eq "G3 blue-green is not taken for an app that was already stopped" \
+   "$($G -c '} else if !was_running {' "$ADS")" "1"
+# A paused container reports Running in bollard, so the guard must read `status`.
+eq "G4 the guard reads status, not the running flag" \
+   "$($G -c 'ContainerStateStatusEnum::RUNNING' "$ADS")" "3"
+
 echo
 echo "PASS $PASS  FAIL $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

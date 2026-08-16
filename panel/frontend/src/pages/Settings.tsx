@@ -2823,7 +2823,7 @@ function ImageScanSettings({ setMessage }: { setMessage: (m: { text: string; typ
             />
             <div>
               <div className="text-sm font-medium text-dark-50">Gate deploys on scan results</div>
-              <p className="text-[10px] text-dark-300 mt-0.5">Block new app deploys when the image's last scan exceeds the threshold below.</p>
+              <p className="text-[10px] text-dark-300 mt-0.5">Refuse an image whose last scan exceeds the threshold below &mdash; on deploys, image changes, compose and stacks. Updating an app is exempt: it re-pulls the same reference, so the scan on file describes the image being replaced.</p>
             </div>
           </label>
         </div>

@@ -4581,6 +4581,18 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
         .await
         .map_err(|e| format!("Failed to inspect container: {e}"))?;
 
+    // Was this app running before we touched it? A recreate that always starts
+    // the new container turns "update this app" into "update and start it", so
+    // pressing Update on something deliberately stopped brought it back up —
+    // on a host where it had been stopped for a reason.
+    //
+    // Read from `status`, not `running`: bollard reports a PAUSED container as
+    // running as well, and a paused app is not one the operator left up.
+    let was_running = matches!(
+        info.state.as_ref().and_then(|s| s.status),
+        Some(bollard::models::ContainerStateStatusEnum::RUNNING)
+    );
+
     // Read before the fields below are moved out of `info`. This is the image the
     // container is actually running, which the verdict compares against whatever
     // the tag resolves to locally.
@@ -4687,6 +4699,12 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
                  length of the health check. Using stop/start instead (brief downtime, no \
                  concurrent writers)."
             );
+        } else if !was_running {
+            tracing::info!(
+                "Not using blue-green for {name}: it is stopped, and blue-green exists to \
+                 avoid downtime for something that is up. Using stop/start instead, which \
+                 leaves it stopped."
+            );
         } else if std::path::Path::new(&config_path).exists() {
             match blue_green_update(
                 &docker,
@@ -4772,10 +4790,14 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
         .await
         .map_err(|e| format!("Failed to create updated container: {e}"))?;
 
-    docker
-        .start_container(&container.id, None::<StartContainerOptions<String>>)
-        .await
-        .map_err(|e| format!("Failed to start updated container: {e}"))?;
+    if was_running {
+        docker
+            .start_container(&container.id, None::<StartContainerOptions<String>>)
+            .await
+            .map_err(|e| format!("Failed to start updated container: {e}"))?;
+    } else {
+        tracing::info!("{name} was stopped before the update; leaving it stopped.");
+    }
 
     if migrated.is_empty() {
         tracing::info!("App updated (stop/start): {name} ({image})");
@@ -4834,6 +4856,18 @@ pub async fn change_container_image(container_id: &str, new_image: &str) -> Resu
         .inspect_container(container_id, None)
         .await
         .map_err(|e| format!("Failed to inspect container: {e}"))?;
+
+    // Was this app running before we touched it? A recreate that always starts
+    // the new container turns "update this app" into "update and start it", so
+    // pressing Update on something deliberately stopped brought it back up —
+    // on a host where it had been stopped for a reason.
+    //
+    // Read from `status`, not `running`: bollard reports a PAUSED container as
+    // running as well, and a paused app is not one the operator left up.
+    let was_running = matches!(
+        info.state.as_ref().and_then(|s| s.status),
+        Some(bollard::models::ContainerStateStatusEnum::RUNNING)
+    );
 
     let config = info.config.ok_or("No container config found")?;
     let mut host_config = info.host_config.ok_or("No host config found")?;
@@ -4938,10 +4972,14 @@ pub async fn change_container_image(container_id: &str, new_image: &str) -> Resu
         .await
         .map_err(|e| format!("Failed to create container with new image: {e}"))?;
 
-    docker
-        .start_container(&container.id, None::<StartContainerOptions<String>>)
-        .await
-        .map_err(|e| format!("Failed to start container with new image: {e}"))?;
+    if was_running {
+        docker
+            .start_container(&container.id, None::<StartContainerOptions<String>>)
+            .await
+            .map_err(|e| format!("Failed to start container with new image: {e}"))?;
+    } else {
+        tracing::info!("{name} was stopped before the image change; leaving it stopped.");
+    }
 
     tracing::info!("Image changed for {name}: → {new_image} (new: {})", container.id);
     Ok(container.id)
@@ -5105,6 +5143,18 @@ pub async fn update_env(
         .await
         .map_err(|e| format!("Failed to inspect container: {e}"))?;
 
+    // Was this app running before we touched it? A recreate that always starts
+    // the new container turns "update this app" into "update and start it", so
+    // pressing Update on something deliberately stopped brought it back up —
+    // on a host where it had been stopped for a reason.
+    //
+    // Read from `status`, not `running`: bollard reports a PAUSED container as
+    // running as well, and a paused app is not one the operator left up.
+    let was_running = matches!(
+        info.state.as_ref().and_then(|s| s.status),
+        Some(bollard::models::ContainerStateStatusEnum::RUNNING)
+    );
+
     let config = info.config.ok_or("No container config found")?;
     let mut host_config = info.host_config.ok_or("No host config found")?;
     let name = info
@@ -5193,10 +5243,14 @@ pub async fn update_env(
         .await
         .map_err(|e| format!("Failed to create container: {e}"))?;
 
-    docker
-        .start_container(&container.id, None::<StartContainerOptions<String>>)
-        .await
-        .map_err(|e| format!("Failed to start container: {e}"))?;
+    if was_running {
+        docker
+            .start_container(&container.id, None::<StartContainerOptions<String>>)
+            .await
+            .map_err(|e| format!("Failed to start container: {e}"))?;
+    } else {
+        tracing::info!("{name} was stopped before the env change; leaving it stopped.");
+    }
 
     tracing::info!(
         "Container env updated: {name} ({} vars)",

@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.121.0.** The version stamp, the template count and every
+> **Reflects v2.122.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -402,7 +402,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Seventy-two suites, **2371 assertions**, all green at the current commit:
+survivable. Seventy-three suites, **2397 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -439,7 +439,7 @@ survivable. Seventy-two suites, **2371 assertions**, all green at the current co
 | `ownership-delete-pin-e2e.sh` | 36 |
 | `compose-stack-pin-e2e.sh` | 43 |
 | `container-identity-pin-e2e.sh` | 38 |
-| `unattended-host-scope-pin-e2e.sh` | 114 |
+| `unattended-host-scope-pin-e2e.sh` | 115 |
 | `status-page-gate-pin-e2e.sh` | 17 |
 | `site-transfer-visibility-pin-e2e.sh` | 21 |
 | `suspend-restore-pin-e2e.sh` | 18 |
@@ -476,8 +476,9 @@ survivable. Seventy-two suites, **2371 assertions**, all green at the current co
 | `template-domain-env-pin-e2e.sh` | 23 |
 | `update-dead-image-pin-e2e.sh` | 16 |
 | `severed-controls-pin-e2e.sh` | 26 |
-| `honest-outcomes-pin-e2e.sh` | 25 |
+| `honest-outcomes-pin-e2e.sh` | 35 |
 | `reachable-controls-pin-e2e.sh` | 29 |
+| `deploy-gate-coverage-pin-e2e.sh` | 15 |
 
 **On a schedule, from outside** (`live-surfaces.yml`, daily). Every layer above
 runs because something changed, which is exactly why none of them could catch the

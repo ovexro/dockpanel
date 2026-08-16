@@ -395,11 +395,17 @@ async fn check_resource_thresholds(pool: &PgPool) {
 /// GAP 6 predicate: `Some((hours_to_full, rate_per_hour, current_pct))` while the
 /// disk is forecast to fill within 48 hours, `None` once the trend clears.
 ///
-/// NOTE: unreachable as currently fed — see the call site. Production supplies a
-/// ~30-minute window, which can never satisfy the 6-hour minimum below, so this
-/// returns `None` on every real tick. The unit tests exercise the contract on
-/// hand-built windows; they do NOT demonstrate that the forecast fires in
-/// production, because it does not.
+/// ⚠ This note used to say the forecast was unreachable because production
+/// supplied a ~30-minute window that could never satisfy the 6-hour minimum
+/// below. That stopped being true when the query grew its 12-hour gate: the
+/// live trend measures 1441 rows spanning 11.98 hours, so the window clears the
+/// floor with room to spare and the `LIMIT 1440` is a bound on a stalled
+/// collector rather than the window itself.
+///
+/// What still keeps it quiet on a healthy box is the second gate, which is the
+/// one doing the work it was designed to do: a disk under 60% is not on a
+/// runway to full, so `None` is the right answer rather than an accident. Both
+/// gates are described below; neither is dead.
 ///
 /// Skip the forecast on fresh installs / short trend windows. Linear
 /// extrapolation over 30-60 minutes catches the install-time write spike

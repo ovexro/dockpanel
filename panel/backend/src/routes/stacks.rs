@@ -254,6 +254,16 @@ pub async fn create(
     // refactor away from being no defence.
     super::validate_compose_yaml(&body.yaml).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
 
+    // …and the same is true of the deploy gate: a stack runs images, so a CVE
+    // threshold the operator set applies to them. Judged before the domain is
+    // claimed and before any row is written, so a refusal leaves nothing behind.
+    let images = super::compose_images(&body.yaml);
+    crate::routes::docker_apps::enforce_allowed_images(&state.db, claims.sub, &images).await?;
+    for image in images {
+        crate::routes::image_scans::preflight_gate_image(&state.db, server_id, &agent, &image)
+            .await?;
+    }
+
     let domain = claim_stack_domain(
         &state,
         &headers,
@@ -520,6 +530,22 @@ pub async fn update(
         previous_domain.as_deref().unwrap_or(&name),
     )
     .await?;
+
+    // An edit can introduce images the stack was not running before, so it is a
+    // deploy as far as the gate is concerned. Judged against the stack's OWN
+    // host — the same row that decided which agent to talk to — and before the
+    // teardown below, so a refusal leaves the running stack untouched.
+    let images = super::compose_images(&body.yaml);
+    crate::routes::docker_apps::enforce_allowed_images(&state.db, claims.sub, &images).await?;
+    for image in images {
+        crate::routes::image_scans::preflight_gate_image(
+            &state.db,
+            stack_server_id,
+            &agent,
+            &image,
+        )
+        .await?;
+    }
 
     // `Holder::Stack(id)` so a stack keeps its own domain across an edit;
     // anything else already holding it is still a conflict.

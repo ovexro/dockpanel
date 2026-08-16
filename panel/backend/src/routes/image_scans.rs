@@ -332,11 +332,60 @@ fn row_to_finding(
 /// scan on one host block a deploy on another — and because a foreign row
 /// satisfied the 7-day freshness test, the background scan that was supposed to
 /// arm the gate on THIS host never fired either.
+///
+/// ⚠ THE GATE HAS TO RUN ON EVERY DOOR THAT PUTS AN IMAGE ON THE HOST. Until
+/// v2.122.0 this was the template deploy's private guard and nothing else called
+/// it, while `SECURITY.md` and the Settings toggle both said "deploys" without
+/// qualification — so changing an app's image, deploying a compose file and
+/// creating or editing a stack all walked past a threshold the operator had set.
+/// [`preflight_gate_image`] is the part that does the work; keep new doors
+/// calling it rather than re-deriving the rule, and see
+/// `tests/deploy-gate-coverage-pin-e2e.sh`, which enumerates the doors from the
+/// route table and fails when one of them stops asking.
 pub async fn preflight_gate(
     pool: &sqlx::PgPool,
     server_id: uuid::Uuid,
     agent: &crate::services::agent::AgentHandle,
     template_id: &str,
+) -> Result<(), ApiError> {
+    // Resolving the template costs an agent round trip, so ask whether the gate
+    // is armed before paying for it.
+    if !gate_is_armed(pool).await? {
+        return Ok(());
+    }
+    let image = match resolve_template_image(agent, template_id).await {
+        Some(i) => i,
+        None => return Ok(()), // unknown template, let deploy fail naturally
+    };
+    preflight_gate_image(pool, server_id, agent, &image).await
+}
+
+/// True when the operator has switched the deploy gate on and given it a
+/// threshold. Split out so a caller can decline to do expensive work — an agent
+/// round trip, a YAML parse — for a gate that is off, which is the default.
+async fn gate_is_armed(pool: &sqlx::PgPool) -> Result<bool, ApiError> {
+    let (enabled, on_deploy, gate, _hours) = read_settings(pool)
+        .await
+        .map_err(|e| internal_error("read scan settings for gate", e))?;
+    Ok(enabled && on_deploy && gate != "none")
+}
+
+/// The gate itself, keyed on the image reference that is about to run.
+///
+/// Every door that can put an image on a host calls this: the template deploy
+/// through [`preflight_gate`] above, and `update_image`, `compose_deploy`,
+/// `stacks::create` and `stacks::update` directly.
+///
+/// ⚠ `update_app` deliberately does NOT call it, and that is not an oversight.
+/// It re-pulls the SAME reference the app already runs, so the only scan on file
+/// is a scan of the image being replaced — gating on it would refuse the update
+/// precisely when the running image is vulnerable, which is the update that
+/// fixes it. A guard that blocks the remedy is worse than no guard.
+pub async fn preflight_gate_image(
+    pool: &sqlx::PgPool,
+    server_id: uuid::Uuid,
+    agent: &crate::services::agent::AgentHandle,
+    image: &str,
 ) -> Result<(), ApiError> {
     let (enabled, on_deploy, gate, _hours) = read_settings(pool)
         .await
@@ -344,11 +393,7 @@ pub async fn preflight_gate(
     if !enabled || !on_deploy || gate == "none" {
         return Ok(());
     }
-
-    let image = match resolve_template_image(agent, template_id).await {
-        Some(i) => i,
-        None => return Ok(()), // unknown template, let deploy fail naturally
-    };
+    let image = image.to_string();
 
     // Look up the most recent scan within 7 days
     let recent: Option<(i32, i32, i32, i32, i32)> = sqlx::query_as(
@@ -403,7 +448,7 @@ pub async fn preflight_gate(
 }
 
 /// Look up a template's image string from the agent's template list.
-async fn resolve_template_image(
+pub(crate) async fn resolve_template_image(
     agent: &crate::services::agent::AgentHandle,
     template_id: &str,
 ) -> Option<String> {

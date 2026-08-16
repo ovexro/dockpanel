@@ -555,10 +555,14 @@ export default function Apps() {
     });
   }, []);
 
-  const rescanApp = async (containerId: string, image: string) => {
-    setScanRescanning(containerId);
+  // Keyed by the app's NAME, not its container id. `/api/apps/{name}/scan` and
+  // `/api/apps/{name}/sbom` resolve the image by matching the agent's `name`
+  // field; every other `/api/apps/{container_id}/…` route takes the hex id, and
+  // passing that here matched nothing and answered 404 for every app.
+  const rescanApp = async (appName: string, image: string) => {
+    setScanRescanning(appName);
     try {
-      const result = await api.post<ScanFinding>(`/apps/${containerId}/scan`, {});
+      const result = await api.post<ScanFinding>(`/apps/${encodeURIComponent(appName)}/scan`, {});
       setScanFindings(prev => ({ ...prev, [image]: result }));
       setMessage({ text: `Scanned ${image}`, type: "success" });
     } catch (e) {
@@ -572,11 +576,11 @@ export default function Apps() {
     setScanDrawerImage(image);
   };
 
-  const downloadSbom = async (containerId: string, image: string) => {
-    setSbomLoading(containerId);
+  const downloadSbom = async (appName: string, image: string) => {
+    setSbomLoading(appName);
     try {
       const result = await api.post<{ image: string; generated_at: string; spdx: unknown }>(
-        `/apps/${containerId}/sbom`,
+        `/apps/${encodeURIComponent(appName)}/sbom`,
         {}
       );
       const blob = new Blob([JSON.stringify(result.spdx, null, 2)], {
@@ -584,7 +588,7 @@ export default function Apps() {
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      const safe = containerId.replace(/[^A-Za-z0-9._-]/g, "_");
+      const safe = appName.replace(/[^A-Za-z0-9._-]/g, "_");
       a.href = url;
       a.download = `${safe}.spdx.json`;
       document.body.appendChild(a);
@@ -3185,20 +3189,20 @@ volumes:
                     <div className="flex gap-2 mb-4">
                       <button
                         type="button"
-                        onClick={() => rescanApp(matchedApp.container_id, scanDrawerImage)}
-                        disabled={scanRescanning === matchedApp.container_id}
+                        onClick={() => rescanApp(matchedApp.name, scanDrawerImage)}
+                        disabled={scanRescanning === matchedApp.name}
                         className="px-3 py-1.5 text-xs font-medium bg-rust-600 text-white rounded hover:bg-rust-700 disabled:opacity-50"
                       >
-                        {scanRescanning === matchedApp.container_id ? "Scanning..." : "Rescan now"}
+                        {scanRescanning === matchedApp.name ? "Scanning..." : "Rescan now"}
                       </button>
                       <button
                         type="button"
-                        onClick={() => downloadSbom(matchedApp.container_id, scanDrawerImage)}
-                        disabled={sbomLoading === matchedApp.container_id}
+                        onClick={() => downloadSbom(matchedApp.name, scanDrawerImage)}
+                        disabled={sbomLoading === matchedApp.name}
                         title="Generate and download an SPDX 2.3 SBOM for this image (syft)"
                         className="px-3 py-1.5 text-xs font-medium bg-dark-600 text-dark-50 rounded hover:bg-dark-500 disabled:opacity-50"
                       >
-                        {sbomLoading === matchedApp.container_id ? "Generating SBOM..." : "Download SBOM"}
+                        {sbomLoading === matchedApp.name ? "Generating SBOM..." : "Download SBOM"}
                       </button>
                     </div>
                   )}
@@ -3265,11 +3269,11 @@ volumes:
                   {matchedApp && (
                     <button
                       type="button"
-                      onClick={() => rescanApp(matchedApp.container_id, scanDrawerImage)}
-                      disabled={scanRescanning === matchedApp.container_id}
+                      onClick={() => rescanApp(matchedApp.name, scanDrawerImage)}
+                      disabled={scanRescanning === matchedApp.name}
                       className="px-4 py-2 text-sm font-medium bg-rust-600 text-white rounded hover:bg-rust-700 disabled:opacity-50"
                     >
-                      {scanRescanning === matchedApp.container_id ? "Scanning..." : "Scan now"}
+                      {scanRescanning === matchedApp.name ? "Scanning..." : "Scan now"}
                     </button>
                   )}
                   {!matchedApp && (

@@ -349,6 +349,31 @@ pub fn is_safe_shell_command(cmd: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Every image reference a Compose document would run, in declaration order.
+///
+/// Read here rather than from the agent's `/apps/compose/parse` so the deploy
+/// gate can refuse before anything is claimed, created or sent to a host — and
+/// so a compose door pays no round trip when the gate is switched off. Parsed
+/// the same way [`validate_compose_yaml`] parses it, for the same reason: a
+/// string scan is bypassable with anchors, aliases and alternate quoting.
+///
+/// A service built from a `build:` context has no image reference to check and
+/// is skipped; it is not a registry image and no scan can exist for it.
+pub fn compose_images(yaml: &str) -> Vec<String> {
+    let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml) else {
+        return Vec::new();
+    };
+    let Some(services) = doc.get("services").and_then(|s| s.as_mapping()) else {
+        return Vec::new();
+    };
+    services
+        .iter()
+        .filter_map(|(_, svc)| svc.get("image").and_then(|v| v.as_str()))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 /// Validate a Docker Compose YAML for dangerous directives.
 /// Parses the YAML into a structured format to prevent bypass via anchors, aliases, or alternate quoting.
 pub fn validate_compose_yaml(yaml: &str) -> Result<(), &'static str> {
@@ -484,6 +509,44 @@ pub fn is_safe_nginx_config(config: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Compose image extraction (the deploy gate's input) ──────────────
+
+    #[test]
+    fn compose_images_reads_every_service() {
+        let yaml =
+            "services:\n  web:\n    image: nginx:1.27\n  db:\n    image: postgres:16-alpine\n";
+        let mut got = compose_images(yaml);
+        got.sort();
+        assert_eq!(
+            got,
+            vec!["nginx:1.27".to_string(), "postgres:16-alpine".to_string()]
+        );
+    }
+
+    #[test]
+    fn compose_images_survives_the_shapes_that_are_not_images() {
+        // A build-only service has no reference to gate on.
+        assert!(compose_images("services:\n  app:\n    build: .\n").is_empty());
+        // Malformed input is not a licence to deploy ungated — but it is also
+        // not this function's error to raise: validate_compose_yaml refuses it
+        // first, and every caller runs that.
+        assert!(compose_images("{{{").is_empty());
+        assert!(compose_images("version: '3'\n").is_empty());
+        // A whole-node alias DOES resolve, which is the reason this parses
+        // rather than greps — a string scan would see one image here.
+        let aliased = "services:\n  a: &base\n    image: redis:7\n  b: *base\n";
+        assert_eq!(compose_images(aliased).len(), 2);
+
+        // A `<<:` MERGE key does not, and that is safe rather than a bypass:
+        // the agent deserialises the same document with the same crate, so a
+        // service whose image arrives only through a merge key has no image on
+        // the agent's side either and never runs. The extractor and the thing
+        // it guards agree by construction — which is the property that matters,
+        // not whether either of them implements merge keys.
+        let merged = "services:\n  a: &base\n    image: redis:7\n  b:\n    <<: *base\n";
+        assert_eq!(compose_images(merged).len(), 1);
+    }
 
     // ── Reserved (control-plane) domains — s241 H2/H3 ───────────────────
 
@@ -978,7 +1041,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/sbom/install", post(sboms::install_scanner))
         .route("/api/sbom/uninstall", post(sboms::uninstall_scanner))
         .route("/api/sbom/generate", post(sboms::generate))
-        .route("/api/sbom/image/{image}", get(sboms::get_image_sbom))
+        // Wildcard, not a single segment: an image reference contains slashes
+        // (`ghcr.io/org/app:v1`), so `{image}` matched only the bare
+        // `name:tag` shape and 404'd for every registry-qualified image — which
+        // is most of the catalogue.
+        .route("/api/sbom/image/{*image}", get(sboms::get_image_sbom))
         .route("/api/apps/{name}/sbom", get(sboms::download_app_sbom).post(sboms::generate_app))
         // System
         .route("/api/health", get(system::health))

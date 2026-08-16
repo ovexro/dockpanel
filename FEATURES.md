@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.121.0 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.122.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -49,7 +49,7 @@
 | **Fail2Ban** | Jail management, ban/unban, panel jail | `routes/security.rs` | `security.rs` | (in Security) |
 | **SSH Hardening** | Disable password/root, change port, key management | `routes/security.rs` | `security.rs` | (in Security) |
 | **Security Scanning** | Automated audits with posture scoring | `routes/security_scans.rs` | — | (in Security) |
-| **Image Vulnerability Scanning** | Per-app CVE scanning with grype (self-contained install into `/var/lib/dockpanel/scanners/`), severity badge per app row, scheduled background rescans, soft deploy gate at critical/high/medium threshold. Defaults off. | `routes/image_scans.rs`, `services/image_scanner.rs` | `services/image_scanner.rs`, `routes/image_scan.rs` | `Apps.tsx` (badge + drawer), `Settings.tsx` (ImageScanSettings) |
+| **Image Vulnerability Scanning** | Per-app CVE scanning with grype (self-contained install into `/var/lib/dockpanel/scanners/`), severity badge per app row, scheduled background rescans, soft deploy gate at critical/high/medium threshold, applied at every door that runs an image (template deploy, change-image, compose, stacks). Defaults off. | `routes/image_scans.rs`, `services/image_scanner.rs` | `services/image_scanner.rs`, `routes/image_scan.rs` | `Apps.tsx` (badge + drawer), `Settings.tsx` (ImageScanSettings) |
 | **Signed Releases + SBOM** | Every binary and SPDX 2.3 SBOM is signed in CI with cosign keyless via Sigstore (no long-lived key, recorded in Rekor transparency log). cargo-sbom emits per-crate SBOMs. Verification snippet in SECURITY.md. | — | — | — (release artifacts) |
 | **Per-Image SBOM Generation** | On-demand SPDX 2.3 JSON SBOM for any deployed app's image (syft, self-contained install). One-click "Download SBOM" button in each app's scan drawer. Persisted in `image_sbom` (JSONB). Defaults off. | `routes/sboms.rs` | `services/sbom_scanner.rs`, `routes/sbom.rs` | `Apps.tsx` (drawer button), `Settings.tsx` (SbomSettings) |
 | **Credential Encryption** | All stored credentials encrypted at rest with AES-256-GCM | `services/credential_crypto.rs` | — | — |
@@ -159,7 +159,7 @@
 
 | Feature | Description | Backend | Agent | Frontend |
 |---------|-------------|---------|-------|----------|
-| **Auto-Sleep** | Stop idle containers after configurable inactivity, manual sleep/wake | `routes/docker_apps.rs`, `auto_healer.rs` | stop/start | `Apps.tsx` |
+| **Auto-Sleep** | Stop idle containers after configurable inactivity. There is no manual sleep/wake control — see the withdrawn-claims row below. | `routes/docker_apps.rs`, `auto_healer.rs` | stop/start | `Apps.tsx` (per-app toggle only) |
 | **Auto-Update Detection** | Registry digest comparison, update badges, one-click update | `routes/docker_apps.rs` | `docker_apps.rs` | `Apps.tsx` |
 | **GPU Passthrough** | NVIDIA Container Toolkit detection; per-container assignment (all GPUs or specific indices — pin app A to GPU 0, app B to GPU 1 on multi-GPU hosts) | `routes/docker_apps.rs` | `docker_apps.rs` | `Apps.tsx` |
 | **GPU Monitoring** | Per-GPU utilization/VRAM/temperature/power/fan/driver/pstate from nvidia-smi, plus per-process VRAM table with PID→container resolution | `routes/docker_apps.rs` (`/apps/gpu-info`) | `docker_apps.rs` | `System.tsx` |
@@ -234,7 +234,7 @@ honest:
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
 | App templates | 148 | derived | every commit |
 | HTTP routes | 822 (534 backend + 288 agent) | derived | every commit |
-| Regression-pin assertions | 2371 (72 suites) | derived | every commit |
+| Regression-pin assertions | 2397 (73 suites) | derived | every commit |
 | Frontend pages | 53 | derived | every commit |
 | DB migrations | 112 | derived | every commit |
 | Supervised background services | 15 | derived | every commit |

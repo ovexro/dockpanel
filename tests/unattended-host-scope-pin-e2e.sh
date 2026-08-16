@@ -825,13 +825,26 @@ fi
 # that will run the image; reading by image alone let a clean scan on one host
 # wave a vulnerable image onto another.
 if [ -n "$ISR_S" ]; then
-  GATE=$(fnbody "$ISR_S" "preflight_gate")
+  # s369: the gate was split so every door that runs an image can call it, and
+  # the scan lookup moved into `preflight_gate_image`. The arm follows the code
+  # to where the query now lives — and G18b below pairs with it, asserting the
+  # original entry point still REACHES it, which is the half that stops a
+  # follow-the-code repoint from quietly measuring nothing (lesson #150).
+  GATE=$(fnbody "$ISR_S" "preflight_gate_image")
   if [ -z "$GATE" ]; then
-    skip "G18 — preflight_gate not extractable"
+    skip "G18 — preflight_gate_image not extractable"
   elif has "$GATE" 'server_id: uuid::Uuid' && has "$GATE" 'server_id = \$1'; then
     ok "G18 the deploy gate reads a scan of the deploy TARGET"
   else
     bad "G18 the deploy gate still reads whichever host scanned that image last"
+  fi
+  ENTRY=$(fnbody "$ISR_S" "preflight_gate")
+  if [ -z "$ENTRY" ]; then
+    skip "G18b — preflight_gate not extractable"
+  elif has "$ENTRY" 'preflight_gate_image\(pool, server_id'; then
+    ok "G18b the template entry point still reaches the scoped gate"
+  else
+    bad "G18b preflight_gate no longer calls preflight_gate_image — G18 is measuring a function nothing calls"
   fi
 else
   skip "G18 — image_scans.rs not extractable"

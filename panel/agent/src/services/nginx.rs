@@ -576,11 +576,49 @@ fn validate_custom_nginx(custom: &str) -> Result<(), String> {
                     ALLOWED_NGINX_DIRECTIVES.join(", ")
                 ));
             }
+
+            if let Some(reason) = ALREADY_SET_BY_THE_TEMPLATE
+                .iter()
+                .find(|(name, _)| *name == directive)
+                .map(|(_, reason)| *reason)
+            {
+                return Err(format!(
+                    "The site's own configuration already sets '{directive}' — nginx refuses a \
+                     duplicate and the whole site would fail to load. {reason}"
+                ));
+            }
         }
     }
 
     Ok(())
 }
+
+/// Directives the site template already writes at SERVER level, which nginx
+/// refuses to see twice in one context.
+///
+/// The custom block is injected into that same `server { … }`, so accepting one
+/// of these produced a configuration nginx rejects — the save came back as a
+/// bare `nginx -t` error naming a duplicate the operator could not see, on the
+/// most obvious thing anyone types into this box. Worse, a unit test asserted
+/// that `client_max_body_size 20m;` was valid input, so the validator was
+/// pinned accepting exactly what breaks.
+///
+/// Derived rather than guessed, and the derivation matters: `add_header` and
+/// `gzip_types` are also emitted there and do NOT collide (nginx appends both),
+/// and `expires` is emitted only inside `location` blocks, which is a different
+/// context. Measured against a real nginx — see the tests below, which assert
+/// the whole set both ways.
+const ALREADY_SET_BY_THE_TEMPLATE: &[(&str, &str)] = &[
+    (
+        "client_max_body_size",
+        "Change the site's maximum upload size instead — that is the control that writes it.",
+    ),
+    ("gzip", "Compression is already enabled for every site."),
+    (
+        "gzip_min_length",
+        "Compression is already enabled for every site, with a 256-byte floor.",
+    ),
+];
 
 /// Defense-in-depth: strip characters that would break out of an
 /// `add_header Name "<value>" always;` directive. The backend already rejects
@@ -1059,12 +1097,47 @@ mod tests {
 
     #[test]
     fn custom_nginx_allows_benign_statements() {
-        assert!(validate_custom_nginx("client_max_body_size 20m;").is_ok());
-        assert!(validate_custom_nginx("gzip on; gzip_types text/css application/json;").is_ok());
+        assert!(validate_custom_nginx("proxy_read_timeout 120s;").is_ok());
+        assert!(validate_custom_nginx("gzip_types text/css application/json;").is_ok());
+        assert!(validate_custom_nginx("add_header X-Frame-Options SAMEORIGIN;").is_ok());
         assert!(validate_custom_nginx("").is_ok());
         // Block-escape and comment injection still rejected.
         assert!(validate_custom_nginx("location / { root /etc; }").is_err());
         assert!(validate_custom_nginx("# sneaky").is_err());
+    }
+
+    /// This test used to assert the OPPOSITE — that `client_max_body_size 20m;`
+    /// is valid input — which pinned the validator accepting the single most
+    /// obvious thing an operator types here, and nginx then refused the whole
+    /// site with `"client_max_body_size" directive is duplicate`. The site
+    /// template writes it at server level and the custom block lands in that
+    /// same server block.
+    #[test]
+    fn custom_nginx_refuses_what_the_template_already_sets() {
+        for stmt in [
+            "client_max_body_size 20m;",
+            "gzip on;",
+            "gzip_min_length 512;",
+            // Case and leading whitespace must not smuggle one past.
+            "  Client_Max_Body_Size 50m;",
+            // Nor may it ride behind a statement that is fine on its own.
+            "proxy_read_timeout 60s; gzip off;",
+        ] {
+            let e = validate_custom_nginx(stmt).expect_err(stmt);
+            assert!(e.contains("already sets"), "{stmt} -> {e}");
+        }
+    }
+
+    /// The other half, and the reason the list is three names rather than the
+    /// six the template emits: these ARE written by the template too, and nginx
+    /// accepts them a second time — `add_header` and `gzip_types` append, and
+    /// `expires` appears only inside `location` blocks, a different context.
+    /// Refusing them would take away working configuration.
+    #[test]
+    fn custom_nginx_still_allows_what_the_template_emits_without_colliding() {
+        assert!(validate_custom_nginx("add_header X-Extra 1;").is_ok());
+        assert!(validate_custom_nginx("gzip_types application/wasm;").is_ok());
+        assert!(validate_custom_nginx("expires 1d;").is_ok());
     }
 
     // ── header-value sanitization — s241 C1 (agent defense-in-depth) ────

@@ -4,6 +4,117 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.122.0]
+
+### Fixed — the cPanel/HestiaCP import said "Imported" over a database it had never stored
+
+The wizard's database half could not succeed. Its `INSERT INTO databases` omitted
+`site_id`, a NOT NULL column with no default, so every insert raised — and
+`ON CONFLICT DO NOTHING` arbitrates unique conflicts, not not-null violations, so
+it softened nothing. The statement's result was then discarded into a `let _ =`,
+the loop carried on, and the run rendered a green check and the word "Imported"
+beside each database. Nothing about the outcome was true.
+
+What the operator was left holding is worse than a failed import. The database
+container is created before the row is attempted, so it kept running with no
+record anywhere in the panel: it cannot be listed, reached, or deleted, because
+every one of those paths starts from a `databases` row. Its password was a fresh
+UUID encrypted into the row that never landed, so it now exists nowhere. And
+because free-port selection reads the same table, the second database in an
+archive picked the port the first was already using and failed on the bind — so a
+three-database account produced one silent orphan and two errors that named the
+wrong cause.
+
+The insert now names `site_id` and is checked, the way the `sites` insert in the
+same loop already was. A database that cannot be recorded has its container taken
+back down rather than left running, and a name that already exists on the site is
+reported as such instead of swallowed.
+
+Which site a database belongs to is a question the archive does not answer, so
+the wizard now asks. A run importing a single site resolves it without asking; a
+run importing several shows a per-database site selector and will not start until
+each one is answered; a database that cannot be attached is refused **before**
+anything is created, with a sentence saying so. Databases can also be attached to
+a site imported in an earlier run.
+
+### Fixed — the CVE deploy gate guarded one door out of eight
+
+`SECURITY.md` said the gate "refuses new deploys on images exceeding a
+critical/high/medium threshold", the README said the same, and the Settings
+toggle read "Block new app deploys". One handler called it: the template deploy.
+Changing an app's image to any tag you like, deploying a Compose file, creating
+or editing a stack, and a git deploy whose repository carries a
+`docker-compose.yml` all put an operator-chosen image on a host without asking
+the threshold anything.
+
+All of them ask now. `container_policies.allowed_images` had the same shape —
+read by that one handler, and compared against the catalogue id rather than an
+image, under help text that says "Restrict which Docker images a user can
+deploy". It is now matched against the image at every door that takes one, and
+matched precisely: an entry matches the whole reference, the repository it tags,
+or a `/*` repository prefix. A bare `nginx` no longer admits
+`evil/nginx-backdoor`, which a substring test did.
+
+**Pressing Update on an app is deliberately exempt, and the docs now say so.** It
+re-pulls the reference the app already runs, so the only scan on file describes
+the image being replaced — gating on it would refuse the update precisely when
+the running image is vulnerable, which is the update that fixes it.
+
+`tests/deploy-gate-coverage-pin-e2e.sh` derives the door set from the agent's own
+route table rather than listing the doors that were fixed, so a new door joins it
+by existing. It found two this session that this entry would otherwise not
+mention.
+
+### Fixed — three buttons on the Apps page had answered 404 since April
+
+"Rescan now", "Download SBOM" and the empty-state "Scan now" all passed a
+container's hex id to `/api/apps/{name}/scan` and `/api/apps/{name}/sbom`, which
+resolve an image by matching the app's *name*. A hex id matches no name, so every
+one of them returned "App not found or has no image" — including the button an
+operator meets first, on an app with no scan yet. The scan table on this box
+holds two rows, both from the ad-hoc endpoint, none from these.
+
+### Fixed — the Custom Nginx box accepted the first thing anyone types into it
+
+`client_max_body_size 50m;` is the single most obvious entry, and the site
+template already writes `client_max_body_size` at server level, into the same
+`server { … }` block the custom text is injected into. nginx refuses a duplicate
+outright, so the save came back as `"client_max_body_size" directive is duplicate`
+— an error about a line the operator cannot see. A unit test asserted that
+exactly this input was valid.
+
+Three directives collide and are now refused at save time, naming the control to
+use instead: `client_max_body_size`, `gzip` and `gzip_min_length`. Measured
+against a real nginx rather than assumed — `add_header` and `gzip_types` are also
+emitted by the template and legitimately repeat, and `expires` is emitted only
+inside `location` blocks, a different context. All three remain accepted.
+
+### Fixed — Update also started apps that had been stopped on purpose
+
+All three recreate doors started the new container unconditionally, so updating
+an app you had deliberately stopped brought it back up. The fourth start is
+inside the blue-green path, which is the branch taken for any app with a domain —
+the ordinary case — so guarding only the visible three would have missed most
+installs. The pre-update state is read from the container's `status`, not its
+`running` flag, because a paused container reports both.
+
+### Changed — smaller corrections
+
+- The image SBOM route is `/api/sbom/image/{*image}`. A reference contains
+  slashes, so the single-segment form matched only bare `name:tag` and 404'd for
+  every registry-qualified image.
+- `alert_engine.rs`'s note said the disk forecast was unreachable because
+  production supplies a ~30-minute trend window. The query has a 12-hour gate;
+  the live window measures 1441 rows over 11.98 hours. What keeps the forecast
+  quiet is the 60% floor, doing its job.
+- `credential_reencrypt.rs` cited a pin file that has never existed in any
+  commit. The guarantee is real and enforced by a test in that same file; only
+  the citation was wrong.
+- `FEATURES.md` advertised a manual sleep/wake control on the Apps page. There
+  isn't one, as the withdrawn-claims table in the same file already said.
+- The container-policy help text now says what is actually enforced where, and
+  that only administrators can deploy containers at all.
+
 ## [2.121.0]
 
 ### Fixed — a server that had ever hosted an app migration could never be deleted

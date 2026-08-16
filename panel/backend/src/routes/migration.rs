@@ -44,6 +44,16 @@ pub struct ImportDbItem {
     pub name: String,
     pub file: String,
     pub engine: String,
+    /// Which imported site this database belongs to.
+    ///
+    /// A `databases` row cannot exist without one — the column is NOT NULL with
+    /// no default — and a control-panel archive does not record the association,
+    /// so it has to come from the operator. Optional on the wire because a
+    /// single-site archive has only one possible answer and the import resolves
+    /// it without asking; when the run imports several sites and this is absent,
+    /// the database is refused rather than guessed at.
+    #[serde(default)]
+    pub site_domain: Option<String>,
 }
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -511,6 +521,14 @@ pub async fn import(
         let total_steps = sites.len() + databases.len();
         let mut completed = 0usize;
 
+        // Every site row this run creates, in order. The databases loop below
+        // needs one: `databases.site_id` is NOT NULL, so a database imported
+        // without a site has nowhere to be stored. Recorded when the row lands
+        // rather than when the whole site succeeds — a site whose files failed
+        // to copy still has a valid row, and refusing its databases as well
+        // would punish them for an unrelated failure.
+        let mut imported_sites: Vec<(String, Uuid)> = Vec::new();
+
         // ── Import sites ──────────────────────────────────────
         for site_item in &sites {
             let domain = &site_item.domain;
@@ -612,6 +630,8 @@ pub async fn import(
                 }
             };
 
+            imported_sites.push((domain.to_ascii_lowercase(), site_id));
+
             // 3. Copy files via agent
             let import_body = serde_json::json!({
                 "migration_id": agent_migration_id,
@@ -672,6 +692,71 @@ pub async fn import(
                 None,
             );
 
+            // ── Which site does this database belong to? ──
+            //
+            // Resolved BEFORE anything is created, because the answer decides
+            // whether this database can be imported at all. `databases.site_id`
+            // is NOT NULL with no default, so a row without one cannot be
+            // written — and the container is created first, so discovering that
+            // after the fact leaves a running database the panel can never list,
+            // reach or delete, holding a password that exists nowhere else.
+            //
+            // Explicit wins; a single-site run is unambiguous and resolves
+            // itself; anything else is refused with the reason, rather than
+            // attached to whichever site happened to be imported first.
+            let site_id = match db_item.site_domain.as_deref().map(str::trim) {
+                Some(d) if !d.is_empty() => {
+                    let wanted = d.trim_end_matches('.').to_ascii_lowercase();
+                    match imported_sites.iter().find(|(dom, _)| *dom == wanted) {
+                        Some((_, sid)) => Some(*sid),
+                        // Not imported in this run — but it may be a site the
+                        // caller already has, which is what makes "import the
+                        // site first, then the databases" work. Through the
+                        // shared helper, never a query of our own: a private
+                        // domain lookup here is the shape `domain-claim` §B2
+                        // forbids, because that is how paths came to disagree.
+                        None => {
+                            crate::helpers::site_id_for_owned_domain(&db, &wanted, user_id).await
+                        }
+                    }
+                }
+                _ => match imported_sites.as_slice() {
+                    [(_, sid)] => Some(*sid),
+                    _ => None,
+                },
+            };
+
+            let site_id = match site_id {
+                Some(sid) => sid,
+                None => {
+                    let msg = if db_item.site_domain.is_some() {
+                        format!(
+                            "Database {db_name} names a site that is not in this import and does not \
+                             already exist on this account. Nothing was created."
+                        )
+                    } else if imported_sites.is_empty() {
+                        format!(
+                            "Database {db_name} was not imported: a database has to belong to a site, \
+                             and this run imported none. Import the site first, then run the database \
+                             import again. Nothing was created."
+                        )
+                    } else {
+                        format!(
+                            "Database {db_name} was not imported: this run has {} sites and the archive \
+                             does not record which one owns it. Choose the site for it and import again. \
+                             Nothing was created.",
+                            imported_sites.len()
+                        )
+                    };
+                    tracing::warn!("{msg}");
+                    emit_step(&logs, id, &step_key, &format!("Database {db_name}"), "error", Some(msg.clone()));
+                    if let Some(arr) = results["databases_failed"].as_array_mut() { arr.push(serde_json::json!(db_name)); }
+                    if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
+                    completed += 1;
+                    continue;
+                }
+            };
+
             // Generate password
             let password = Uuid::new_v4().to_string().replace('-', "");
 
@@ -730,21 +815,71 @@ pub async fn import(
                 }
             };
 
-            // Insert DB record (not linked to a specific site — migration imports are standalone)
-            let encrypted_password = crate::services::secrets_crypto::encrypt_credential(&password, &jwt_secret)
-                .unwrap_or_else(|_| password.clone());
-            let _ = sqlx::query(
-                "INSERT INTO databases (engine, name, db_user, db_password_enc, container_id, port) \
-                 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
+            // Insert the DB record. This statement used to omit `site_id` and
+            // discard its own result, so it could never succeed and always
+            // reported success: the loop carried on and announced "Imported"
+            // over a row that was never written. `ON CONFLICT DO NOTHING`
+            // arbitrates unique conflicts and does not cover a not-null
+            // violation, so it never softened anything here either.
+            //
+            // Checked now, like the `sites` insert 150 lines up. A conflict is
+            // reported by name rather than swallowed — `(site_id, name)` is
+            // unique, so it means this site already has a database with this
+            // name, which the operator needs to know.
+            let encrypted_password =
+                crate::services::secrets_crypto::encrypt_credential(&password, &jwt_secret)
+                    .unwrap_or_else(|_| password.clone());
+            let inserted = sqlx::query_as::<_, (Uuid,)>(
+                "INSERT INTO databases (site_id, engine, name, db_user, db_password_enc, container_id, port) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING RETURNING id",
             )
+            .bind(site_id)
             .bind(engine)
             .bind(db_name)
             .bind(db_name)
             .bind(&encrypted_password)
             .bind(&container_id)
             .bind(port)
-            .execute(&db)
+            .fetch_optional(&db)
             .await;
+
+            let landed = match inserted {
+                Ok(Some(_)) => true,
+                Ok(None) => {
+                    let msg =
+                        format!("Database {db_name} already exists on that site — not imported.");
+                    tracing::warn!("{msg}");
+                    emit_step(&logs, id, &step_key, &format!("Database {db_name}"), "error", Some(msg.clone()));
+                    if let Some(arr) = results["databases_failed"].as_array_mut() { arr.push(serde_json::json!(db_name)); }
+                    if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
+                    false
+                }
+                Err(e) => {
+                    let msg = format!("Could not record database {db_name}: {e}");
+                    tracing::error!("{msg}");
+                    emit_step(&logs, id, &step_key, &format!("Database {db_name}"), "error", Some(msg.clone()));
+                    if let Some(arr) = results["databases_failed"].as_array_mut() { arr.push(serde_json::json!(db_name)); }
+                    if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
+                    false
+                }
+            };
+
+            if !landed {
+                // The container exists and nothing in the panel now points at
+                // it. Take it back down rather than leave a running database
+                // with a password that exists nowhere — `databases::remove`
+                // needs a row, so this is the only moment it can be reached.
+                if !container_id.is_empty() {
+                    if let Err(e) = agent.delete(&format!("/databases/{container_id}")).await {
+                        tracing::error!(
+                            "Migration {id}: could not remove the orphaned container for {db_name} \
+                             ({container_id}): {e}"
+                        );
+                    }
+                }
+                completed += 1;
+                continue;
+            }
 
             // Wait for engine to be ready
             emit_step(

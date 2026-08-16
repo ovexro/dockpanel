@@ -58,6 +58,73 @@ pub async fn list_templates(
 }
 
 /// POST /api/apps/deploy — Deploy a Docker app from template (async with SSE progress).
+/// Does `image` satisfy one of the comma-separated entries in an
+/// `allowed_images` policy?
+///
+/// Deliberately not a substring test. `contains` would let an entry of `nginx`
+/// admit `evil/nginx-backdoor`, which is the opposite of what an allow-list is
+/// for. An entry matches when it is the whole reference, when it is the
+/// repository the reference tags or digests, or when it ends in `/*` and names
+/// a repository prefix — `ghcr.io/myorg/*`.
+pub fn image_allowed_by(allowed: &str, image: &str) -> bool {
+    allowed.split(',').map(str::trim).any(|entry| {
+        if entry == "*" {
+            return true;
+        }
+        if entry.is_empty() {
+            return false;
+        }
+        if let Some(prefix) = entry.strip_suffix("/*") {
+            return image == prefix || image.starts_with(&format!("{prefix}/"));
+        }
+        if image == entry {
+            return true;
+        }
+        match image.strip_prefix(entry) {
+            Some(rest) => rest.starts_with(':') || rest.starts_with('@'),
+            None => false,
+        }
+    })
+}
+
+/// Refuse any of `images` the caller's container policy does not allow.
+///
+/// The policy is per user and the `allowed_images` half is the only one an
+/// image-taking door can evaluate: the count and resource ceilings are about a
+/// deployment as a whole and are enforced where a deployment is shaped. Doors
+/// that receive an image reference directly — change-image, compose, stacks —
+/// call this so a restriction the operator set is not simply absent there.
+pub async fn enforce_allowed_images(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    images: &[String],
+) -> Result<(), ApiError> {
+    if images.is_empty() {
+        return Ok(());
+    }
+    let allowed: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT allowed_images FROM container_policies WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_optional(db)
+            .await
+            .map_err(|e| internal_error("container policy check", e))?;
+    let Some((Some(allowed),)) = allowed else {
+        return Ok(());
+    };
+    if allowed.trim().is_empty() {
+        return Ok(());
+    }
+    for image in images {
+        if !image_allowed_by(&allowed, image) {
+            return Err(err(
+                StatusCode::FORBIDDEN,
+                &format!("{image} is not in the images you are allowed to deploy"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub async fn deploy(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
@@ -145,12 +212,47 @@ pub async fn deploy(
             }
         }
 
-        // Check allowed images
+        // Check allowed images.
+        //
+        // This used to test `template_id.contains(entry)` — the catalogue id,
+        // never an image reference — under a control whose own help text says
+        // "Restrict which Docker images a user can deploy". A policy naming an
+        // image therefore matched nothing on the one door that read it, and the
+        // doors that take an image directly did not read it at all.
+        //
+        // The template id is still accepted, exactly, so a policy written
+        // against the old behaviour keeps working; what it no longer does is
+        // match a longer id that merely contains it.
         if let Some(allowed) = allowed_images {
             if !allowed.is_empty() {
-                let allowed_list: Vec<&str> = allowed.split(',').map(|s| s.trim()).collect();
-                if !allowed_list.iter().any(|a| body.template_id.contains(a) || a == &"*") {
-                    return Err(err(StatusCode::FORBIDDEN, "Image not in allowed list"));
+                let by_id = allowed
+                    .split(',')
+                    .map(str::trim)
+                    .any(|a| a == "*" || a == body.template_id);
+                if !by_id {
+                    let image = crate::routes::image_scans::resolve_template_image(
+                        &agent,
+                        &body.template_id,
+                    )
+                    .await;
+                    match image {
+                        Some(img) if image_allowed_by(allowed, &img) => {}
+                        Some(img) => {
+                            return Err(err(
+                                StatusCode::FORBIDDEN,
+                                &format!("{img} is not in the images you are allowed to deploy"),
+                            ));
+                        }
+                        // Fail closed: a policy restricting images cannot be
+                        // honoured against an image we could not determine.
+                        None => {
+                            return Err(err(
+                                StatusCode::FORBIDDEN,
+                                "Could not determine this template's image, and a policy restricts \
+                                 which images you may deploy",
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -1134,7 +1236,7 @@ pub async fn container_stats(
 pub async fn update_image(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(container_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -1156,6 +1258,14 @@ pub async fn update_image(
     if image.len() > 256 || image.contains(' ') || image.contains('\0') {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid image format"));
     }
+
+    // The operator is naming an image to run, which is what the deploy gate
+    // exists to judge — the same question `POST /api/apps/deploy` asks, about
+    // the same host. Unlike `update_app` below, this is not a re-pull of the
+    // reference already running, so the stored scan is a scan of the image
+    // being INTRODUCED and gating on it is sound.
+    crate::routes::image_scans::preflight_gate_image(&state.db, server_id, &agent, image).await?;
+    enforce_allowed_images(&state.db, claims.sub, &[image.to_string()]).await?;
 
     // Long verb: this pulls an image and recreates the container, and may first copy the
     // app's data out of its writable layer onto a bind mount (#110).
@@ -1584,6 +1694,15 @@ pub async fn compose_deploy(
     // Validate Compose YAML for container escape vectors
     super::validate_compose_yaml(yaml)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+
+    // A compose file is a list of images to run, so the deploy gate applies to
+    // every one of them. Refused here, before the agent is asked to do anything.
+    let images = super::compose_images(yaml);
+    enforce_allowed_images(&state.db, claims.sub, &images).await?;
+    for image in images {
+        crate::routes::image_scans::preflight_gate_image(&state.db, _server_id, &agent, &image)
+            .await?;
+    }
 
     let result = agent
         .post("/apps/compose/deploy", Some(serde_json::json!({ "yaml": yaml })))
@@ -2280,4 +2399,47 @@ pub async fn sleep_status_list(
     }).collect();
 
     Ok(Json(serde_json::json!({ "configs": items })))
+}
+
+#[cfg(test)]
+mod allowed_image_tests {
+    use super::image_allowed_by;
+
+    #[test]
+    fn an_entry_matches_the_reference_it_names() {
+        assert!(image_allowed_by("nginx", "nginx"));
+        assert!(image_allowed_by("nginx", "nginx:1.27"));
+        assert!(image_allowed_by("nginx", "nginx@sha256:abc"));
+        assert!(image_allowed_by("nginx:1.27", "nginx:1.27"));
+        assert!(image_allowed_by("ghcr.io/org/app", "ghcr.io/org/app:v2"));
+        assert!(image_allowed_by("wordpress, nginx", "nginx:alpine"));
+        assert!(image_allowed_by("*", "anything/at:all"));
+    }
+
+    #[test]
+    fn an_entry_does_not_match_a_repository_that_merely_contains_it() {
+        // The defect this replaces: a `contains` test let an allow-list entry of
+        // `nginx` admit an unrelated image with `nginx` in its name.
+        assert!(!image_allowed_by("nginx", "evil/nginx-backdoor:latest"));
+        assert!(!image_allowed_by("nginx", "nginxinc/nginx-unprivileged"));
+        assert!(!image_allowed_by("nginx", "mynginx:1"));
+        assert!(!image_allowed_by("nginx:1.27", "nginx:1.28"));
+        assert!(!image_allowed_by("", "nginx"));
+        assert!(!image_allowed_by("postgres", "mysql:8"));
+    }
+
+    #[test]
+    fn a_trailing_slash_star_names_a_repository_prefix() {
+        assert!(image_allowed_by("ghcr.io/myorg/*", "ghcr.io/myorg/api:1"));
+        assert!(image_allowed_by("ghcr.io/myorg/*", "ghcr.io/myorg"));
+        assert!(!image_allowed_by(
+            "ghcr.io/myorg/*",
+            "ghcr.io/otherorg/api:1"
+        ));
+        // Not a substring escape: the prefix has to end at a path boundary.
+        assert!(!image_allowed_by(
+            "ghcr.io/myorg/*",
+            "ghcr.io/myorg-evil/api:1"
+        ));
+    }
 }

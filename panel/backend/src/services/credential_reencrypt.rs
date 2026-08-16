@@ -19,9 +19,11 @@
 //! module that calls `encrypt_credential`. A registry that merely *lists* what
 //! someone remembered is a changelog: the next feature to encrypt a column
 //! joins the install silently and is then the one row this sweep skips.
-//! `tests/credential-key-survival-pin-e2e.sh` §D asserts that every route
-//! module containing an `encrypt_credential` call appears in
-//! [`COVERED_MODULES`], and fails when one does not.
+//! `every_credential_writer_is_covered`, in this file's own test module, asserts
+//! that every route module containing an `encrypt_credential` call appears in
+//! [`COVERED_MODULES`], and fails when one does not. (This paragraph used to
+//! name `tests/credential-key-survival-pin-e2e.sh` §D, a file that has never
+//! existed in any commit — the guarantee was real, its cited enforcer was not.)
 
 use sqlx::{PgPool, Row};
 

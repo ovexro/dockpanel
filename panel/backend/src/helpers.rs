@@ -114,6 +114,40 @@ pub async fn agent_for_site_server(
     })
 }
 
+/// Which of the caller's own sites carries this domain, if any.
+///
+/// ⚠ NOT a claim check, and must never be used as one. `domain_claim::
+/// ensure_claimable` is the single answer to "may this domain be taken", and
+/// `tests/domain-claim-pin-e2e.sh` §B2 exists because paths that answered it
+/// privately drifted apart. This answers a different question — "which existing
+/// site of mine is this" — for a caller that needs to attach something to a site
+/// the operator names by domain. It lives here, once, so it cannot become the
+/// per-path copy that pin forbids.
+///
+/// Owner-scoped rather than using [`SITE_CALLER_PREDICATE`]: the callers write a
+/// row onto the site they get back, and an administrator resolving another
+/// account's domain by name is not a capability anything needs.
+pub async fn site_id_for_owned_domain(
+    db: &sqlx::PgPool,
+    domain: &str,
+    user_id: uuid::Uuid,
+) -> Option<uuid::Uuid> {
+    let wanted = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    if wanted.is_empty() {
+        return None;
+    }
+    sqlx::query_as::<_, (uuid::Uuid,)>(
+        "SELECT id FROM sites WHERE lower(domain) = $1 AND user_id = $2",
+    )
+    .bind(&wanted)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    .map(|(id,)| id)
+}
+
 /// The one predicate that decides whether a caller may act on a site.
 ///
 /// Binds `$1` = site id, `$2` = the caller's own id — the same two parameters the

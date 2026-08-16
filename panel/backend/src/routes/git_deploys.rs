@@ -1779,6 +1779,40 @@ fn spawn_deploy_task(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
+            if let Some(reason) =
+                compose_deploy_refusal(&db, &agent, config.server_id, config.user_id, yaml).await
+            {
+                emit(
+                    "compose",
+                    "Docker Compose refused",
+                    "error",
+                    Some(reason.clone()),
+                );
+                tracing::warn!("Git deploy {deploy_name}: compose refused: {reason}");
+                record_failed_history(
+                    &db,
+                    git_deploy_id,
+                    &commit_hash,
+                    commit_message.as_deref().unwrap_or(""),
+                    &reason,
+                    &triggered,
+                )
+                .await;
+                if let Err(db_err) = sqlx::query(
+                    "UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1",
+                )
+                .bind(git_deploy_id)
+                .execute(&db)
+                .await
+                {
+                    tracing::warn!("Failed to update git deploy status: {db_err}");
+                }
+                logs.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&deploy_id);
+                return;
+            }
+
             match agent.post_long("/apps/compose/deploy", Some(serde_json::json!({
                 "yaml": yaml,
                 "stack_id": config.id.to_string(),
@@ -2344,6 +2378,53 @@ fn spawn_deploy_task(
 }
 
 /// Mask github_token in API responses — show "●●●●●●●●" if set.
+/// Everything a Compose document must satisfy before a git deploy hands it to
+/// an agent, in one place because there are two callers and they had neither.
+///
+/// A repository's own `docker-compose.yml` reaches `/apps/compose/deploy` on
+/// this path, so it is a deploy door like any other: it names registry images
+/// an operator's CVE threshold applies to, and images their container policy
+/// may restrict. It also skipped `validate_compose_yaml`, which the three
+/// front-door compose paths run — not an escape, because the agent refuses any
+/// bind outside `/var/lib/dockpanel/compose/` and blocks the Docker socket by
+/// name, but it meant the same document was judged by different rules
+/// depending on which door it arrived through.
+///
+/// Returns the sentence to report when the deploy must not proceed. Callers are
+/// background tasks with no `?` to propagate through, which is why this hands
+/// back a message rather than an `ApiError`.
+async fn compose_deploy_refusal(
+    db: &sqlx::PgPool,
+    agent: &crate::services::agent::AgentHandle,
+    server_id: Uuid,
+    user_id: Uuid,
+    yaml: &str,
+) -> Option<String> {
+    fn sentence(e: crate::error::ApiError) -> String {
+        e.1.0
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("refused")
+            .to_string()
+    }
+
+    if let Err(e) = crate::routes::validate_compose_yaml(yaml) {
+        return Some(e.to_string());
+    }
+    let images = crate::routes::compose_images(yaml);
+    if let Err(e) = crate::routes::docker_apps::enforce_allowed_images(db, user_id, &images).await {
+        return Some(sentence(e));
+    }
+    for image in &images {
+        if let Err(e) =
+            crate::routes::image_scans::preflight_gate_image(db, server_id, agent, image).await
+        {
+            return Some(sentence(e));
+        }
+    }
+    None
+}
+
 fn mask_github_token(deploy: &mut GitDeploy) {
     if let Some(ref t) = deploy.github_token {
         if !t.is_empty() {
@@ -2559,6 +2640,30 @@ pub async fn trigger_deploy_task(
         let is_compose = compose_result.get("found").and_then(|v| v.as_bool()).unwrap_or(false);
         if is_compose {
             let yaml = compose_result.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            if let Some(reason) =
+                compose_deploy_refusal(&db, &agent, config.server_id, config.user_id, yaml).await
+            {
+                tracing::warn!("Git deploy {git_deploy_id}: compose refused: {reason}");
+                record_failed_history(
+                    &db,
+                    git_deploy_id,
+                    &commit_hash,
+                    &commit_message,
+                    &reason,
+                    &triggered_by,
+                )
+                .await;
+                if let Err(db_err) = sqlx::query(
+                    "UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1",
+                )
+                .bind(git_deploy_id)
+                .execute(&db)
+                .await
+                {
+                    tracing::warn!("Failed to update git deploy status: {db_err}");
+                }
+                return;
+            }
             match agent.post_long("/apps/compose/deploy", Some(serde_json::json!({
                 "yaml": yaml, "stack_id": config.id.to_string(),
             })), 660).await {

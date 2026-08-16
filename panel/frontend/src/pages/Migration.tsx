@@ -76,6 +76,11 @@ export default function Migration() {
   const [migration, setMigration] = useState<MigrationRecord | null>(null);
   const [selectedSites, setSelectedSites] = useState<Set<string>>(new Set());
   const [selectedDbs, setSelectedDbs] = useState<Set<string>>(new Set());
+  // Which site each selected database belongs to, keyed by database name. A
+  // database row cannot exist without a site, and a control-panel archive does
+  // not record the pairing — so it is the operator's to state. Left empty when
+  // there is exactly one site to choose, because then there is nothing to ask.
+  const [dbSites, setDbSites] = useState<Record<string, string>>({});
   const [progress, setProgress] = useState<ProgressStep[]>([]);
   const [importing, setImporting] = useState(false);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
@@ -220,6 +225,17 @@ export default function Migration() {
     })();
   }, [isAdmin]);
 
+  // The sites this run will create, which are the only ones a database imported
+  // alongside them can be attached to — plus whatever the operator has already.
+  const selectedSiteDomains = migration?.inventory
+    ? migration.inventory.sites.filter((s) => selectedSites.has(s.domain)).map((s) => s.domain)
+    : [];
+  // One site is not a question. Several is, and an unanswered one is refused by
+  // the server rather than guessed at, so the button below refuses first.
+  const siteForDb = (name: string) =>
+    dbSites[name] || (selectedSiteDomains.length === 1 ? selectedSiteDomains[0] : "");
+  const dbsWithoutSite = Array.from(selectedDbs).filter((n) => !siteForDb(n));
+
   // Step 3: Import
   const handleImport = async () => {
     if (!migration?.inventory) return;
@@ -235,7 +251,12 @@ export default function Migration() {
           .map((s) => ({ domain: s.domain, doc_root: s.doc_root, runtime: s.runtime })),
         databases: migration.inventory.databases
           .filter((d) => selectedDbs.has(d.name))
-          .map((d) => ({ name: d.name, file: d.file, engine: d.engine })),
+          .map((d) => ({
+            name: d.name,
+            file: d.file,
+            engine: d.engine,
+            site_domain: siteForDb(d.name) || undefined,
+          })),
       });
 
       // Connect SSE for progress
@@ -444,9 +465,37 @@ export default function Migration() {
                       <span className="text-sm text-dark-50 font-mono">{d.name}</span>
                       <span className="text-xs text-dark-400 ml-2">{d.engine} &middot; {fmtSize(d.size_bytes)}</span>
                     </div>
+                    {/* A database belongs to a site — the archive does not say
+                        which, so this is the only place the answer can come
+                        from. Shown only when there is a choice to make. */}
+                    {selectedDbs.has(d.name) && selectedSiteDomains.length > 1 && (
+                      <select
+                        aria-label={`Site for database ${d.name}`}
+                        value={siteForDb(d.name)}
+                        onClick={(e) => e.preventDefault()}
+                        onChange={(e) => setDbSites({ ...dbSites, [d.name]: e.target.value })}
+                        className="px-2 py-1 bg-dark-900 border border-dark-500 rounded text-xs text-dark-50 font-mono"
+                      >
+                        <option value="">Choose a site…</option>
+                        {selectedSiteDomains.map((dom) => (
+                          <option key={dom} value={dom}>{dom}</option>
+                        ))}
+                      </select>
+                    )}
                   </label>
                 ))}
               </div>
+              {selectedDbs.size > 0 && selectedSiteDomains.length === 0 && (
+                <p className="text-xs text-warn-400 mt-3">
+                  A database has to belong to a site. Select at least one site above, or import the
+                  site first and run this again — otherwise these databases will be refused.
+                </p>
+              )}
+              {selectedSiteDomains.length === 1 && selectedDbs.size > 0 && (
+                <p className="text-xs text-dark-400 mt-3">
+                  Databases will be attached to <span className="font-mono text-dark-200">{selectedSiteDomains[0]}</span>.
+                </p>
+              )}
             </div>
           )}
 
@@ -469,12 +518,18 @@ export default function Migration() {
             </button>
             <button
               onClick={handleImport}
-              disabled={selectedSites.size === 0 && selectedDbs.size === 0}
+              disabled={(selectedSites.size === 0 && selectedDbs.size === 0) || dbsWithoutSite.length > 0}
+              title={dbsWithoutSite.length > 0 ? `Choose a site for: ${dbsWithoutSite.join(", ")}` : undefined}
               className="px-5 py-2.5 bg-rust-500 text-dark-950 rounded-lg text-sm font-bold hover:bg-rust-400 transition-colors disabled:opacity-50"
             >
               Import {selectedSites.size + selectedDbs.size} item{selectedSites.size + selectedDbs.size !== 1 ? "s" : ""}
             </button>
           </div>
+          {dbsWithoutSite.length > 0 && (
+            <p className="text-xs text-warn-400">
+              Choose a site for {dbsWithoutSite.join(", ")} before importing.
+            </p>
+          )}
         </div>
       )}
 
