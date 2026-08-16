@@ -3,8 +3,21 @@ export interface NavItem {
   label: string;
   iconName: string;
   adminOnly?: boolean;
-  /** Visible to reseller role (and admin, which sees everything) */
+  /** Visible to reseller role (and admin, unless `resellerOnly` says otherwise) */
   resellerVisible?: boolean;
+  /**
+   * The page answers only for the caller's OWN reseller tenant, so an admin —
+   * who has no tenant — must NOT see it. `reseller_dashboard.rs:76` refuses them
+   * by name, and an admin who followed the sidebar got that refusal rendered as
+   * the whole page (issue #112). The admin counterpart is the `/resellers` row.
+   *
+   * Kept as a THIRD flag rather than a rename of `resellerVisible`: two absence
+   * arms assert the /account row carries neither of these, and a rename would
+   * leave them vacuously green while a live restriction existed outside their
+   * view. Adding a flag means those arms have to learn about it, which is the
+   * behaviour we want.
+   */
+  resellerOnly?: boolean;
 }
 
 export interface NavGroup {
@@ -24,10 +37,14 @@ export interface NavGroup {
  * 403s. A decision inlined in two menus is a decision that drifts.
  */
 export function isNavVisible(
-  item: Pick<NavItem, "adminOnly" | "resellerVisible">,
+  item: Pick<NavItem, "adminOnly" | "resellerVisible" | "resellerOnly">,
   role: string,
 ): boolean {
-  // Admin sees everything
+  // Ahead of the admin branch, because it is the one kind of row "admin sees
+  // everything" gets wrong: a tenant-scoped page has nothing to show an account
+  // that is not a tenant, and the handler behind it says so with a 403.
+  if (item.resellerOnly) return role === "reseller";
+  // Admin sees everything else
   if (role === "admin") return true;
   // Reseller sees resellerVisible items + non-restricted items
   if (role === "reseller") return !!item.resellerVisible || (!item.adminOnly && !item.resellerVisible);
@@ -40,7 +57,9 @@ export function isNavVisible(
  * carry their own copy. A path with no nav row is unrestricted — per-site tools
  * (/sites/:id/files, /sites/:id/backups) deliberately have no sidebar entry.
  */
-export function navFlagsFor(path: string): Pick<NavItem, "adminOnly" | "resellerVisible"> {
+export function navFlagsFor(
+  path: string,
+): Pick<NavItem, "adminOnly" | "resellerVisible" | "resellerOnly"> {
   const base = path.split("?")[0];
   for (const group of navGroups) {
     for (const item of group.items) {
@@ -68,8 +87,15 @@ export const navGroups: NavGroup[] = [
     key: "reseller",
     label: "Reseller",
     items: [
-      { to: "/reseller", label: "Reseller Panel", iconName: "reseller", resellerVisible: true },
-      { to: "/reseller/users", label: "My Users", iconName: "users", resellerVisible: true },
+      { to: "/reseller", label: "Reseller Panel", iconName: "reseller", resellerVisible: true, resellerOnly: true },
+      { to: "/reseller/users", label: "My Users", iconName: "users", resellerVisible: true, resellerOnly: true },
+      // The admin's half of this group. Everything an admin can do to a reseller
+      // lives behind /api/resellers, which had eight handlers and no screen at
+      // all until v2.118.0 — so the only reseller-shaped control the panel
+      // offered an admin was the role dropdown in Users, which sets the role
+      // without creating a profile and produces an account whose own panel
+      // answers 404. This row is the door those handlers never had.
+      { to: "/resellers", label: "Resellers", iconName: "reseller", adminOnly: true },
     ],
   },
   {

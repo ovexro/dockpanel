@@ -134,12 +134,22 @@ interface PanelLoginEntry {
   unknown_user: boolean;
 }
 
+// `target_type`, `target_name` and `details` are the payload — the WHICH and the
+// WHY. The endpoint has always sent all three (routes/security.rs:1020) and this
+// interface did not declare them, so they were dropped at parse and the table
+// showed six columns of metadata about events whose substance was never rendered.
+// A canary trip read `critical · canary.triggered` and never named the file; a
+// deploy-protection change never said which direction it went or on what.
+// This is the only surface where a security_audit_log row is ever seen.
 interface AuditLogEntry {
   id: string;
   severity: string;
   event_type: string;
   actor_email: string | null;
   actor_ip: string | null;
+  target_type: string | null;
+  target_name: string | null;
+  details: string | null;
   geo_country: string | null;
   created_at: string;
 }
@@ -1688,20 +1698,25 @@ export default function Security() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead><tr className="border-b border-dark-600 text-left text-xs font-mono text-dark-400 uppercase">
-                  <th className="px-4 py-2">Severity</th><th className="px-4 py-2">Event</th><th className="px-4 py-2">Actor</th><th className="px-4 py-2">IP</th><th className="px-4 py-2">Location</th><th className="px-4 py-2">Time</th>
+                  <th className="px-4 py-2">Severity</th><th className="px-4 py-2">Event</th><th className="px-4 py-2">Target</th><th className="px-4 py-2">Details</th><th className="px-4 py-2">Actor</th><th className="px-4 py-2">IP</th><th className="px-4 py-2">Location</th><th className="px-4 py-2">Time</th>
                 </tr></thead>
                 <tbody>
                   {auditLog.map((e) => (
-                    <tr key={e.id} className="border-b border-dark-700 hover:bg-dark-700">
+                    <tr key={e.id} className="border-b border-dark-700 hover:bg-dark-700 align-top">
                       <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase ${e.severity === "critical" ? "text-danger-400 bg-danger-500/10" : e.severity === "warning" ? "text-warn-400 bg-warn-500/10" : "text-accent-400 bg-accent-500/10"}`}>{e.severity}</span></td>
                       <td className="px-4 py-2 font-mono text-dark-200">{e.event_type}</td>
+                      <td className="px-4 py-2 font-mono text-xs text-dark-200 max-w-[16rem] break-all">
+                        {e.target_type && <span className="text-dark-400 mr-1">{e.target_type}:</span>}
+                        {e.target_name || <span className="text-dark-400">-</span>}
+                      </td>
+                      <td className="px-4 py-2 text-xs text-dark-300 max-w-[24rem] break-words" title={e.details || undefined}>{e.details || <span className="text-dark-400">-</span>}</td>
                       <td className="px-4 py-2 text-dark-300">{e.actor_email || "-"}</td>
                       <td className="px-4 py-2 text-dark-400 font-mono text-xs">{e.actor_ip || "-"}</td>
                       <td className="px-4 py-2 text-dark-400 text-xs">{e.geo_country || "-"}</td>
                       <td className="px-4 py-2 text-dark-400 text-xs whitespace-nowrap">{new Date(e.created_at).toLocaleString()}</td>
                     </tr>
                   ))}
-                  {auditLog.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-dark-400">No audit events yet</td></tr>}
+                  {auditLog.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-dark-400">No audit events yet</td></tr>}
                 </tbody>
               </table>
             </div>

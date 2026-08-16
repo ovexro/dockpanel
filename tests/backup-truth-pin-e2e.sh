@@ -442,5 +442,92 @@ else
 fi
 
 echo
+echo "== §10  every backup INSERT records the integrity hash (#114) =="
+#
+# Two of the seven INSERTs — BOTH unattended site paths — omitted sha256_hash and
+# previous_hash while every database and volume insert, including the two in the
+# same function as one of them, carried both. The agent had computed the hash on
+# every one of those runs and the backend read the two fields beside it and
+# dropped this one. A user found it by querying his own table; nothing here could
+# have, because the only pin near it froze a column LIST instead of asserting
+# parity, so it could not see an asymmetry and turned red when the fix arrived.
+#
+# The arm is a PARITY census, not a list: enumerate every insert into the three
+# backup tables and require each to name both columns. `chain_valid` is
+# deliberately NOT required — nothing computes it, five inserts write it as a
+# literal and two take the column default, and §8 above pins that the report
+# renders no verdict from it.
+#
+# Unit: INSERT STATEMENTS (not lines) — each `INSERT INTO <t> (` and its
+# backslash-continued column list joined, via perl. Instrument named per #525.
+INS_REPORT=""
+INS_TOTAL=0
+INS_BAD=0
+for f in "$ORCH" "$EXEC" "$SCHED" "$BACKUPS"; do
+  while IFS= read -r stmt; do
+    [ -n "$stmt" ] || continue
+    INS_TOTAL=$((INS_TOTAL+1))
+    if ! has "$stmt" 'sha256_hash' || ! has "$stmt" 'previous_hash'; then
+      INS_BAD=$((INS_BAD+1))
+      INS_REPORT="$INS_REPORT $(basename "$f")"
+    fi
+  done < <(perl -0777 -ne '
+      while (/INSERT\s+INTO\s+(backups|database_backups|volume_backups)\s*\((.*?)\)/gs) {
+        my $c = $2; $c =~ s/\s*\\\s*\n\s*/ /g; $c =~ s/\s+/ /g; print "$1 ($c)\n";
+      }' "$f")
+done
+if [ "$INS_TOTAL" -lt 7 ]; then
+  bad "§10 found only $INS_TOTAL backup INSERT(s) — expected at least 7, the arm is under-reading its subjects"
+elif [ "$INS_BAD" -eq 0 ]; then
+  ok "all $INS_TOTAL backup INSERTs record sha256_hash + previous_hash"
+else
+  bad "$INS_BAD of $INS_TOTAL backup INSERTs omit the integrity hash —$INS_REPORT"
+fi
+
+echo "== §11  the chain report's Typst has no markup-mode conditional (#113) =="
+#
+# `#let kind_label = if …{}` with its `else if` branches on the FOLLOWING lines
+# was written in MARKUP mode, where a `#`-expression ends at the first line break
+# that leaves it complete. So only the first branch bound, the rest were re-lexed
+# as a paragraph and PRINTED above the masthead, the label came out empty for two
+# of the three backup kinds, and the drills table discarded every body_excerpt it
+# was supposed to show. The suite that renders this document asserts HTTP 200,
+# the content type and the %PDF magic — a PDF full of leaked source passes all of
+# it, which is why a reporter found this and CI did not.
+#
+# Instrument: for every line that begins a continuation branch, walk BACKWARD to
+# the nearest line whose first non-space character is `#`, and flag it unless
+# that opener ends in `{` (a code block, where newlines are trivia).
+# ⚠ Do NOT write this with `\b` — GNU awk treats it as a backspace, and the first
+# draft of this arm reported zero leaks against the visibly broken file.
+leakcheck() {
+  perl -0777 -ne '
+    my @l = split /\n/, $_; my $bad = 0;
+    for my $i (0 .. $#l) {
+      next unless $l[$i] =~ /^[ \t]*else[ {\[]/;
+      for (my $j = $i - 1; $j >= 0; $j--) {
+        next unless $l[$j] =~ /^[ \t]*#/;
+        $bad++ unless $l[$j] =~ /\{[ \t]*$/;
+        last;
+      }
+    }
+    print "$bad\n";
+  ' "$1"
+}
+TYP_LEAKS=$(leakcheck "$TYP")
+# Positive control: the same instrument must still see a planted leak, or a green
+# result here means nothing (#480 — an absence arm with no control cannot tell
+# failure from absence).
+TYP_PLANT=$(mktemp); { cat "$TYP"; printf '#let ov_probe = if 1 == 1 { "a" }\n  else { "b" }\n'; } > "$TYP_PLANT"
+TYP_PLANT_LEAKS=$(leakcheck "$TYP_PLANT"); rm -f "$TYP_PLANT"
+if [ "$TYP_PLANT_LEAKS" -le "$TYP_LEAKS" ]; then
+  bad "§11 the leak detector does not react to a planted markup-mode conditional — the arm is vacuous"
+elif [ "$TYP_LEAKS" -eq 0 ]; then
+  ok "no markup-mode conditional in the chain report (planted control detected: $TYP_PLANT_LEAKS)"
+else
+  bad "$TYP_LEAKS markup-mode conditional branch(es) in $TYP — they render as source text in the PDF"
+fi
+
+echo
 echo "backup-truth: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

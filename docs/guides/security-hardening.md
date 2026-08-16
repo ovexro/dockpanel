@@ -380,7 +380,7 @@ Backups taken through the panel record a SHA-256 hash of the archive and the has
 
 **What this does not do, stated plainly:** nothing re-computes those hashes afterwards, so a tampered archive is not detected and no alert fires. The hashes are a record of what was written at the time — useful for comparing against a copy you verify yourself — not tamper detection.
 
-**And two paths record no hash at all:** *site* backups created by a schedule or by a backup policy. Manual site backups and every database and volume backup do record one. A report for a backup with no hash shows `—` rather than a value.
+**Every path records one as of v2.118.0.** Until then the two unattended *site* paths — a per-site schedule and a backup policy — did not, while manual site backups and every database and volume backup did. Backups those two paths took before v2.118.0 keep no hash; nothing back-fills one, because the archive's hash has to be taken when the archive is written. A report for a backup with no hash shows `—` rather than a value.
 
 ### Suspicious Command Detection
 

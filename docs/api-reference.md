@@ -594,6 +594,10 @@ Create a webhook integration.
 | PUT/DELETE | `/api/teams/{id}/members/{member_id}` | Update/remove member |
 
 ### Resellers (14) — Admin creates, reseller manages
+The `/api/resellers` family is admin-only and is driven by **Admin → Resellers**.
+The `/api/reseller/*` family answers for the calling reseller's own tenant and
+refuses an administrator, who has no tenant — use `/api/resellers/{id}` instead.
+
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET/POST | `/api/resellers` | List/create reseller profiles |
@@ -601,6 +605,12 @@ Create a webhook integration.
 | GET/POST/DELETE | `/api/resellers/{id}/servers` | Server allocation |
 | GET | `/api/reseller/dashboard` | Reseller's dashboard |
 | GET/POST/PUT/DELETE | `/api/reseller/users` | Reseller's sub-users |
+
+`POST /api/resellers` promotes an **existing** account and takes its `user_id`. It
+refuses an administrator (400) and an account that already has a profile (409). An
+account that kept a profile through an earlier demotion is restored with its stored
+quotas rather than re-created. `PUT` is COALESCE on every column, so a `null` field
+leaves the stored value unchanged — there is no way to clear one through this API.
 
 ### API Keys (4)
 

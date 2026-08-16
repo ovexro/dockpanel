@@ -130,8 +130,10 @@ fi
 # A2's widened form is the row REGAINING a restriction, which this catches. Its
 # vacuous form is the row being DELETED, which A1 catches first. Both directions
 # are covered only because the two arms are read together.
-if [ -n "$MAILROW" ] && ! has "$MAILROW" 'adminOnly' && ! has "$MAILROW" 'resellerVisible'; then
-  ok "A2 the /mail row carries neither adminOnly nor resellerVisible"
+# ⚠ Every restriction flag the registry grows must be listed here — an absence arm
+# only sees the vocabulary it was taught. `resellerOnly` joined for #112.
+if [ -n "$MAILROW" ] && ! has "$MAILROW" 'adminOnly' && ! has "$MAILROW" 'resellerVisible' && ! has "$MAILROW" 'resellerOnly'; then
+  ok "A2 the /mail row carries no restriction flag"
 else
   bad "A2 the /mail row is restricted — the backend admits any site owner, so the sidebar now contradicts the API"
 fi

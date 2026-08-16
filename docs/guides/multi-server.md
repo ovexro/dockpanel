@@ -152,3 +152,9 @@ yet.
 ### Reseller server allocation
 
 If you use reseller accounts, you can allocate specific servers to specific resellers. Reseller users only see and manage resources on their allocated servers.
+
+Allocate them in **Admin → Resellers**: expand a reseller's row, pick a server and
+allocate it. The same row is where you set that reseller's quotas and white-label
+branding, and where you promote an account to reseller in the first place — the role
+dropdown in **Users** deliberately does not offer it, because a reseller needs a
+profile as well as a role.

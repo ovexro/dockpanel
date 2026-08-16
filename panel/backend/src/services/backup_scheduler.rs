@@ -267,6 +267,34 @@ async fn run_scheduled_backup(
         .get("size_bytes")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as i64;
+    // The agent has computed this on every scheduled run since the integrity
+    // chain shipped — `BackupInfo.sha256`, off `sha256sum` — and this path read
+    // the two fields beside it and dropped this one, so a site archived only by
+    // a schedule carried no hash while the report promised one "recorded when
+    // the backup was taken". Reported as #114. `Option` on the SELECT is
+    // deliberate: every row written before this fix has a NULL hash and it is the
+    // newest of those the query hits first.
+    let sha256_hash = backup_result
+        .get("sha256")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let previous_hash: Option<String> = match sqlx::query_scalar::<_, Option<String>>(
+        "SELECT sha256_hash FROM backups WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(row.site_id)
+    .fetch_optional(db)
+    .await
+    {
+        Ok(v) => v.flatten(),
+        Err(e) => {
+            tracing::warn!(
+                "Scheduled backup for {}: could not read the previous hash: {e}",
+                row.domain
+            );
+            None
+        }
+    };
     let filepath = format!("/var/backups/dockpanel/{}/{}", row.domain, filename);
 
     // 2. Upload to remote destination (if configured)
@@ -384,14 +412,21 @@ async fn run_scheduled_backup(
     // uploaded=f, destination_id=NULL. The sibling policy path had been wired to
     // these columns from the start, which is what made the gap invisible.
     //
+    // `sha256_hash`/`previous_hash` are the SECOND round of the same defect, one
+    // release later and in the other direction: here BOTH unattended site paths
+    // omitted them while every db and volume insert carried them. `chain_valid`
+    // is deliberately still left to its column default — nothing computes it, and
+    // the seven-INSERT accounting in `backup_orchestrator.rs` describes exactly
+    // that split.
+    //
     // The Result is checked because this row IS the backup as far as the product
     // is concerned — every list and restore path reads it. Returning Err here
     // routes into `tick`'s existing failure arm, which writes last_status='failed'
     // plus a system_log entry and a critical backup_failure alert; discarding it
     // left the schedule reading 'success' over an archive with no row.
     if let Err(e) = sqlx::query(
-        "INSERT INTO backups (site_id, filename, size_bytes, databases_included, databases_expected, uploaded, destination_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO backups (site_id, filename, size_bytes, databases_included, databases_expected, uploaded, destination_id, sha256_hash, previous_hash) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(row.site_id)
     .bind(filename)
@@ -400,6 +435,8 @@ async fn run_scheduled_backup(
     .bind(db_expected)
     .bind(uploaded_remote)
     .bind(if uploaded_remote { row.dest_id } else { None })
+    .bind(if sha256_hash.is_empty() { None } else { Some(&sha256_hash) })
+    .bind(previous_hash.as_deref())
     .execute(db)
     .await {
         return Err(format!("Backup created but could not be recorded: {e}"));

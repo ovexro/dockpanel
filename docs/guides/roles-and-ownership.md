@@ -14,6 +14,13 @@ and no second owner. Almost everything below follows from that.
 | `client` | **No** | Only what it owns | Someone who manages domains you gave them |
 | `suspended` | — | Nothing; every request is refused | Set by the Suspend action, not assigned directly |
 
+`reseller` is the one role you do not assign from the **Users** screen, because it
+is not only a role: it carries a profile holding that reseller's quotas, its panel
+name and its branding, and the set of servers it may place sites on. Promote an
+account in **Admin → Resellers**, which writes both halves. Until v2.118.0 the Users
+dropdown offered it and wrote only the role, producing an account that was shown a
+reseller menu whose pages then answered 404.
+
 The `admin` row is the one that changed most recently, and it changed because the
 promise came before the capability. For four days it described a reach the code
 did not have; the reach now exists and is described under *Transfer hands over

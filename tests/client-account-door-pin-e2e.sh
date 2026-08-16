@@ -137,8 +137,13 @@ else
 fi
 
 # Read the ROW's own text, not the file's. The file is full of `adminOnly`.
-if [ -n "$ROW" ] && ! has "$ROW" 'adminOnly' && ! has "$ROW" 'resellerVisible'; then
-  ok "A2 the /account row carries neither adminOnly nor resellerVisible"
+#
+# ⚠ EVERY restriction flag the registry grows must be listed here. An absence arm
+# only sees the vocabulary it was taught: when `resellerOnly` was added for #112
+# this arm would have gone on passing while a live restriction existed outside its
+# view, which is a pin that has quietly stopped testing anything.
+if [ -n "$ROW" ] && ! has "$ROW" 'adminOnly' && ! has "$ROW" 'resellerVisible' && ! has "$ROW" 'resellerOnly'; then
+  ok "A2 the /account row carries no restriction flag"
 else
   bad "A2 the /account row is restricted — isNavVisible hides it from the roles it exists for"
 fi

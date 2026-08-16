@@ -4,6 +4,76 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.118.0]
+
+### Fixed — scheduled site backups recorded no integrity hash (#114)
+
+The chain-of-trust report says a backup's SHA-256 is "recorded when the backup was
+taken". For site backups taken by a schedule or by a backup policy, none ever was.
+The agent had computed the hash on every one of those runs and sent it back; both
+unattended paths read the two fields beside it and dropped that one. Every database
+backup and every volume backup — including the two written by the same function as
+one of the site inserts — recorded theirs correctly, as did manually-triggered site
+backups. So the only site backups without a hash were the ones nobody was watching,
+which on most installs is all of them.
+
+Both paths now record it. Backups those two paths took before this release keep no
+hash and nothing back-fills one: the hash has to be taken when the archive is
+written. A report for such a backup shows `—`, as it always has.
+
+⚠ The issue named one of the two call sites and attributed it to the wrong
+scheduler. The seven NULL rows its reporter measured came from the other one.
+
+### Fixed — the chain-of-trust PDF printed its own source code (#113)
+
+A multi-line conditional in the report template was written in Typst's markup mode,
+where an expression ends at the first line break that completes it. Only its first
+branch was bound; the rest were re-read as text. Four consequences, of which one was
+reported:
+
+- Every report opened with a paragraph of raw template source above the DockPanel
+  masthead.
+- The resource label was blank for database and volume backups — the value the
+  template computed was empty for every kind except site.
+- The footer read "snapshot of one backup" instead of naming the kind, for the same
+  reason.
+- The restore-drill table silently discarded **every** `body_excerpt` — the field
+  carrying what a drill actually restored, e.g. "24 tables, ~1,900 rows restored".
+  The panel showed it; the PDF an auditor receives did not, in any row.
+
+### Fixed — an admin could not manage resellers, and the one control that looked like it could made a broken account (#112)
+
+Clicking **Reseller Panel** as an administrator produced
+`This endpoint is for resellers only` as the entire page. That screen answers only
+for the caller's own reseller tenant, and an admin does not have one.
+
+The admin half of the feature had never been given a screen: the eight endpoints
+behind `/api/resellers` — list, create, read, update, remove, and per-reseller
+server allocation — shipped complete and had no caller anywhere in the panel. So
+the only reseller-shaped control on offer was the role dropdown in **Users**, which
+writes the role and nothing else: the account it produced got the Reseller menu and
+its own panel answered 404. Changing the role back left the profile behind, and the
+next promotion of that account failed with a server error.
+
+- New **Resellers** screen (Admin → Resellers): promote an account, set its panel
+  name, quotas and white-label branding, allocate and remove servers, and demote it.
+- **Reseller Panel** and **My Users** are now shown only to resellers, and an
+  administrator who opens either by URL is sent to the screen that answers for them.
+- The **Users** role dropdown no longer offers `reseller` in either direction and
+  points at the new screen instead.
+- Promoting an account that kept a profile through an earlier demotion now restores
+  it, with its stored quotas intact, instead of failing.
+
+### Fixed — the security audit log showed events without their substance
+
+The immutable audit log listed severity, event, actor, IP, location and time — and
+dropped the three fields carrying what actually happened. A canary-file trip read
+`critical · canary.triggered` and never named the file that was touched; an
+auto-lockdown never gave its reason; a blocked terminal command never showed the
+command; and the deploy-protection record added in v2.117.0 never said which
+deployment or which direction. The endpoint had always sent all three. The table now
+has Target and Details columns.
+
 ## [2.117.0]
 
 ### Fixed — Update said "App updated" when it had updated nothing

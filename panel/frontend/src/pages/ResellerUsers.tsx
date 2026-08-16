@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
+import { Navigate } from "react-router-dom";
 import { api, ApiError } from "../api";
+import { useAuth } from "../context/AuthContext";
 
 interface UserItem {
   id: string;
@@ -10,6 +12,14 @@ interface UserItem {
 }
 
 export default function ResellerUsers() {
+  const { user } = useAuth();
+  // Half-broken for an admin rather than wholly: `list_users` branches on the
+  // role and hands an admin every reseller's sub-accounts, so the page LOADS —
+  // but "+ Create User" 403s (`create_user` is reseller-only) and deleting from
+  // here skips the quota decrement, leaving the reseller's counter inflated. A
+  // screen that renders fine and misreports on two of its three controls is
+  // worse than one that redirects. /users is the admin's account surface.
+  if (user && user.role === "admin") return <Navigate to="/users" replace />;
   const [users, setUsers] = useState<UserItem[]>([]);
   const [creating, setCreating] = useState(false);
   const [email, setEmail] = useState("");

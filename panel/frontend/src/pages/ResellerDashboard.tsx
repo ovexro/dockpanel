@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../api";
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 
 interface DashboardData {
   panel_name: string | null;
@@ -21,6 +22,13 @@ interface ServerItem {
 }
 
 export default function ResellerDashboard() {
+  const { user } = useAuth();
+  // This page answers only for the caller's OWN tenant, and the handler behind it
+  // refuses anyone who is not a reseller by name. Without this guard an admin who
+  // deep-linked or kept a bookmark got that 403 rendered as the entire page — the
+  // bug reported as #112, which the nav flag fixes for the sidebar but not for a
+  // URL. Send them to the surface that does answer for them.
+  if (user && user.role === "admin") return <Navigate to="/resellers" replace />;
   const [data, setData] = useState<DashboardData | null>(null);
   const [servers, setServers] = useState<ServerItem[]>([]);
   const [error, setError] = useState("");

@@ -190,12 +190,18 @@ pub async fn create(
 
                 // Feature 13: Backup integrity chain — compute hash and link to previous
                 let sha256_hash = result.get("sha256").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                // `::<_, Option<String>>` is load-bearing: sha256_hash is NULLABLE and the
-                // scheduled writers leave it NULL, so decoding it as a bare String turns the
-                // ordinary "predecessor has no hash" case into a decode ERROR — which this
-                // arm then reported as `DB error fetching previous backup hash`, blaming the
-                // database for a column the panel itself never filled in. Same annotation at
-                // the four sibling sites, which swallow the same error into `unwrap_or(None)`.
+                // `::<_, Option<String>>` is load-bearing: sha256_hash is NULLABLE, so
+                // decoding it as a bare String turns the ordinary "predecessor has no
+                // hash" case into a decode ERROR — which this arm then reported as
+                // `DB error fetching previous backup hash`, blaming the database for a
+                // column that was simply empty. Same annotation at the six sibling sites.
+                //
+                // ⚠ Do not drop it now that the unattended writers fill the column in
+                // (#114). The reason this comment used to give — "the scheduled writers
+                // leave it NULL" — is gone; the annotation is not. Every row written
+                // before v2.118.0 still has a NULL hash and it is the NEWEST of those
+                // this query hits first, and a failed `sha256sum` on the agent still
+                // writes NULL today.
                 let previous_hash: Option<String> = match sqlx::query_scalar::<_, Option<String>>(
                     "SELECT sha256_hash FROM backups WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1"
                 ).bind(id).fetch_optional(&db).await {

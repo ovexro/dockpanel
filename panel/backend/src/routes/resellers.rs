@@ -127,17 +127,24 @@ pub async fn create(
         return Err(err(StatusCode::BAD_REQUEST, "Cannot promote an admin to reseller"));
     }
 
-    // Check if profile already exists
-    if role == "reseller" {
-        let existing: Option<(Uuid,)> =
-            sqlx::query_as("SELECT id FROM reseller_profiles WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_optional(&state.db)
-                .await
-                .map_err(|e| internal_error("create resellers", e))?;
-        if existing.is_some() {
-            return Err(err(StatusCode::CONFLICT, "Reseller profile already exists"));
-        }
+    // Look for an existing profile UNCONDITIONALLY, not only when the account is
+    // still a reseller. `reseller_profiles.user_id` is UNIQUE, and the role and
+    // the profile are written by different doors: changing a reseller's role from
+    // the Users screen updates `users` and leaves the profile behind (users.rs
+    // has no reference to this table at all). So a demoted reseller keeps an
+    // orphan profile, and gating this check on the role meant the next promotion
+    // sailed past it, updated the role, hit the unique constraint on INSERT and
+    // answered 500 — an account an admin could then never promote.
+    let existing: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM reseller_profiles WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| internal_error("create resellers", e))?;
+
+    // Still a reseller AND already has a profile: a genuine double-create.
+    if role == "reseller" && existing.is_some() {
+        return Err(err(StatusCode::CONFLICT, "Reseller profile already exists"));
     }
 
     // Update user role to reseller (idempotent if already reseller). Clear reseller_id:
@@ -148,6 +155,27 @@ pub async fn create(
         .execute(&state.db)
         .await
         .map_err(|e| internal_error("create resellers", e))?;
+
+    // Re-promotion of an account that kept its profile through a demotion. The
+    // role UPDATE above is the whole of the work; inserting would violate the
+    // unique constraint. Its stored quotas and branding are preserved rather
+    // than silently replaced by whatever this request happened to carry — an
+    // admin restoring a reseller is not asking to reset it.
+    if let Some((existing_id,)) = existing {
+        tracing::info!(
+            "Reseller role restored by {} for {} (profile kept)",
+            claims.email,
+            email
+        );
+        activity::log_activity(
+            &state.db, claims.sub, &claims.email, "reseller.create",
+            Some("reseller"), Some(&email), None, None,
+        ).await;
+        return Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "id": existing_id, "user_id": user_id, "email": email })),
+        ));
+    }
 
     // Insert reseller profile
     let profile: ResellerProfile = sqlx::query_as(

@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.117.0 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.118.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -80,9 +80,9 @@
 | Feature | Description | Backend | Frontend | DB Tables |
 |---------|-------------|---------|----------|-----------|
 | **Multi-Server** | Manage remote servers via HTTPS agents | `routes/servers.rs` | `Servers.tsx` | `servers` |
-| **Reseller Accounts** | Admin→Reseller→User hierarchy, quotas, server allocation | `routes/resellers.rs`, `reseller_dashboard.rs` | `ResellerDashboard.tsx`, `ResellerUsers.tsx` | `reseller_profiles`, `reseller_servers` |
+| **Reseller Accounts** | Admin→Reseller→User hierarchy, quotas, server allocation | `routes/resellers.rs`, `reseller_dashboard.rs` | `Resellers.tsx` (admin), `ResellerDashboard.tsx`, `ResellerUsers.tsx` | `reseller_profiles`, `reseller_servers` |
 | **White-Label** | Per-reseller logo, panel name, accent color, hide branding | `routes/settings.rs` (branding endpoint) | (in CommandLayout, Login) | `reseller_profiles` |
-| **Users** | CRUD, role assignment (admin/reseller/user) | `routes/users.rs` | (in Settings) | `users` |
+| **Users** | CRUD, role assignment (admin/user/client; reseller is set in Resellers) | `routes/users.rs` | (in Settings) | `users` |
 | **API Keys** | Key CRUD and rotation. ⚠ **Not an authentication mechanism** — see §Withdrawn Claims | `routes/api_keys.rs` | (in Settings) | `api_keys` |
 | **Extensions** | Webhook integrations, HMAC-signed events | `routes/extensions.rs` | `Extensions.tsx` | `extensions`, `extension_events` |
 | **Activity Log** | Full audit trail of all mutations | `routes/activity.rs` | (in Logs) | `activity_logs` |
@@ -229,8 +229,8 @@ honest:
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
 | App templates | 148 | derived | every commit |
 | HTTP routes | 822 (534 backend + 288 agent) | derived | every commit |
-| Regression-pin assertions | 2289 (69 suites) | derived | every commit |
-| Frontend pages | 52 | derived | every commit |
+| Regression-pin assertions | 2291 (69 suites) | derived | every commit |
+| Frontend pages | 53 | derived | every commit |
 | DB migrations | 110 | derived | every commit |
 | Supervised background services | 15 | derived | every commit |
 

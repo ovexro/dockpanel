@@ -356,6 +356,21 @@ async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow,
                     let filename = resp.get("filename").and_then(|v| v.as_str()).unwrap_or("");
                     let size_bytes = resp.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0) as i64;
 
+                    // Same read the database and volume branches below already do
+                    // off their own agent responses. This branch had the field in
+                    // scope and never looked at it, so a site archived by a policy
+                    // carried no integrity hash while its db and volume siblings
+                    // in this very function did (#114). Read before the upload, as
+                    // they do.
+                    let sha256_hash = resp
+                        .get("sha256")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let previous_hash: Option<String> = sqlx::query_scalar::<_, Option<String>>(
+                        "SELECT sha256_hash FROM backups WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1"
+                    ).bind(site_id).fetch_optional(db).await.unwrap_or(None).flatten();
+
                     let mut uploaded = false;
                     if let (Some(dest), false) = (&destination, destination_down) {
                         let filepath = format!("/var/backups/dockpanel/{domain}/{filename}");
@@ -415,13 +430,15 @@ async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow,
                     // deleting a backup destination mid-run, which makes every
                     // remaining insert in that run a foreign-key violation.
                     match sqlx::query(
-                        "INSERT INTO backups (site_id, filename, size_bytes, destination_id, uploaded, databases_included, databases_expected) \
-                         VALUES ($1, $2, $3, $4, $5, $6, $7)"
+                        "INSERT INTO backups (site_id, filename, size_bytes, destination_id, uploaded, databases_included, databases_expected, sha256_hash, previous_hash) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
                     )
                     .bind(site_id).bind(filename).bind(size_bytes)
                     .bind(destination.as_ref().map(|d| d.id)).bind(uploaded)
                     .bind(resp.get("databases_included").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0) as i32)
                     .bind(db_expected)
+                    .bind(if sha256_hash.is_empty() { None } else { Some(&sha256_hash) })
+                    .bind(previous_hash.as_deref())
                     .execute(db).await {
                         Ok(_) => successes += 1,
                         Err(e) => {

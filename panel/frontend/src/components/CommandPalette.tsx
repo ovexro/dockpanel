@@ -69,6 +69,7 @@ export default function CommandPalette() {
     // Reseller
     { id: "reseller", label: "Reseller Panel", icon, path: "/reseller", category: "Reseller", keywords: "reseller white-label" },
     { id: "reseller-users", label: "My Users", icon, path: "/reseller/users", category: "Reseller", keywords: "reseller clients" },
+    { id: "resellers", label: "Resellers", icon, path: "/resellers", category: "Reseller", keywords: "reseller quota white-label allocate" },
   ];
 
   // Same predicate, same registry as the sidebar. A command whose path has no

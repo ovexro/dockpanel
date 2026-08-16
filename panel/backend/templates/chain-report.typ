@@ -64,10 +64,18 @@
 
 // ── Header ──────────────────────────────────────────────────────────────
 
-#let kind_label = if data.backup.kind == "site" { "Site" }
+// The braces are load-bearing, not style. A `#`-expression written in MARKUP mode
+// ends at the first line break that leaves it syntactically complete, so a bare
+// `if …{}` here bound only the first branch and the `else if` lines below it were
+// re-lexed as a paragraph and PRINTED above the masthead. Wrapping the chain in a
+// code block makes newlines trivia, exactly as `humanbytes` and `status_pill` above
+// already do — they were never broken for that reason alone.
+#let kind_label = {
+  if data.backup.kind == "site" { "Site" }
   else if data.backup.kind == "database" { "Database" }
   else if data.backup.kind == "volume" { "Volume" }
   else { upper(data.backup.kind) }
+}
 
 #align(left)[
   #text(size: 22pt, weight: "bold", fill: dp_brand)[DockPanel]
@@ -160,9 +168,11 @@
       text(size: 8.5pt)[#if d.http_status != none { str(d.http_status) } else { "—" }],
       text(size: 8.5pt)[#duration_ms(d.duration_ms)],
       text(size: 8.5pt, fill: if d.error_message != none { dp_fail } else { dp_dim })[
-        #if d.error_message != none { d.error_message }
-        else if d.body_excerpt != none { d.body_excerpt }
-        else { "—" }
+        #{
+          if d.error_message != none { d.error_message }
+          else if d.body_excerpt != none { d.body_excerpt }
+          else { "—" }
+        }
       ],
     )).flatten()
   )

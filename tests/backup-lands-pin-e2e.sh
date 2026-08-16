@@ -133,7 +133,17 @@ done
 echo
 echo "§2 a scheduled backup records WHERE its bytes went (B)"
 
-if has "$SRC_SCHED" 'INSERT INTO backups (site_id, filename, size_bytes, databases_included, databases_expected, uploaded, destination_id)'; then
+# Assert the CAPABILITY (both columns are in the list), never the list itself.
+# The first cut of this arm froze the whole column list terminated by
+# `destination_id)`, so #114's correct fix — appending sha256_hash/previous_hash,
+# which this arm has no opinion about — turned it red with the false verdict
+# "omits uploaded/destination_id" while both were plainly still there. A pin that
+# freezes a list guarantees the next legitimate addition looks like a regression,
+# and it cannot notice the asymmetry it was supposed to be watching for.
+SCHED_INSERT=$(sed -n '/INSERT INTO backups (/,/)/p' <<< "$SRC_SCHED" | head -2 | tr -d '\n')
+if [ -z "$SCHED_INSERT" ]; then
+  bad "the scheduler's INSERT could not be isolated — the arm examined nothing"
+elif hasE "$SCHED_INSERT" 'uploaded' && hasE "$SCHED_INSERT" 'destination_id'; then
   ok "the scheduler's INSERT carries uploaded + destination_id"
 else
   bad "the scheduler's INSERT omits uploaded/destination_id — the badge cannot light"
