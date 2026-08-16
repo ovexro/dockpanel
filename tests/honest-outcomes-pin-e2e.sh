@@ -334,6 +334,34 @@ else
   bad "F4 the site resolution moved after the container creation" "resolve=$RESOLVE_LINE create=$CREATE_LINE"
 fi
 
+# The wizard must not offer a location the agent structurally cannot read. The
+# unit runs `PrivateTmp=yes`, so an archive copied to the host's /tmp — the
+# obvious place, and the one this guard used to name — is invisible to it, and
+# the very next line answered "File not found" for a file plainly on disk.
+# Driven at s369: the identical archive fails from /tmp and analyzes from
+# /var/backups/.
+eq "F5 the migration path guard no longer offers /tmp" \
+   "$($G -c 'starts_with("/tmp/")' panel/agent/src/routes/migration.rs)" "0"
+eq "F5b …and it is still guarded to /var/backups (control: the check exists)" \
+   "$($G -c 'starts_with("/var/backups/")' panel/agent/src/routes/migration.rs)" "2"
+eq "F5c the agent unit really does have a private /tmp, which is why" \
+   "$($G -c '^PrivateTmp=yes' panel/agent/dockpanel-agent.service 2>/dev/null || $G -rc 'PrivateTmp=yes' panel/agent/src/ scripts/ 2>/dev/null | awk -F: '{s+=$2} END{print (s>0)?1:0}')" "1"
+# "Container running" is not "database usable": mariadb:11 refuses the app user
+# while it initialises, so a fixed sleep produced `Access denied` — a
+# credentials message for a timing problem.
+eq "F6 the engine wait is a poll, not a fixed sleep" \
+   "$(/usr/bin/sed -n '/Waiting for {db_name} engine/,/Import SQL dump via agent/p' panel/backend/src/routes/migration.rs | $G -c 'ENGINE_READY_TIMEOUT_SECS')" "2"
+eq "F6b the probe goes through the engine, not just docker" \
+   "$(/usr/bin/sed -n '/Waiting for {db_name} engine/,/Import SQL dump via agent/p' panel/backend/src/routes/migration.rs | $G -c '/databases/query')" "1"
+# …and it has to carry a real statement and real credentials, or the agent
+# rejects the body, every poll fails, and the wait degrades back to a timeout
+# that reports nothing. An arm that only checks the ENDPOINT survives a broken
+# payload (found by mutation, s369).
+eq "F6c the probe carries a statement the engine can answer" \
+   "$(/usr/bin/sed -n '/Waiting for {db_name} engine/,/Import SQL dump via agent/p' panel/backend/src/routes/migration.rs | $G -cE '\"sql\": \"SELECT 1\"')" "1"
+eq "F6d …and the credentials the container was created with" \
+   "$(/usr/bin/sed -n '/Waiting for {db_name} engine/,/Import SQL dump via agent/p' panel/backend/src/routes/migration.rs | $G -cE '\"(container|engine|database|user|password)\":')" "5"
+
 # ── §G Update does not also START an app the operator stopped (s369) ────────
 #
 # All three recreate doors started the new container unconditionally, so

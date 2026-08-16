@@ -29,16 +29,30 @@ async fn analyze(
         return Err((StatusCode::BAD_REQUEST, "Path traversal not allowed".into()));
     }
 
-    // Restrict path to allowed directories
-    if !path.starts_with("/var/backups/") && !path.starts_with("/tmp/") {
-        return Err((StatusCode::BAD_REQUEST, "Path must be within /var/backups/ or /tmp/".into()));
+    // Restrict path to allowed directories.
+    //
+    // ⚠ NOT `/tmp`, and the message must not offer it. This unit runs with
+    // `PrivateTmp=yes`, so the agent gets its own empty `/tmp` namespace and an
+    // archive the operator copied to the host's `/tmp` — the obvious place, and
+    // the place this sentence used to name — is simply not there. The guard
+    // accepted the path and the very next line answered `File not found` for a
+    // file plainly sitting on disk. Driven on a fresh box at s369: the identical
+    // archive fails from `/tmp` and analyzes from `/var/backups/`.
+    if !path.starts_with("/var/backups/") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Path must be within /var/backups/ — copy the archive there. \
+             (/tmp cannot be used: the agent runs with a private /tmp and \
+             cannot see the host's.)"
+                .into(),
+        ));
     }
 
     // Validate path exists and canonicalize to resolve symlinks
     let canon_path = std::path::Path::new(path).canonicalize()
         .map_err(|_| (StatusCode::BAD_REQUEST, format!("File not found: {path}")))?;
     let canon_str = canon_path.to_string_lossy();
-    if !canon_str.starts_with("/var/backups/") && !canon_str.starts_with("/tmp/") {
+    if !canon_str.starts_with("/var/backups/") {
         return Err((StatusCode::BAD_REQUEST, "Resolved path not in allowed directories".into()));
     }
 

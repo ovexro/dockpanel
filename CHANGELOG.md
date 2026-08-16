@@ -4,6 +4,38 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.122.2]
+
+### Fixed — the Migration Wizard offered a location the agent cannot read
+
+The archive-path guard answered *"Path must be within /var/backups/ or /tmp/"*,
+and the agent's unit runs `PrivateTmp=yes`. So an operator who copies a cpmove
+archive to `/tmp` — the obvious place, and the one the panel itself names — hands
+over a path the guard accepts and the very next line rejects with
+**`File not found`**, for a file plainly sitting on the disk they are looking at.
+
+Driven on a fresh box: the identical 303-byte archive fails from `/tmp` and
+analyzes cleanly from `/var/backups/`, which is the whole diagnosis in one pair of
+runs. `/tmp` is no longer offered, and the refusal now says where to put the file
+and why the other place cannot work.
+
+### Fixed — a database import blamed the password for a timing problem
+
+The import waited a fixed five seconds after creating the database container and
+then connected. `mariadb:11` initialises its data directory behind a bootstrap
+server that refuses the application user, and five seconds is not enough — so the
+import failed with **`ERROR 1045 (28000): Access denied`**, a credentials message
+for a readiness problem, sending the operator to check a password that was never
+wrong.
+
+The step whose own label reads "Waiting for … engine" now waits for it: it polls
+`SELECT 1` through the engine, with the credentials the container was created
+with, up to two minutes. If the engine still has not answered the import proceeds
+anyway, so the operator gets the real error rather than a timeout of ours.
+
+Both were found by driving the wizard end to end on a throwaway box, after
+v2.122.0 made the import capable of storing anything at all.
+
 ## [2.122.1]
 
 ### Fixed — the Custom Nginx refusal reached the operator as an incident reference

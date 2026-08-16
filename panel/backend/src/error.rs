@@ -110,7 +110,7 @@ pub fn agent_actionable(e: &AgentError) -> Option<(StatusCode, String)> {
 ///
 /// The distinction this function exists to preserve: a **4xx from the agent is
 /// an answer**, authored deliberately for whoever asked ("Path must be within
-/// /var/backups/ or /tmp/", "WAF not installed"), and collapsing it into a
+/// /var/backups/", "WAF not installed"), and collapsing it into a
 /// generic 502 tells the operator their agent is down when it is working
 /// perfectly. Only a transport failure, an open circuit breaker, or a genuine
 /// 5xx from inside the agent is worth hiding behind an incident id.
@@ -223,13 +223,13 @@ mod tests {
             "Backup analysis",
             AgentError::Status(
                 400,
-                r#"{"error":"Path must be within /var/backups/ or /tmp/"}"#.into(),
+                r#"{"error":"Path must be within /var/backups/"}"#.into(),
             ),
         );
         assert_eq!(e.0, StatusCode::BAD_REQUEST);
         assert_eq!(
             body_of(&e)["error"],
-            "Path must be within /var/backups/ or /tmp/"
+            "Path must be within /var/backups/"
         );
         // A refusal is not an unreachable agent.
         assert!(body_of(&e).get("code").is_none());

@@ -112,6 +112,15 @@ fn emit_step(
 /// replaces a real diagnosis with a generic one.
 const ANALYZE_AGENT_TIMEOUT_SECS: u64 = 1860;
 
+/// How long to wait for an imported database's engine to start answering.
+///
+/// A fresh `mariadb:11` initialises its data directory behind a bootstrap server
+/// that refuses the application user, so "is the container running" is not "is
+/// the database usable". Generous, because the cost of waiting is a slower
+/// import and the cost of not waiting is an `Access denied` that sends the
+/// operator after a password that was always correct.
+const ENGINE_READY_TIMEOUT_SECS: u64 = 120;
+
 /// Analyze a panel backup (cPanel/Plesk/HestiaCP).
 ///
 /// **Accepted, not performed.** Walking a cPanel archive is minutes of work for
@@ -890,7 +899,48 @@ pub async fn import(
                 "in_progress",
                 None,
             );
-            tokio::time::sleep(Duration::from_secs(5)).await;
+
+            // Poll until the engine answers, rather than sleeping a fixed five
+            // seconds and hoping.
+            //
+            // `mariadb:11` runs a bootstrap server during initialisation and does
+            // not accept the application user until that finishes, which takes
+            // well over five seconds on an ordinary box. The import then failed
+            // with `ERROR 1045 (28000): Access denied` — a credentials message
+            // for a timing problem, so the operator is sent to look at a password
+            // that was never wrong. Driven on a fresh box at s369; this is the
+            // step whose own label already claims to be waiting for the engine.
+            {
+                let probe = serde_json::json!({
+                    "container": container_name,
+                    "engine": engine,
+                    "database": db_name,
+                    "user": db_name,
+                    "password": password,
+                    "sql": "SELECT 1",
+                });
+                let deadline =
+                    std::time::Instant::now() + Duration::from_secs(ENGINE_READY_TIMEOUT_SECS);
+                let mut ready = false;
+                while std::time::Instant::now() < deadline {
+                    if agent
+                        .post("/databases/query", Some(probe.clone()))
+                        .await
+                        .is_ok()
+                    {
+                        ready = true;
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+                if !ready {
+                    tracing::warn!(
+                        "Migration {id}: {db_name}'s engine did not answer within \
+                         {ENGINE_READY_TIMEOUT_SECS}s; importing anyway so the real error is \
+                         reported rather than a timeout of our own"
+                    );
+                }
+            }
 
             // Import SQL dump via agent
             let import_body = serde_json::json!({
