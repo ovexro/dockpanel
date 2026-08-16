@@ -4,6 +4,32 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.122.1]
+
+### Fixed — the Custom Nginx refusal reached the operator as an incident reference
+
+v2.122.0 taught the agent to refuse `client_max_body_size`, `gzip` and
+`gzip_min_length` in the Custom Nginx box, with a sentence naming the control to
+use instead. Driven on a fresh box, that sentence never arrived: the agent's
+check runs inside the template render, a render failure is a 500, and
+`agent_error` hands an agent's own words through only on 4xx — so the operator
+got `Operation failed. Reference: <uuid>`. That is the same shape as the nginx
+duplicate error it replaced, and no more actionable.
+
+The same three names are refused in the backend validator now, which answers
+`400` and carries its own text. The agent keeps its copy: it is what holds if a
+vhost is ever written without going through this path.
+
+⚠ This is worth stating plainly rather than burying: **every** message the
+agent's custom-nginx validator produces has always surfaced this way, including
+the carefully-worded "directive is not in the allowed list. Allowed: …". Only the
+duplicate case is repaired here. The rest is recorded, not fixed.
+
+The backend's own unit test asserted that `client_max_body_size 20m;` was valid
+input, matching the agent-side test that made the same claim. Both now assert the
+refusal, and both assert that `add_header`, `gzip_types` and `expires` — emitted
+by the template too, and legitimately repeatable — are still accepted.
+
 ## [2.122.0]
 
 ### Fixed — the cPanel/HestiaCP import said "Imported" over a database it had never stored

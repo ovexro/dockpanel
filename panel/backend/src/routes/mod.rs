@@ -503,6 +503,43 @@ pub fn is_safe_nginx_config(config: &str) -> Result<(), &'static str> {
         }
     }
 
+    // Directives the site template already writes at SERVER level, into the same
+    // `server { … }` block this text is injected into. nginx refuses a duplicate
+    // outright, so accepting one produced a configuration it rejects — and the
+    // agent's copy of this check runs inside the template RENDER, whose failure
+    // reaches the operator as `Operation failed. Reference: <uuid>` (agent_error
+    // hands a sentence through only on 4xx). Refused here so the reason survives
+    // the trip: this path answers 400 and `err(…)` carries the text.
+    //
+    // Three names, derived rather than guessed: `add_header` and `gzip_types` are
+    // emitted there too and legitimately repeat, and `expires` is emitted only
+    // inside `location` blocks, which is a different context.
+    for stmt in config.split(';') {
+        let directive = stmt
+            .trim()
+            .split(|c: char| c.is_whitespace())
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
+        match directive.as_str() {
+            "client_max_body_size" => {
+                return Err(
+                    "The site already sets 'client_max_body_size' — nginx refuses a \
+                            duplicate and the whole site would fail to load. Change the site's \
+                            maximum upload size instead; that is the control that writes it.",
+                );
+            }
+            "gzip" | "gzip_min_length" => {
+                return Err(
+                    "The site already enables gzip — nginx refuses a duplicate 'gzip' or \
+                            'gzip_min_length' and the whole site would fail to load. Compression \
+                            is on for every site already.",
+                );
+            }
+            _ => {}
+        }
+    }
+
     Ok(())
 }
 
@@ -671,7 +708,32 @@ mod tests {
         assert!(is_safe_nginx_config("sendfile on; access_log /var/www/victim/public/shell.php;").is_err());
         assert!(is_safe_nginx_config("gzip on; error_log /var/www/x/y.php;").is_err());
         // A benign directive still passes.
-        assert!(is_safe_nginx_config("client_max_body_size 20m;").is_ok());
+        assert!(is_safe_nginx_config("proxy_read_timeout 120s;").is_ok());
+    }
+
+    /// This asserted the OPPOSITE until v2.122.1 — that `client_max_body_size
+    /// 20m;` is valid input — matching the agent-side test that made the same
+    /// claim. The site template writes that directive at server level, into the
+    /// same block this text lands in, so nginx refuses the result and the site
+    /// stops loading. Refused HERE as well as in the agent, because only this
+    /// path can hand the reason back to the operator: the agent's copy runs
+    /// inside the template render and surfaces as a 502 with a reference.
+    #[test]
+    fn nginx_config_refuses_what_the_site_template_already_sets() {
+        for stmt in [
+            "client_max_body_size 20m;",
+            "gzip on;",
+            "gzip_min_length 512;",
+            "  Client_Max_Body_Size 50m;",
+            "proxy_read_timeout 60s; gzip off;",
+        ] {
+            let e = is_safe_nginx_config(stmt).expect_err(stmt);
+            assert!(e.contains("already"), "{stmt} -> {e}");
+        }
+        // …and the ones that legitimately repeat are still accepted.
+        assert!(is_safe_nginx_config("add_header X-Extra 1;").is_ok());
+        assert!(is_safe_nginx_config("gzip_types application/wasm;").is_ok());
+        assert!(is_safe_nginx_config("expires 1d;").is_ok());
     }
 
     // ── Domain validation ───────────────────────────────────────────────

@@ -361,6 +361,30 @@ eq "G3 blue-green is not taken for an app that was already stopped" \
 eq "G4 the guard reads status, not the running flag" \
    "$($G -c 'ContainerStateStatusEnum::RUNNING' "$ADS")" "3"
 
+# ── §H a refusal has to come from a layer that can answer 4xx (s369, v2.122.1) ──
+#
+# The agent's custom_nginx validator runs inside the template RENDER, and
+# `agent_error` hands an agent sentence through only on 4xx — a render failure is
+# a 500, so it reaches the operator as `Operation failed. Reference: <uuid>`.
+# Driven on a fresh box: the new duplicate-directive refusal came back 502 with a
+# reference, exactly like the nginx error it replaced. The reason now also lives
+# in the BACKEND validator, which answers 400 and carries its own text.
+#
+# Both layers must refuse. The backend one is what the operator reads; the agent
+# one is what holds if anything ever writes a vhost without going through it.
+eq "H1 the backend validator refuses the directives the template already sets" \
+   "$(/usr/bin/sed -n '/fn is_safe_nginx_config/,/^}/p' panel/backend/src/routes/mod.rs | $G -cE '\"client_max_body_size\" =>')" "1"
+eq "H2 …and gzip's pair with it" \
+   "$(/usr/bin/sed -n '/fn is_safe_nginx_config/,/^}/p' panel/backend/src/routes/mod.rs | $G -cE '\"gzip\" \| \"gzip_min_length\" =>')" "1"
+eq "H3 the agent keeps its own copy (defence in depth)" \
+   "$($G -c 'ALREADY_SET_BY_THE_TEMPLATE' panel/agent/src/services/nginx.rs)" "2"
+eq "H4 the caller answers 400 from the backend check, not 502 from the agent" \
+   "$(/usr/bin/sed -n '/pub async fn update_limits/,/^}/p' panel/backend/src/routes/sites.rs | $G -c 'is_safe_nginx_config')" "1"
+# Control: the three that legitimately repeat must NOT be in the refusal list, or
+# the fix takes away working configuration.
+eq "H5 add_header/gzip_types/expires are not refused" \
+   "$(/usr/bin/sed -n '/fn is_safe_nginx_config/,/^}/p' panel/backend/src/routes/mod.rs | $G -cE '\"(add_header|gzip_types|expires)\" =>')" "0"
+
 echo
 echo "PASS $PASS  FAIL $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
