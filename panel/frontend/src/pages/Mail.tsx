@@ -85,6 +85,19 @@ interface DnsCheckItem {
   actual?: string;
 }
 
+// A DNSxL that could not be reached is not a DNSxL that said "no". `listed` is null
+// for any zone whose RFC 5782 control probe failed, and `status` is the verdict the
+// card must render — "clean" is reserved for a run in which every zone was asked.
+interface BlacklistReport {
+  ip: string;
+  results: { rbl: string; name: string; listed: boolean | null; checked: boolean }[];
+  listed_count: number;
+  checked_count: number;
+  total_count: number;
+  status: "clean" | "listed" | "unknown";
+  clean: boolean;
+}
+
 interface MailLogStats {
   sent: number;
   received: number;
@@ -192,7 +205,7 @@ export default function Mail() {
   const [relayUser, setRelayUser] = useState("");
   const [relayPass, setRelayPass] = useState("");
   const [showRelayForm, setShowRelayForm] = useState(false);
-  const [blacklist, setBlacklist] = useState<{ ip: string; results: { rbl: string; name: string; listed: boolean }[]; clean: boolean } | null>(null);
+  const [blacklist, setBlacklist] = useState<BlacklistReport | null>(null);
   const [checkingBl, setCheckingBl] = useState(false);
 
   // Rate limiting
@@ -699,18 +712,22 @@ export default function Mail() {
           <div className="bg-dark-800 rounded-lg border border-dark-500 p-4 elevation-1">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Reputation</h3>
-              {blacklist && <div className={`w-2.5 h-2.5 rounded-full ${blacklist.clean ? "bg-rust-500" : "bg-danger-400"}`} />}
+              {blacklist && <div className={`w-2.5 h-2.5 rounded-full ${blacklist.status === "clean" ? "bg-rust-500" : blacklist.status === "listed" ? "bg-danger-400" : "bg-dark-400"}`} />}
             </div>
             {blacklist ? (
-              <p className={`text-sm mb-3 ${blacklist.clean ? "text-dark-100" : "text-danger-400"}`}>
-                {blacklist.clean ? "Clean" : `${blacklist.results.filter(r => r.listed).length} listed`}
+              <p className={`text-sm mb-3 ${blacklist.status === "clean" ? "text-dark-100" : blacklist.status === "listed" ? "text-danger-400" : "text-dark-300"}`}>
+                {blacklist.status === "clean"
+                  ? "Clean"
+                  : blacklist.status === "listed"
+                    ? `${blacklist.listed_count} listed`
+                    : `Could not check ${blacklist.total_count - blacklist.checked_count} of ${blacklist.total_count}`}
               </p>
             ) : (
               <p className="text-sm text-dark-100 mb-3">Not checked</p>
             )}
             <button disabled={checkingBl} onClick={async () => {
               setCheckingBl(true);
-              try { const data = await api.get<{ ip: string; results: { rbl: string; name: string; listed: boolean }[]; clean: boolean }>("/mail/blacklist-check"); setBlacklist(data); }
+              try { const data = await api.get<BlacklistReport>("/mail/blacklist-check"); setBlacklist(data); }
               catch (e) { setMessage({ text: e instanceof Error ? e.message : "Check failed", type: "error" }); }
               finally { setCheckingBl(false); }
             }} className="w-full px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-600 rounded text-xs font-medium disabled:opacity-50 transition-colors">
@@ -791,8 +808,10 @@ export default function Mail() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
             {blacklist.results.map((r) => (
               <div key={r.rbl} className="flex items-center gap-2 text-xs py-1">
-                <div className={`w-2 h-2 rounded-full shrink-0 ${r.listed ? "bg-danger-400" : "bg-rust-500"}`} />
-                <span className={r.listed ? "text-danger-400" : "text-dark-300"}>{r.name}</span>
+                <div className={`w-2 h-2 rounded-full shrink-0 ${!r.checked ? "bg-dark-400" : r.listed ? "bg-danger-400" : "bg-rust-500"}`} />
+                <span className={!r.checked ? "text-dark-400" : r.listed ? "text-danger-400" : "text-dark-300"}>
+                  {r.name}{!r.checked && " — no answer"}
+                </span>
               </div>
             ))}
           </div>

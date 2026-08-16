@@ -1069,11 +1069,20 @@ export default function Databases() {
                                 retention_hours: cfg.retention_hours || 24,
                               });
                               setError("");
-                              setSuccessMsg(`Point-in-time recovery ${newEnabled ? "enabled" : "disabled"} for ${db.name}`);
-                            } catch (e) { setError(e instanceof Error ? e.message : "Failed to toggle PITR"); }
+                              // The flag is stored and nothing consumes it: no WAL is
+                              // archived, no binlog retained, and the restore endpoint
+                              // answers 501. Saying "recovery enabled" promised a
+                              // recoverability nothing behind this button can deliver —
+                              // the worst place in the product to be optimistic.
+                              setSuccessMsg(
+                                newEnabled
+                                  ? `Retention preference saved for ${db.name}. Point-in-time recovery is not implemented — nothing is being archived, and restore is unavailable. Use scheduled backups.`
+                                  : `Retention preference cleared for ${db.name}.`
+                              );
+                            } catch (e) { setError(e instanceof Error ? e.message : "Failed to save retention preference"); }
                           }}
                           className="px-2 py-1 rounded text-xs font-medium bg-dark-700 text-dark-300 hover:bg-dark-600 transition-colors"
-                          title="Toggle point-in-time recovery (WAL/binlog)"
+                          title="Store a PITR retention preference. Point-in-time recovery itself is not implemented — nothing is archived and restore returns 501."
                         >
                           PITR
                         </button>

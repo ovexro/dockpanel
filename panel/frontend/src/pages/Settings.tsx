@@ -171,6 +171,14 @@ export default function Settings() {
   const [testingWebhook, setTestingWebhook] = useState<string | null>(null);
   const [webhookResult, setWebhookResult] = useState<{ type: string; msg: string }>({ type: "", msg: "" });
   const [mutedTypes, setMutedTypes] = useState<string[]>([]);
+  // The Alerts page builds escalation policies and then tells the operator, in its own
+  // words, to "attach a policy to an alert rule from the alert-rules editor". This is
+  // that editor, and until now it had no such control: the attach endpoint had zero
+  // callers, so every rule kept escalation_policy_id NULL and every alert fell back to
+  // the hardcoded cadence no matter how many chains had been built.
+  const [alertRuleId, setAlertRuleId] = useState<string | null>(null);
+  const [escalationPolicyId, setEscalationPolicyId] = useState("");
+  const [escalationPolicies, setEscalationPolicies] = useState<{ id: string; name: string }[]>([]);
   // GPU alert thresholds
   const [gpuAlertEnabled, setGpuAlertEnabled] = useState(true);
   const [gpuUtilThreshold, setGpuUtilThreshold] = useState(95);
@@ -305,9 +313,11 @@ export default function Settings() {
 
   const loadNotifyChannels = async () => {
     try {
-      const rules = await api.get<{ notify_email?: boolean; notify_slack_url?: string; notify_discord_url?: string; notify_pagerduty_key?: string; muted_types?: string; alert_gpu?: boolean; gpu_util_threshold?: number; gpu_util_duration?: number; gpu_temp_threshold?: number; gpu_vram_threshold?: number }[]>("/alert-rules");
+      const rules = await api.get<{ id?: string; escalation_policy_id?: string | null; notify_email?: boolean; notify_slack_url?: string; notify_discord_url?: string; notify_pagerduty_key?: string; muted_types?: string; alert_gpu?: boolean; gpu_util_threshold?: number; gpu_util_duration?: number; gpu_temp_threshold?: number; gpu_vram_threshold?: number }[]>("/alert-rules");
       if (rules.length > 0) {
         const r = rules[0];
+        setAlertRuleId(r.id ?? null);
+        setEscalationPolicyId(r.escalation_policy_id ?? "");
         setNotifyEmail(r.notify_email !== false);
         setNotifySlackUrl(r.notify_slack_url || "");
         setNotifyDiscordUrl(r.notify_discord_url || "");
@@ -322,6 +332,12 @@ export default function Settings() {
         if (r.gpu_vram_threshold) setGpuVramThreshold(r.gpu_vram_threshold);
       }
     } catch { /* ignore */ }
+    // A missing policy list must not break the notification tab — the picker just has
+    // nothing to offer, which is also the honest state when no policies exist yet.
+    try {
+      const policies = await api.get<{ id: string; name: string }[]>("/escalation-policies");
+      setEscalationPolicies(policies.map(({ id, name }) => ({ id, name })));
+    } catch { setEscalationPolicies([]); }
   };
 
   useEffect(() => {
@@ -1888,6 +1904,41 @@ export default function Settings() {
               />
               <p className="text-xs text-dark-300 mt-1">Events API v2 integration key. Get it from PagerDuty &gt; Services &gt; Integrations.</p>
             </div>
+            {/* Escalation policy — attached through its own admin-only endpoint, so it
+                applies the moment it is picked rather than waiting on Save below. */}
+            <div className="bg-dark-800 rounded-lg border border-dark-600 p-5 space-y-2">
+              <label htmlFor="escalation-policy" className="block text-sm font-medium text-dark-100">Escalation Policy</label>
+              <select
+                id="escalation-policy"
+                value={escalationPolicyId}
+                disabled={!alertRuleId}
+                onChange={async (e) => {
+                  const next = e.target.value;
+                  const previous = escalationPolicyId;
+                  setEscalationPolicyId(next);
+                  try {
+                    await api.put(`/alert-rules/${alertRuleId}/escalation-policy`, { policy_id: next || null });
+                    setMessage({ text: next ? "Escalation policy attached" : "Escalation policy removed", type: "success" });
+                  } catch (err) {
+                    // Put the picker back where it was — leaving it showing a policy the
+                    // rule does not carry is the same lie this release is about.
+                    setEscalationPolicyId(previous);
+                    setMessage({ text: err instanceof Error ? err.message : "Failed to attach policy", type: "error" });
+                  }
+                }}
+                className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-sm text-dark-50 outline-none disabled:opacity-50"
+              >
+                <option value="">No escalation (default cadence)</option>
+                {escalationPolicies.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <p className="text-xs text-dark-300">
+                {!alertRuleId
+                  ? "Save your notification settings once to create an alert rule, then choose a policy."
+                  : escalationPolicies.length === 0
+                    ? "No policies yet — build one on the Alerts page under Escalation."
+                    : "Unacknowledged alerts follow this chain instead of the built-in reminder cadence."}
+              </p>
+            </div>
             {/* Alert Type Muting */}
             <div className="bg-dark-800 rounded-lg border border-dark-600 p-5 space-y-3">
               <h3 className="text-sm font-medium text-dark-100 font-mono">Suppress External Notifications</h3>
@@ -1996,6 +2047,9 @@ export default function Settings() {
                       gpu_vram_threshold: gpuVramThreshold,
                     });
                     setMessage({ text: "Notification channels saved", type: "success" });
+                    // Re-read so the escalation picker learns the rule id on the first
+                    // save, when the row is created rather than updated.
+                    await loadNotifyChannels();
                   } catch (e) {
                     setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
                   } finally {

@@ -207,6 +207,20 @@ export default function Terminal() {
 
   // SSH Info panel
   const [showSshInfo, setShowSshInfo] = useState(false);
+  // A share is an UNAUTHENTICATED public URL carrying whatever was on screen — root
+  // output, hostnames, anything that scrolled past. Creating one has always been a
+  // button; seeing which are live and closing one existed only as two handlers with
+  // no caller, so the moment an operator regretted a share the panel had no answer.
+  const [shares, setShares] = useState<{ share_id: string; created_at: number; expires_in_seconds: number; url: string }[]>([]);
+  const [showShares, setShowShares] = useState(false);
+  const loadShares = useCallback(async () => {
+    try {
+      const r = await api.get<{ shares: typeof shares }>("/terminal/shares");
+      setShares(r.shares ?? []);
+    } catch {
+      setShares([]);
+    }
+  }, []);
 
   // Terminal Recording
   const [recording, setRecording] = useState(false);
@@ -826,6 +840,7 @@ export default function Terminal() {
                       setError("");
                       setStatus("Share link copied! Expires in 1 hour");
                       setTimeout(() => setStatus(""), 3000);
+                      loadShares();
                     })
                     .catch(() => {
                       setError("Failed to copy share link to clipboard");
@@ -838,6 +853,19 @@ export default function Terminal() {
               title="Share terminal output (1hr link)"
             >
               Share
+            </button>}
+
+            {/* Shares — the other half of the Share button. */}
+            {isAdmin && <button
+              onClick={() => { const next = !showShares; setShowShares(next); if (next) loadShares(); }}
+              className={`px-2 py-1 rounded text-xs transition-colors ${
+                showShares
+                  ? "bg-rust-500/20 text-rust-400 border border-rust-500/30"
+                  : "bg-dark-700 text-dark-200 hover:bg-dark-600"
+              }`}
+              title="List and revoke active share links"
+            >
+              Shares
             </button>}
 
             {/* SSH Info — the credentials it prints are for the ROOT account on
@@ -901,6 +929,46 @@ export default function Terminal() {
                 {s.label}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* Active shares — admin only, same reason as the button that opens it. */}
+        {isAdmin && showShares && (
+          <div className="px-3 py-2 bg-dark-900 border-b border-dark-600 space-y-1.5 shrink-0">
+            <p className="text-xs text-dark-300 uppercase font-mono tracking-widest mb-1">
+              Active share links
+            </p>
+            {shares.length === 0 ? (
+              <p className="text-xs text-dark-400 font-mono">No active shares.</p>
+            ) : (
+              shares.map((s) => (
+                <div key={s.share_id} className="flex items-center gap-2 text-xs">
+                  <code className="text-dark-100 font-mono bg-dark-700 px-2 py-0.5 rounded">{s.share_id}</code>
+                  <span className="text-dark-300">
+                    expires in {Math.max(0, Math.round(s.expires_in_seconds / 60))} min
+                  </span>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await api.delete(`/terminal/share/${s.share_id}`);
+                        setError("");
+                        setStatus("Share revoked");
+                        setTimeout(() => setStatus(""), 3000);
+                      } catch (e) {
+                        setError(e instanceof Error ? e.message : "Failed to revoke share");
+                      }
+                      loadShares();
+                    }}
+                    className="text-danger-400 hover:text-danger-300"
+                  >
+                    Revoke
+                  </button>
+                </div>
+              ))
+            )}
+            <p className="text-xs text-dark-400 font-mono">
+              A share link needs no login. Anyone holding the URL can read that output until it expires.
+            </p>
           </div>
         )}
 

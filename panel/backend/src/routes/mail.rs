@@ -1788,24 +1788,111 @@ pub async fn blacklist_check(
         ("psbl.surriel.com", "PSBL"),
     ];
 
+    // A DNSxL says "listed" with an A record and "not listed" with NXDOMAIN, so the
+    // bare `is_ok()` this used to be scored every resolver outage, timeout, transport
+    // failure and retired zone as a clean bill of health. That is the same
+    // confidently-wrong "clean" the missing-address branch above was repaired for,
+    // arriving by the other road, and it is the worse of the two: the operator is told
+    // the server is not on Spamhaus at the moment the panel has in fact asked nobody,
+    // and the per-zone detail is hidden exactly when the verdict is worthless.
+    //
+    // Two things are needed to tell "asked and told no" from "could not ask".
+    //
+    // First, read the ANSWER rather than merely whether one arrived. RFC 5782 §2.1
+    // puts listings in 127.0.0.0/8, and the large zones answer a refused, rate-limited
+    // or unauthenticated query with 127.255.255.0/24 — which is an A record, so
+    // `is_ok()` scores a refusal as a LISTING. Calling a refusal "on Spamhaus" is the
+    // same lie pointing the other way, and it is the one that would have an operator
+    // rebuilding a mail server that was never blacklisted.
+    //
+    // Second, probe each zone with a query whose correct answer is known in advance.
+    // RFC 5782 §5 requires every DNSxL to list the standard test address, so the
+    // reversed form of it below must come back as a listing from any zone that is
+    // reachable and willing to answer us.
+    // When it does not, this zone told us nothing about this IP and the subject lookup
+    // carries no information whatever it returned. That test needs no io::ErrorKind
+    // introspection, which getaddrinfo does not report portably anyway.
+    //
+    // `Some(true)` = the zone answered with a listing; `Some(false)` = the zone
+    // answered "not listed"; `None` = the zone refused us or could not be reached.
+    async fn ask(host: String) -> Option<bool> {
+        let Ok(addrs) = tokio::net::lookup_host(host).await else {
+            return Some(false);
+        };
+        let (mut listing, mut refusal) = (false, false);
+        for addr in addrs {
+            if let std::net::IpAddr::V4(v4) = addr.ip() {
+                let o = v4.octets();
+                if o[0] == 127 {
+                    if o[1] == 255 && o[2] == 255 {
+                        refusal = true;
+                    } else {
+                        listing = true;
+                    }
+                }
+            }
+        }
+        match (listing, refusal) {
+            (true, _) => Some(true),
+            (false, true) => None,
+            (false, false) => Some(false),
+        }
+    }
+
     let mut results = Vec::new();
     for (rbl, name) in &blacklists {
-        let query = format!("{reversed}.{rbl}");
-        let listed = tokio::net::lookup_host(format!("{query}:0")).await.is_ok();
+        // The control and the subject go out together: the pair is one measurement and
+        // sequencing them would only double the wall clock of a page load.
+        let (subject, control) = tokio::join!(
+            ask(format!("{reversed}.{rbl}:0")),
+            ask(format!("2.0.0.127.{rbl}:0")),
+        );
+
+        // A confirmed listing needs no control: an answer inside the listing range is
+        // positive evidence about THIS address, and discarding it because the zone's
+        // test entry did not come back would hide a real blacklisting. The control is
+        // only what licenses the OTHER direction — reading NXDOMAIN as "not listed"
+        // rather than as "nobody answered".
+        let (checked, listed) = match (subject, control) {
+            (Some(true), _) => (true, Some(true)),
+            (Some(false), Some(true)) => (true, Some(false)),
+            _ => (false, None),
+        };
         results.push(serde_json::json!({
             "rbl": rbl,
             "name": name,
-            "listed": listed,
+            "checked": checked,
+            "listed": match listed {
+                Some(v) => serde_json::Value::Bool(v),
+                None => serde_json::Value::Null,
+            },
         }));
     }
 
     let listed_count = results.iter().filter(|r| r["listed"].as_bool() == Some(true)).count();
+    let checked_count = results.iter().filter(|r| r["checked"].as_bool() == Some(true)).count();
+
+    // A single confirmed listing is real evidence and outranks any number of zones we
+    // could not reach. "clean" is reserved for the case where every zone was actually
+    // asked — anything less is `unknown`, which the card must not paint green.
+    let status = if listed_count > 0 {
+        "listed"
+    } else if checked_count == results.len() {
+        "clean"
+    } else {
+        "unknown"
+    };
 
     Ok(Json(serde_json::json!({
         "ip": ip,
         "results": results,
         "listed_count": listed_count,
-        "clean": listed_count == 0,
+        "checked_count": checked_count,
+        "total_count": results.len(),
+        "status": status,
+        // Kept for wire compatibility, and now it means what it says: a `clean` of
+        // false no longer implies a listing, so no consumer may infer one from it.
+        "clean": status == "clean",
     })))
 }
 

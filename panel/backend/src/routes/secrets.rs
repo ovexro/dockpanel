@@ -77,6 +77,58 @@ pub struct CreateVaultRequest {
 pub struct UpdateVaultRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    /// A double option, deliberately. The `COALESCE($n, col)` shape the two fields
+    /// above use can SET a value and can never CLEAR one — the client sends null for
+    /// "none", the handler folds it back onto the stored value, and the save answers
+    /// green having changed nothing. That is the notification-destination defect
+    /// v2.120.0 shipped a fix for, and a link that cannot be removed is worse here
+    /// than a name that cannot be blanked: it decides whose site gets the secrets.
+    ///
+    /// Absent key = leave the link alone. Explicit `null` = unlink.
+    #[serde(default, deserialize_with = "explicit_option")]
+    pub site_id: Option<Option<Uuid>>,
+}
+
+/// Distinguishes "key absent" from "key present and null" for [`UpdateVaultRequest`].
+/// `#[serde(default)]` supplies the outer `None` when the key is missing; this only
+/// ever runs when the key IS present, so it wraps whatever it finds — including null.
+fn explicit_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    serde::Deserialize::deserialize(de).map(Some)
+}
+
+/// A vault may only be linked to a site the caller may already reach.
+///
+/// The deploy-time injector matches vaults to sites on `v.site_id = $1` ALONE, with no
+/// owner test — safe only for as long as nothing can write the column, which was true
+/// while the create form omitted it and stops being true the moment an operator gets a
+/// site picker. Validating on the write side is what keeps that join sound, and it is
+/// the same predicate the rest of the panel uses to decide which sites a caller sees.
+async fn assert_site_reachable(
+    state: &AppState,
+    site_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), ApiError> {
+    let found: Option<(Uuid,)> = sqlx::query_as(&format!(
+        "SELECT s.id FROM sites s WHERE {}",
+        crate::helpers::SITE_CALLER_PREDICATE
+    ))
+    .bind(site_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("verify vault site", e))?;
+
+    if found.is_none() {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "That site does not exist, or it belongs to another account.",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(serde::Deserialize)]
@@ -160,6 +212,10 @@ pub async fn create_vault(
         return Err(err(StatusCode::BAD_REQUEST, "Name must be 1-100 characters"));
     }
 
+    if let Some(site_id) = req.site_id {
+        assert_site_reachable(&state, site_id, claims.sub).await?;
+    }
+
     let vault: SecretVault = sqlx::query_as(
         "INSERT INTO secret_vaults (user_id, name, description, site_id) VALUES ($1, $2, $3, $4) RETURNING *"
     )
@@ -209,14 +265,23 @@ pub async fn update_vault(
         }
     }
 
+    if let Some(Some(site_id)) = req.site_id {
+        assert_site_reachable(&state, site_id, claims.sub).await?;
+    }
+
+    // `$5` carries "was the key present at all", so an explicit null unlinks while an
+    // absent key leaves the existing link untouched. COALESCE cannot express that.
     let vault: Option<SecretVault> = sqlx::query_as(
         "UPDATE secret_vaults SET name = COALESCE($1, name), description = COALESCE($2, description), \
+         site_id = CASE WHEN $5 THEN $6::uuid ELSE site_id END, \
          updated_at = NOW() WHERE id = $3 AND user_id = $4 RETURNING *"
     )
     .bind(&req.name)
     .bind(&req.description)
     .bind(id)
     .bind(claims.sub)
+    .bind(req.site_id.is_some())
+    .bind(req.site_id.flatten())
     .fetch_optional(&state.db).await
     .map_err(|e| internal_error("update vault", e))?;
 

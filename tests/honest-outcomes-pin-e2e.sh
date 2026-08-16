@@ -87,11 +87,22 @@ for fn in sorted(os.listdir(d)):
         continue
     src = strip(open(os.path.join(d, fn)).read())
 
-    # Form 1 — inline on a column definition: `<col> UUID ... REFERENCES users(id) ...`
+    # Form 1 — inline on a column definition: `<col> UUID ... REFERENCES <parent>(id) ...`
     # The statement ends at the next comma or the closing paren of CREATE TABLE.
-    for m in re.finditer(r'(\w+)\s+UUID[^,\)]*?REFERENCES\s+users\s*\(\s*id\s*\)([^,\)]*)', src, re.I):
+    #
+    # The parent table is a WILDCARD, and that widening is the point. This arm was
+    # written naming `users`, so the release that added it could not see the two
+    # remaining bare links in the schema — they pointed at `servers`, and an account
+    # that could not be deleted got a guard while a server that could not be deleted
+    # did not. A census that names one parent measures one parent.
+    #
+    # Every foreign-key column in the live catalogue is UUID (112 of 112, checked
+    # against pg_constraint rather than assumed), so restricting form 1 to UUID
+    # columns costs no coverage today; if that ever stops being true this arm
+    # under-counts, which is what the control below exists to catch.
+    for m in re.finditer(r'(\w+)\s+UUID[^,\)]*?REFERENCES\s+(\w+)\s*\(\s*id\s*\)([^,\)]*)', src, re.I):
         total += 1
-        col, tail = m.group(1).lower(), m.group(2)
+        col, tail = m.group(1).lower(), m.group(3)
         tbl = None
         head = src[:m.start()]
         t = re.findall(r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)', head, re.I)
@@ -105,9 +116,9 @@ for fn in sorted(os.listdir(d)):
     # Form 2 — an ALTER that adds the constraint explicitly.
     for m in re.finditer(
             r'ALTER\s+TABLE\s+(\w+)\s+ADD\s+CONSTRAINT\s+\w+\s+FOREIGN\s+KEY\s*\(\s*(\w+)\s*\)\s*'
-            r'REFERENCES\s+users\s*\(\s*id\s*\)([^;]*)', src, re.I):
+            r'REFERENCES\s+(\w+)\s*\(\s*id\s*\)([^;]*)', src, re.I):
         total += 1
-        tbl, col, tail = m.group(1).lower(), m.group(2).lower(), m.group(3)
+        tbl, col, tail = m.group(1).lower(), m.group(2).lower(), m.group(4)
         if re.search(r'ON\s+DELETE', tail, re.I):
             repaired.add((tbl, col))
         else:
@@ -128,17 +139,17 @@ FK_VIOL=$(printf '%s' "$FK_REPORT"    | $G -oE '^VIOLATIONS=[0-9]+' | cut -d= -f
 # POSITIVE CONTROL, and it comes first: an empty or failed scan reports zero
 # violations, which is indistinguishable from a healthy tree. A parse that finds
 # implausibly few account links has not measured anything (lessons #480, #532).
-if [ -n "${FK_TOTAL:-}" ] && [ "$FK_TOTAL" -ge 25 ]; then
-  ok "A1-control the migration scan found $FK_TOTAL account foreign keys, $FK_REPAIR carrying a delete action"
+if [ -n "${FK_TOTAL:-}" ] && [ "$FK_TOTAL" -ge 90 ]; then
+  ok "A1-control the migration scan found $FK_TOTAL foreign keys, $FK_REPAIR carrying a delete action"
 else
-  bad "A1-control the migration scan found $FK_TOTAL account foreign keys, $FK_REPAIR carrying a delete action" \
-      "fewer than 25 — the scan is broken, so A1 below measured nothing"
+  bad "A1-control the migration scan found $FK_TOTAL foreign keys, $FK_REPAIR carrying a delete action" \
+      "fewer than 90 — the scan is broken, so A1 below measured nothing"
 fi
 
 if [ "${FK_VIOL:-1}" = "0" ]; then
-  ok "A1 every account foreign key declares a delete action"
+  ok "A1 every foreign key declares a delete action"
 else
-  bad "A1 every account foreign key declares a delete action" \
+  bad "A1 every foreign key declares a delete action" \
       "$FK_VIOL never repaired: $(printf '%s' "$FK_REPORT" | $G -E '^  ' | tr -d ' ' | tr '\n' ' ')"
 fi
 

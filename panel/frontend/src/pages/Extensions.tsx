@@ -47,6 +47,11 @@ export default function Extensions() {
   const [error, setError] = useState("");
   const [testResult, setTestResult] = useState("");
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  // The remedy for a leaked webhook signing secret. The handler has always existed and
+  // has always been audit-logged; without a control the only options were deleting the
+  // extension — losing its identity and its delivery history — or hand-crafting a curl.
+  const [pendingRotate, setPendingRotate] = useState<{ id: string; name: string } | null>(null);
+  const [rotated, setRotated] = useState<{ name: string; webhook_secret: string } | null>(null);
   const [creating, setCreating] = useState(false);
   const [newKey, setNewKey] = useState<{ api_key: string; webhook_secret: string } | null>(null);
 
@@ -94,6 +99,19 @@ export default function Extensions() {
       await fetchExtensions();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Failed to create");
+    }
+  };
+
+  const executeRotate = async () => {
+    if (!pendingRotate) return;
+    const { id, name } = pendingRotate;
+    setPendingRotate(null);
+    try {
+      const res = await api.post<{ webhook_secret: string }>(`/extensions/${id}/rotate-secret`);
+      setError("");
+      setRotated({ name, webhook_secret: res.webhook_secret });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to rotate webhook secret");
     }
   };
 
@@ -167,6 +185,27 @@ export default function Extensions() {
             <button onClick={executeDelete} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Confirm</button>
             <button onClick={() => setPendingDelete(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
           </div>
+        </div>
+      )}
+      {pendingRotate && (
+        <div className="border border-warn-500/30 bg-warn-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
+          <span className="text-xs text-warn-400 font-mono">
+            Rotate the webhook secret for "{pendingRotate.name}"? Deliveries signed with the old secret will stop verifying immediately.
+          </span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeRotate} className="px-3 py-1.5 bg-warn-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-warn-600 transition-colors">Confirm</button>
+            <button onClick={() => setPendingRotate(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
+          </div>
+        </div>
+      )}
+      {rotated && (
+        <div className="bg-rust-500/10 border border-rust-500/30 rounded-lg p-5 space-y-3">
+          <h3 className="text-sm font-bold text-rust-400">New Webhook Secret for "{rotated.name}" — Shown Once</h3>
+          <div className="flex gap-2">
+            <code className="flex-1 px-3 py-2 bg-dark-900 rounded text-sm text-dark-50 font-mono">{rotated.webhook_secret}</code>
+            <button onClick={() => navigator.clipboard.writeText(rotated.webhook_secret)} className="px-3 py-2 bg-dark-700 text-dark-200 rounded text-xs hover:bg-dark-600">Copy</button>
+          </div>
+          <button onClick={() => setRotated(null)} className="text-xs text-dark-400 hover:text-dark-200">Dismiss</button>
         </div>
       )}
       {testResult && <div className="px-4 py-3 bg-dark-700 border border-dark-500 rounded-lg text-sm text-dark-100">{testResult}</div>}
@@ -277,6 +316,9 @@ export default function Extensions() {
                 </button>
                 <button onClick={() => handleViewEvents(ext.id)} className="px-3 py-1.5 bg-dark-700 text-dark-200 rounded text-xs font-medium hover:bg-dark-600 transition-colors">
                   Events
+                </button>
+                <button onClick={() => setPendingRotate({ id: ext.id, name: ext.name })} className="px-3 py-1.5 bg-dark-700 text-dark-200 rounded text-xs font-medium hover:bg-dark-600 transition-colors" title="Issue a new webhook signing secret">
+                  Rotate Secret
                 </button>
                 <button onClick={() => handleDelete(ext.id, ext.name)} className="px-3 py-1.5 bg-danger-500/10 text-danger-400 rounded text-xs font-medium hover:bg-danger-500/20 transition-colors">
                   Delete

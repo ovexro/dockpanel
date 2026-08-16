@@ -617,7 +617,29 @@ pub async fn delete_maintenance(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // `AND user_id = $2` is the authorization — a caller can only delete a window
     // they own, which is the same rule the gate above used to approximate.
-    sqlx::query("DELETE FROM maintenance_windows WHERE id = $1 AND user_id = $2").bind(id).bind(claims.sub).execute(&state.db).await.ok();
+    //
+    // The result is checked rather than discarded, and the reason is not tidiness.
+    // `uptime.rs` skips EVERY monitor belonging to a user with a currently-active
+    // window, so a window that outlives its "Maintenance window deleted" message
+    // leaves that whole account with no uptime checks, no downtime detection and no
+    // alerts — and the ordinary trigger for pressing delete is finishing maintenance
+    // early to resume exactly those. Reporting success for a row that is still there
+    // is the one answer the panel must not give here.
+    let deleted = sqlx::query("DELETE FROM maintenance_windows WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(claims.sub)
+        .execute(&state.db)
+        .await
+        .map_err(|e| internal_error("delete maintenance window", e))?;
+
+    if deleted.rows_affected() == 0 {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "That maintenance window no longer exists, or it belongs to another account. \
+             Monitoring is unchanged — reload the list before retrying.",
+        ));
+    }
+
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

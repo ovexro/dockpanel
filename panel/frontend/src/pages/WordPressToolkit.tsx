@@ -39,6 +39,22 @@ interface SecurityCheckResponse {
   checks?: SecurityItem[];
 }
 
+// One row of the per-site verdict POST /wordpress/bulk-update returns inside its 200.
+interface BulkUpdateResult {
+  site_id: string;
+  domain?: string;
+  ok: boolean;
+  updated?: number;
+  message?: string;
+}
+
+// One row of the per-fix verdict the agent returns for a hardening run.
+interface HardenResult {
+  name: string;
+  applied: boolean;
+  message: string;
+}
+
 export default function WordPressToolkit() {
   const { user } = useAuth();
   if (!user || user.role !== "admin") return <Navigate to="/" replace />;
@@ -77,14 +93,37 @@ export default function WordPressToolkit() {
     setUpdating(true);
     setError("");
     try {
-      await api.post("/wordpress/bulk-update", {
+      // `selected.size` is how many boxes were ticked, which is not how many sites
+      // updated. The handler answers 200 with a per-site verdict even when every entry
+      // is `ok: false` — an offline agent, a missing wp-cli, or the wrong server in the
+      // switcher resolving every site to "Site not found" — so counting the selection
+      // reports a clean sweep for a run in which nothing happened.
+      const res = await api.post<{ results?: BulkUpdateResult[] }>("/wordpress/bulk-update", {
         site_ids: Array.from(selected),
         target,
       });
       await fetchSites();
-      setError("");
-      setSuccess(`Updated ${selected.size} site(s) successfully`);
       setSelected(new Set());
+
+      const results = res.results ?? [];
+      const failed = results.filter((r) => !r.ok);
+      const succeeded = results.length - failed.length;
+
+      if (results.length === 0) {
+        setSuccess("");
+        setError("The server accepted the request but reported on no sites.");
+      } else if (failed.length === 0) {
+        setError("");
+        setSuccess(`Updated ${succeeded} site(s) successfully`);
+      } else {
+        setSuccess("");
+        setError(
+          `Updated ${succeeded} of ${results.length} site(s). Failed: ` +
+            failed
+              .map((r) => `${r.domain ?? r.site_id} (${r.message || "unknown error"})`)
+              .join("; ")
+        );
+      }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Bulk update failed");
     } finally {
@@ -132,8 +171,28 @@ export default function WordPressToolkit() {
     setHardening(siteId);
     setError("");
     try {
-      await api.post(`/sites/${siteId}/wordpress/harden`, { fixes });
-      setSuccess("Hardening applied successfully");
+      // Every failure path in the agent — wp-cli missing, chmod refused, an unwritable
+      // uploads/.htaccess, an unrecognised fix name — returns `applied: false` inside a
+      // 200, so an unbound response means a blanket success banner is printed over a
+      // run in which nothing was applied. On a security checklist that is the reading
+      // an operator acts on and then stops looking.
+      const res = await api.post<HardenResult[]>(`/sites/${siteId}/wordpress/harden`, { fixes });
+      const results = Array.isArray(res) ? res : [];
+      const failed = results.filter((r) => !r.applied);
+
+      if (results.length === 0) {
+        setSuccess("");
+        setError("The server accepted the request but reported no fixes applied.");
+      } else if (failed.length === 0) {
+        setError("");
+        setSuccess(`Hardening applied (${results.length} fix(es))`);
+      } else {
+        setSuccess("");
+        setError(
+          `Applied ${results.length - failed.length} of ${results.length} fix(es). Not applied: ` +
+            failed.map((r) => `${r.name} (${r.message || "no reason given"})`).join("; ")
+        );
+      }
       // Re-check after hardening
       await handleSecurityCheck(siteId);
     } catch (e) {

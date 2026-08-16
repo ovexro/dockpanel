@@ -1268,8 +1268,8 @@ function PoliciesTab({ onMessage }: { onMessage: (m: { text: string; type: strin
               Ordered chain of `(after_minutes, route)` steps. Step 0 fires
               immediately when an alert is created. Subsequent steps fire if
               the alert isn't acknowledged by their threshold. Attach a policy
-              to an alert rule from the alert-rules editor; without one, the
-              pre-W3 default of 15-min unack → 30-min re-page applies.
+              under Settings → Notifications; without one, the pre-W3 default
+              of 15-min unack → 30-min re-page applies.
             </p>
           </div>
           <button

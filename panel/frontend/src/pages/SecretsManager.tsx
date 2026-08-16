@@ -57,7 +57,12 @@ export default function SecretsManager() {
 
   // Vault form
   const [showVaultForm, setShowVaultForm] = useState(false);
-  const [vaultForm, setVaultForm] = useState({ name: "", description: "" });
+  const [vaultForm, setVaultForm] = useState({ name: "", description: "", site_id: "" });
+  // Auto-inject is decided ENTIRELY by which site a vault is linked to — the deploy
+  // injector selects secrets whose vault carries the site being deployed. Without a
+  // way to set that link, every "Auto-inject" tick on this page was inert, so the
+  // picker below is what makes the checkbox mean anything.
+  const [siteOptions, setSiteOptions] = useState<{ id: string; domain: string }[]>([]);
 
   // Secret form
   const [showSecretForm, setShowSecretForm] = useState(false);
@@ -69,10 +74,18 @@ export default function SecretsManager() {
 
   // Vault edit form
   const [editingVault, setEditingVault] = useState<string | null>(null);
-  const [editVaultForm, setEditVaultForm] = useState({ name: "", description: "" });
+  const [editVaultForm, setEditVaultForm] = useState({ name: "", description: "", site_id: "" });
 
   useEffect(() => { loadVaults(); }, []);
   useEffect(() => { if (selectedVault) loadSecrets(); }, [selectedVault, reveal]);
+  useEffect(() => {
+    // Failing to load the site list must not break the page — a vault with no link is
+    // still a usable vault, so the picker degrades to "(not linked)" rather than
+    // blocking vault management behind an unrelated endpoint.
+    api.get<{ id: string; domain: string }[]>("/sites")
+      .then(s => setSiteOptions(s.map(({ id, domain }) => ({ id, domain }))))
+      .catch(() => setSiteOptions([]));
+  }, []);
 
   const loadVaults = async () => {
     setLoading(true);
@@ -99,11 +112,15 @@ export default function SecretsManager() {
 
   const createVault = async () => {
     try {
-      const v = await api.post<Vault>("/secrets/vaults", vaultForm);
+      const v = await api.post<Vault>("/secrets/vaults", {
+        name: vaultForm.name,
+        description: vaultForm.description,
+        site_id: vaultForm.site_id || null,
+      });
       setVaults([v, ...vaults]);
       setSelectedVault(v.id);
       setShowVaultForm(false);
-      setVaultForm({ name: "", description: "" });
+      setVaultForm({ name: "", description: "", site_id: "" });
       setMessage({ text: "Vault created", type: "success" });
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
@@ -126,6 +143,10 @@ export default function SecretsManager() {
       await api.put(`/secrets/vaults/${editingVault}`, {
         name: editVaultForm.name || undefined,
         description: editVaultForm.description || undefined,
+        // Always sent, and null when the picker is on "(not linked)" — the handler
+        // reads an absent key as "leave it alone" and an explicit null as "unlink",
+        // so this is what lets a link be removed as well as set.
+        site_id: editVaultForm.site_id || null,
       });
       setEditingVault(null);
       setMessage({ text: "Vault updated", type: "success" });
@@ -219,6 +240,17 @@ export default function SecretsManager() {
                 className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-sm font-mono text-dark-50 outline-none" />
             </div>
           </div>
+          <div>
+            <label className="block text-xs font-medium text-dark-100 mb-1 font-mono">Linked site</label>
+            <select value={vaultForm.site_id} onChange={e => setVaultForm({ ...vaultForm, site_id: e.target.value })}
+              className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-sm font-mono text-dark-50 outline-none">
+              <option value="">(not linked)</option>
+              {siteOptions.map(s => <option key={s.id} value={s.id}>{s.domain}</option>)}
+            </select>
+            <p className="text-xs text-dark-300 mt-1 font-mono">
+              Secrets marked auto-inject are written into this site's .env on deploy. A vault with no linked site never injects anywhere.
+            </p>
+          </div>
           <div className="flex justify-end">
             <button onClick={createVault} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium font-mono hover:bg-rust-600">Create Vault</button>
           </div>
@@ -242,6 +274,14 @@ export default function SecretsManager() {
                     <input type="text" value={editVaultForm.description} onChange={e => setEditVaultForm({ ...editVaultForm, description: e.target.value })}
                       className="w-full px-2 py-1 bg-dark-900 border border-dark-500 rounded text-sm font-mono text-dark-50 outline-none" />
                   </div>
+                  <div>
+                    <label className="block text-xs font-medium text-dark-100 mb-1 font-mono">Linked site</label>
+                    <select value={editVaultForm.site_id} onChange={e => setEditVaultForm({ ...editVaultForm, site_id: e.target.value })}
+                      className="w-full px-2 py-1 bg-dark-900 border border-dark-500 rounded text-sm font-mono text-dark-50 outline-none">
+                      <option value="">(not linked)</option>
+                      {siteOptions.map(s => <option key={s.id} value={s.id}>{s.domain}</option>)}
+                    </select>
+                  </div>
                   <div className="flex justify-end gap-1">
                     <button onClick={() => setEditingVault(null)} className="px-2 py-1 text-dark-200 text-xs font-mono">Cancel</button>
                     <button onClick={updateVault} className="px-2 py-1 bg-accent-500 text-white rounded text-xs font-medium font-mono">Save</button>
@@ -256,9 +296,14 @@ export default function SecretsManager() {
                   <div>
                     <p className="text-sm text-dark-50 font-mono">{v.name}</p>
                     {v.description && <p className="text-xs text-dark-300 font-mono">{v.description}</p>}
+                    <p className="text-xs font-mono text-dark-400">
+                      {v.site_id
+                        ? (siteOptions.find(s => s.id === v.site_id)?.domain ?? "linked site")
+                        : "not linked — will not inject"}
+                    </p>
                   </div>
                   <div className="flex gap-1 opacity-0 group-hover:opacity-100">
-                    <button onClick={e => { e.stopPropagation(); setEditingVault(v.id); setEditVaultForm({ name: v.name, description: v.description || "" }); }}
+                    <button onClick={e => { e.stopPropagation(); setEditingVault(v.id); setEditVaultForm({ name: v.name, description: v.description || "", site_id: v.site_id || "" }); }}
                       className="text-dark-400 hover:text-accent-400 text-xs">
                       Edit
                     </button>

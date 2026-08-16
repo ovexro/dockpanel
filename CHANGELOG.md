@@ -4,6 +4,81 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.121.0]
+
+### Fixed — a server that had ever hosted an app migration could never be deleted
+
+Across the whole schema there were exactly two foreign keys that could block a
+delete, and both pointed at `servers` from `app_migrations`. Starting an app
+migration therefore made **both** the source and the target server permanently
+undeletable: the delete raised inside its own transaction and reached the operator
+as `Internal error (ref: …)`, with nothing naming the cause. There was no way out
+through the product — `app_migrations` has one writer and no DELETE or UPDATE
+anywhere in the repository, so the blocking row was permanent by construction.
+
+This is the same defect v2.120.0 repaired for user accounts, one parent table over.
+The regression pin that release added enumerated foreign keys to `users` **by
+name**, so it could not see these two; it now enumerates every parent table, and
+would have caught them.
+
+### Fixed — the mail Reputation card said "Clean" when no blacklist had answered
+
+A DNSxL reports a listing with an address record and a non-listing with NXDOMAIN,
+so treating "the lookup succeeded" as the whole verdict scored a dead resolver, a
+timeout, a rate-limited zone and a retired zone as a clean bill of health. The
+per-zone detail panel was gated on the verdict, so it hid exactly when the verdict
+was worthless.
+
+Each zone is now probed with a query whose correct answer is fixed by RFC 5782, and
+a zone that fails that probe is reported as unanswered rather than folded into
+either verdict. The response carries `checked` per zone and a three-state `status`;
+`clean` now requires that every zone actually answered. Refusal codes in
+`127.255.255.0/24` are no longer read as listings, which was the same lie pointing
+the other way.
+
+### Fixed — bulk WordPress updates and hardening reported successes they never had
+
+Bulk update announced "Updated N site(s) successfully" where N was the number of
+ticked checkboxes; the handler answers 200 carrying a per-site verdict even when
+every entry failed, and the client never read it. Security hardening announced a
+blanket success over runs in which every requested fix reported that it had not
+been applied. Both now report what actually happened, and name the sites and fixes
+that did not.
+
+### Fixed — deleting a maintenance window answered "deleted" without checking
+
+The statement's result was discarded, so a database error or a window belonging to
+another account both answered green. That is not cosmetic: an active maintenance
+window suppresses uptime checks for the **entire account**, so a window that
+outlived its own success message left that account with no downtime detection and
+no alerts.
+
+### Added — four controls that existed only as endpoints
+
+Complete, routed, ownership-scoped handlers that no screen could reach:
+
+- **Escalation policies can now be attached to an alert rule**, under Settings →
+  Notifications. The Alerts page had been telling operators to do this for several
+  releases while no such control existed, so every rule kept the default cadence no
+  matter how many chains were built.
+- **Terminal shares can be listed and revoked.** A share is an unauthenticated
+  public URL carrying whatever was on screen, and until now creating one was a
+  button while closing one was not reachable at all.
+- **Extension webhook secrets can be rotated** from the Extensions page.
+- **A secrets vault can be linked to a site**, which is what decides auto-injection
+  — without it every "auto-inject" tick on that page was inert. The link is
+  ownership-checked on the write side, because the deploy-time injector matches
+  vaults to sites on that column alone.
+
+### Changed — point-in-time recovery is withdrawn rather than advertised
+
+Nothing archives anything: `db_pitr_config` is touched by exactly two statements,
+both of them the config endpoints that store the toggle and read it back for
+display. No WAL archiving or binlog retention is configured anywhere, and the
+restore endpoint has returned an explicit 501 since v2.19.0. The toggle now says
+what it stores, and the claim is recorded in FEATURES.md §Withdrawn Claims instead
+of being sold in the README.
+
 ## [2.120.0]
 
 ### Fixed — an account that had ever scheduled a maintenance window could never be deleted
