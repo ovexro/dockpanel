@@ -290,6 +290,10 @@ export default function BackupOrchestrator() {
   // Non-null while an existing policy is loaded into the form for editing.
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null);
   const [protectAllBusy, setProtectAllBusy] = useState(false);
+  // Two-step confirms for the destructive backup controls. Separate ids because a
+  // restore and a delete on the same row must not share one armed state.
+  const [pendingRestoreId, setPendingRestoreId] = useState<string | null>(null);
+  const [pendingDeleteBackupId, setPendingDeleteBackupId] = useState<string | null>(null);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -598,6 +602,52 @@ export default function BackupOrchestrator() {
     }
   };
 
+  // Restore and delete: the three doors this page listed backups behind and never
+  // opened. `restore_db_backup`, `restore_volume_backup` and `delete_db_backup` have
+  // been complete, ownership-scoped and server-pinned for months with zero callers —
+  // so the page could prove a backup restorable with a drill and still leave the
+  // operator no way to actually restore it. A drill restores into a scratch
+  // container; these overwrite the live database or volume, which is why both sit
+  // behind the same in-row confirm the drill uses and say what they overwrite.
+  const restoreDbBackup = async (b: DatabaseBackup) => {
+    setPendingRestoreId(null);
+    try {
+      setMessage({ text: `Restoring ${b.db_name} from ${b.filename}...`, type: "success" });
+      await api.post(`/backup-orchestrator/db-backups/${b.id}/restore`);
+      setMessage({ text: `Database ${b.db_name} restored from ${b.filename}`, type: "success" });
+      loadAll();
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Restore failed", type: "error" });
+    }
+  };
+
+  const restoreVolumeBackup = async (b: VolumeBackup) => {
+    setPendingRestoreId(null);
+    try {
+      setMessage({ text: `Restoring volume ${b.volume_name} from ${b.filename}...`, type: "success" });
+      await api.post(`/backup-orchestrator/volume-backups/${b.id}/restore`);
+      setMessage({ text: `Volume ${b.volume_name} restored from ${b.filename}`, type: "success" });
+      loadAll();
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Restore failed", type: "error" });
+    }
+  };
+
+  // Delete exists for database backups only — there is no volume-backup delete
+  // endpoint, so the volume table deliberately offers no delete button rather than
+  // a control that would 404.
+  const deleteDbBackup = async (b: DatabaseBackup) => {
+    setPendingDeleteBackupId(null);
+    try {
+      await api.delete(`/backup-orchestrator/db-backups/${b.id}`);
+      setDbBackups(prev => prev.filter(x => x.id !== b.id));
+      setMessage({ text: `Backup ${b.filename} deleted`, type: "success" });
+      loadAll();
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Delete failed", type: "error" });
+    }
+  };
+
   const triggerDrill = async (backupId: string, backupType: "site" | "database" | "volume") => {
     try {
       await api.post("/backup-orchestrator/drill", { backup_type: backupType, backup_id: backupId });
@@ -695,9 +745,16 @@ export default function BackupOrchestrator() {
       )}
       {tab === "databases" && (
         <DatabasesTab backups={dbBackups} databases={databases}
-          onCreateBackup={createDbBackup} onVerify={triggerVerify} />
+          onCreateBackup={createDbBackup} onVerify={triggerVerify}
+          onRestore={restoreDbBackup} onDelete={deleteDbBackup}
+          pendingRestoreId={pendingRestoreId} setPendingRestoreId={setPendingRestoreId}
+          pendingDeleteId={pendingDeleteBackupId} setPendingDeleteId={setPendingDeleteBackupId} />
       )}
-      {tab === "volumes" && <VolumesTab backups={volBackups} onVerify={triggerVerify} />}
+      {tab === "volumes" && (
+        <VolumesTab backups={volBackups} onVerify={triggerVerify}
+          onRestore={restoreVolumeBackup}
+          pendingRestoreId={pendingRestoreId} setPendingRestoreId={setPendingRestoreId} />
+      )}
       {tab === "verifications" && <VerificationsTab verifications={verifications} />}
       {tab === "drills" && (
         <DrillsTab
@@ -1531,10 +1588,14 @@ function PoliciesTab({
 // ── Database Backups Tab ──────────────────────────────────────────────────
 
 function DatabasesTab({
-  backups, databases, onCreateBackup, onVerify
+  backups, databases, onCreateBackup, onVerify,
+  onRestore, onDelete, pendingRestoreId, setPendingRestoreId, pendingDeleteId, setPendingDeleteId
 }: {
   backups: DatabaseBackup[]; databases: Database[];
   onCreateBackup: (id: string) => void; onVerify: (type: string, id: string) => void;
+  onRestore: (b: DatabaseBackup) => void; onDelete: (b: DatabaseBackup) => void;
+  pendingRestoreId: string | null; setPendingRestoreId: (id: string | null) => void;
+  pendingDeleteId: string | null; setPendingDeleteId: (id: string | null) => void;
 }) {
   return (
     <div className="space-y-4">
@@ -1580,10 +1641,54 @@ function DatabasesTab({
                   </td>
                   <td className="px-5 py-4 text-xs text-dark-300 font-mono">{formatDate(b.created_at)}</td>
                   <td className="px-5 py-4">
-                    <button onClick={() => onVerify("database", b.id)}
-                      className="px-3 py-1 bg-accent-500/10 text-accent-400 rounded-md text-xs font-medium font-mono hover:bg-accent-500/20 transition-colors">
-                      Verify
-                    </button>
+                    {pendingRestoreId === b.id ? (
+                      <div className="inline-flex items-center gap-1.5">
+                        <span className="text-[10px] text-danger-400 font-mono mr-1">
+                          Overwrites the live {b.db_name} database
+                        </span>
+                        <button type="button" onClick={() => onRestore(b)}
+                          className="px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider bg-danger-500/10 hover:bg-danger-500/20 text-danger-400 border border-danger-500/40 rounded">
+                          Restore
+                        </button>
+                        <button type="button" onClick={() => setPendingRestoreId(null)}
+                          className="px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider bg-dark-700 hover:bg-dark-600 text-dark-200 rounded">
+                          Cancel
+                        </button>
+                      </div>
+                    ) : pendingDeleteId === b.id ? (
+                      <div className="inline-flex items-center gap-1.5">
+                        <span className="text-[10px] text-danger-400 font-mono mr-1">
+                          Deletes the archive and its record
+                        </span>
+                        <button type="button" onClick={() => onDelete(b)}
+                          className="px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider bg-danger-500/10 hover:bg-danger-500/20 text-danger-400 border border-danger-500/40 rounded">
+                          Delete
+                        </button>
+                        <button type="button" onClick={() => setPendingDeleteId(null)}
+                          className="px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider bg-dark-700 hover:bg-dark-600 text-dark-200 rounded">
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="inline-flex items-center gap-1.5">
+                        <button onClick={() => onVerify("database", b.id)}
+                          className="px-3 py-1 bg-accent-500/10 text-accent-400 rounded-md text-xs font-medium font-mono hover:bg-accent-500/20 transition-colors">
+                          Verify
+                        </button>
+                        <button type="button"
+                          onClick={() => { setPendingDeleteId(null); setPendingRestoreId(b.id); }}
+                          title="Restore this dump over the live database it was taken from"
+                          className="px-3 py-1 bg-warn-500/10 text-warn-400 rounded-md text-xs font-medium font-mono hover:bg-warn-500/20 transition-colors">
+                          Restore
+                        </button>
+                        <button type="button"
+                          onClick={() => { setPendingRestoreId(null); setPendingDeleteId(b.id); }}
+                          title="Delete this archive from the host that holds it, and its record"
+                          className="px-3 py-1 bg-dark-700 text-dark-200 rounded-md text-xs font-medium font-mono hover:bg-danger-500/20 hover:text-danger-400 transition-colors">
+                          Delete
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -1597,7 +1702,13 @@ function DatabasesTab({
 
 // ── Volume Backups Tab ────────────────────────────────────────────────────
 
-function VolumesTab({ backups, onVerify }: { backups: VolumeBackup[]; onVerify: (type: string, id: string) => void }) {
+function VolumesTab({
+  backups, onVerify, onRestore, pendingRestoreId, setPendingRestoreId
+}: {
+  backups: VolumeBackup[]; onVerify: (type: string, id: string) => void;
+  onRestore: (b: VolumeBackup) => void;
+  pendingRestoreId: string | null; setPendingRestoreId: (id: string | null) => void;
+}) {
   return backups.length === 0 ? (
     <div className="p-12 text-center">
       <p className="text-dark-200 text-sm font-mono">No volume backups yet</p>
@@ -1622,10 +1733,33 @@ function VolumesTab({ backups, onVerify }: { backups: VolumeBackup[]; onVerify: 
               <td className="px-5 py-4 text-sm text-dark-200 font-mono">{formatSize(b.size_bytes)}</td>
               <td className="px-5 py-4 text-xs text-dark-300 font-mono">{formatDate(b.created_at)}</td>
               <td className="px-5 py-4">
-                <button onClick={() => onVerify("volume", b.id)}
-                  className="px-3 py-1 bg-accent-500/10 text-accent-400 rounded-md text-xs font-medium font-mono hover:bg-accent-500/20 transition-colors">
-                  Verify
-                </button>
+                {pendingRestoreId === b.id ? (
+                  <div className="inline-flex items-center gap-1.5">
+                    <span className="text-[10px] text-danger-400 font-mono mr-1">
+                      Unpacks over the live {b.volume_name} volume
+                    </span>
+                    <button type="button" onClick={() => onRestore(b)}
+                      className="px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider bg-danger-500/10 hover:bg-danger-500/20 text-danger-400 border border-danger-500/40 rounded">
+                      Restore
+                    </button>
+                    <button type="button" onClick={() => setPendingRestoreId(null)}
+                      className="px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider bg-dark-700 hover:bg-dark-600 text-dark-200 rounded">
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div className="inline-flex items-center gap-1.5">
+                    <button onClick={() => onVerify("volume", b.id)}
+                      className="px-3 py-1 bg-accent-500/10 text-accent-400 rounded-md text-xs font-medium font-mono hover:bg-accent-500/20 transition-colors">
+                      Verify
+                    </button>
+                    <button type="button" onClick={() => setPendingRestoreId(b.id)}
+                      title="Unpack this archive over the live volume it was taken from"
+                      className="px-3 py-1 bg-warn-500/10 text-warn-400 rounded-md text-xs font-medium font-mono hover:bg-warn-500/20 transition-colors">
+                      Restore
+                    </button>
+                  </div>
+                )}
               </td>
             </tr>
           ))}

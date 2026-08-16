@@ -24,6 +24,14 @@ export default function Servers() {
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [pendingRotate, setPendingRotate] = useState<{ id: string; name: string } | null>(null);
   const [rotateResult, setRotateResult] = useState<Record<string, string>>({});
+  // Agent-token rotation is a different control from the TLS-pin rotation beside it:
+  // the pin is a fingerprint the next checkin re-captures, the token is the agent's
+  // own credential. That endpoint has existed and been documented in api-reference.md
+  // since the fleet shipped, with nothing in the panel calling it — so an operator who
+  // suspected a leaked agent token had no in-product way to rotate one.
+  // (The path is spelled ONCE below, in the call. A pin counts raw source, so a second
+  // spelling in this comment would satisfy it on its own — the s346 prose trap.)
+  const [pendingTokenRotate, setPendingTokenRotate] = useState<{ id: string; name: string } | null>(null);
 
   const handleCreate = useCallback(async () => {
     if (!form.name.trim()) return;
@@ -68,6 +76,19 @@ export default function Servers() {
       setRotateResult((prev) => ({ ...prev, [id]: e instanceof ApiError ? e.message : "Rotate failed" }));
     }
   }, [pendingRotate, refreshServers]);
+
+  const executeTokenRotate = useCallback(async () => {
+    if (!pendingTokenRotate) return;
+    const { id } = pendingTokenRotate;
+    setPendingTokenRotate(null);
+    try {
+      await api.post(`/servers/${id}/rotate-token`);
+      setRotateResult((prev) => ({ ...prev, [id]: "Agent token rotated — the panel is already using the new one." }));
+      await refreshServers();
+    } catch (e) {
+      setRotateResult((prev) => ({ ...prev, [id]: e instanceof ApiError ? e.message : "Token rotation failed" }));
+    }
+  }, [pendingTokenRotate, refreshServers]);
 
   const handleTest = useCallback(async (id: string) => {
     setTesting(id);
@@ -159,6 +180,16 @@ export default function Servers() {
           <div className="flex items-center gap-2 shrink-0 ml-4">
             <button onClick={executeRotate} className="px-3 py-1.5 bg-warn-500 text-dark-950 text-xs font-bold uppercase tracking-wider hover:bg-warn-400 transition-colors">Rotate</button>
             <button onClick={() => setPendingRotate(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {pendingTokenRotate && (
+        <div className="border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
+          <span className="text-xs text-danger-400 font-mono">Rotate the AGENT TOKEN for "{pendingTokenRotate.name}"? The panel asks the agent to mint a new one and stores it. Do this if the token may have leaked. The old token stops working immediately, so if the agent is unreachable the rotation fails and nothing changes.</span>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button onClick={executeTokenRotate} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Rotate token</button>
+            <button onClick={() => setPendingTokenRotate(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
           </div>
         </div>
       )}
@@ -325,6 +356,22 @@ export default function Servers() {
                 </button>
               </div>
             )}
+
+            {/* Agent token — every server has one, local included, so this row is not
+                gated on !is_local the way the TLS pin above is. */}
+            <div className="mt-3 pt-3 border-t border-dark-700 flex items-center justify-between gap-3 text-xs font-mono">
+              <div className="min-w-0 flex-1">
+                <span className="text-dark-300 uppercase tracking-widest text-[10px]">Agent token</span>
+                <span className="ml-2 text-dark-200">stored hashed; rotate if it may have leaked</span>
+              </div>
+              <button
+                onClick={() => setPendingTokenRotate({ id: s.id, name: s.name })}
+                className="px-3 py-1 bg-dark-700 text-dark-200 rounded text-[11px] hover:bg-danger-500/20 hover:text-danger-400 transition-colors whitespace-nowrap"
+                title="Ask the agent to mint a new token and store it. The old token stops working immediately."
+              >
+                Rotate token
+              </button>
+            </div>
             {rotateResult[s.id] && (
               <div className="mt-2 px-3 py-2 rounded text-xs bg-rust-500/10 text-rust-400 font-mono">
                 {rotateResult[s.id]}

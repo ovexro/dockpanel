@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.118.0 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.119.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -114,6 +114,9 @@
 | `backup_policy_executor` | per policy | Execute backup policies (retention, scheduling) |
 | `backup_verifier` | per policy | Verify backup integrity after creation |
 | `image_scan_sweeper` | 30min | Rescan every running app's image past the configured interval (opt-in) |
+| `drill_scheduler` | per policy | Run scheduled restore drills against real backups |
+| `telemetry_collector` | daily | Collect anonymous usage telemetry (opt-in, off by default) |
+| `cleanup` | 3600s | Expire provision logs and their deploy-owner rows |
 
 ## CLI Commands
 
@@ -160,14 +163,13 @@
 | **Auto-Update Detection** | Registry digest comparison, update badges, one-click update | `routes/docker_apps.rs` | `docker_apps.rs` | `Apps.tsx` |
 | **GPU Passthrough** | NVIDIA Container Toolkit detection; per-container assignment (all GPUs or specific indices — pin app A to GPU 0, app B to GPU 1 on multi-GPU hosts) | `routes/docker_apps.rs` | `docker_apps.rs` | `Apps.tsx` |
 | **GPU Monitoring** | Per-GPU utilization/VRAM/temperature/power/fan/driver/pstate from nvidia-smi, plus per-process VRAM table with PID→container resolution | `routes/docker_apps.rs` (`/apps/gpu-info`) | `docker_apps.rs` | `System.tsx` |
-| **Horizontal Auto-Scaling** | Rule-based CPU thresholds, min/max replicas, cooldown | `routes/iac.rs` | — | (via Integrations) |
 
 ## Integrations (Advanced)
 
 | Feature | Description | Backend | Frontend |
 |---------|-------------|---------|----------|
 | **Cloudflare Settings** | Zone security level, SSL mode, dev mode, cache purge | `routes/dns.rs` | `Dns.tsx` |
-| **Cloudflare Tunnel** | Install cloudflared, token-based config, systemd service | `routes/system.rs` | `Settings.tsx` |
+| **Cloudflare Tunnel** | Install and uninstall the `cloudflared` package | `routes/system.rs` (install/uninstall) | `Settings.tsx` (installer tile only) |
 | **Wildcard SSL** | DNS-01 challenge via Cloudflare API, multi-part TLD support | `routes/sites.rs` | `SiteDetail.tsx` |
 | **WHMCS Billing** | Webhook provisioning/suspension/termination, auto-create users | `routes/whmcs.rs` | `Integrations.tsx` |
 | **Terraform/Pulumi** | IaC token management, resource listing API (sites, databases) | `routes/iac.rs` | `Integrations.tsx` |
@@ -193,6 +195,8 @@ deserves to find out what happened to it.
 | **App Migration** — "migrate containers between servers, progress tracking" | `README.md`, `FEATURES.md`, `Integrations.tsx` | The endpoint writes one row with `status='in_progress'` and there is **no `UPDATE app_migrations` anywhere in the repository** — no worker, no progress, no terminal state. The Integrations tab that reads the table is real, so an operator sees a migration that is permanently 0% and never completes. | 2026-08-05 |
 | **Auto-sleep "scale to zero"** | `README.md` | Containers scale *to* zero and do not come back on their own: the Start control never clears `is_sleeping`, and the only endpoint that does has no caller in the frontend. Wording corrected to "stop idle containers"; the wake path is a tracked defect, not a claim. | 2026-08-05 |
 | **`client` role manages "mail" and "containers"** | `docs/guides/roles-and-ownership.md`, `migrations/20260805000000_client_role.sql` | Both are administrator-only and always were. `routes/mail.rs` takes `AdminUser` on **41 of 41** handlers (`AuthUser`: none) and `Mail.tsx` redirects a non-admin before it renders, so a client cannot manage a mailbox on its own domain. Every handler in `routes/docker_apps.rs` calls `require_admin`, and the dashboard's "Deploy App" shortcut pointed a client at a page that bounces them. The other five items in that list — PHP version, settings, files, backups, SSL — are real and ownership-scoped via `SITE_CALLER_PREDICATE`. Reported by the operator the role was built for, on #51. **The claim also survives in the migration's own comment, which cannot be corrected**: `sqlx::migrate!` checksums applied migrations, so editing that file would break the upgrade on every deployed install. It is left in place deliberately and recorded here instead. ⚠ **The handler figure in this row was itself wrong until s334**: it read "42 of 42", a number obtained by counting `AdminUser` *occurrences* — which includes the `use` import — rather than counting handlers. `mail.rs` has had **41** `pub async fn` at every tag from v2.83.0 to v2.91.0, checked one by one. The v2.83.0 CHANGELOG entry still carries the old figure and is left as shipped, since a released changelog is a record of what was said. | 2026-08-06 |
+| **Horizontal Auto-Scaling** — "rule-based CPU thresholds, min/max replicas, cooldown" | `README.md`, `FEATURES.md` | There is no scaler. `autoscale_rules` is touched by **six lines in the whole repository** — two in its own migration and four inside `routes/iac.rs`'s own CRUD — and nothing in the container runtime reads a replica count (`replica` matches only `iac.rs` across both Rust trees). The 15 supervised background services contain no scaler. There is no UI either: `FEATURES.md` said "(via Integrations)" and `Integrations.tsx` has exactly four tabs, none of them autoscaling. And the create endpoint could never have stored a rule in the first place — it issues `INSERT … ON CONFLICT (container_id)` while the migration declares only a **non-unique** `idx_autoscale_rules_container_id`, and Postgres resolves the arbiter index at plan time, so a well-formed admin request raises `42P10` and returns 500 on the first insert into an empty table. `current_replicas` and `last_scale_at` are selected and echoed but written by nothing. **Deliberately withdrawn rather than repaired**: adding the missing `UNIQUE` would turn a loud 500 into a silent lie — rules that store cleanly and are never enforced. | 2026-08-16 |
+| **Cloudflare Tunnel** — "token-based config, systemd service" | `README.md`, `FEATURES.md` | The installer half is real: `routes/system.rs` installs and uninstalls the `cloudflared` package. The rest is unreachable. `POST /api/tunnel/configure` and `GET /api/tunnel/status` live in `routes/dns.rs` — not `routes/system.rs`, which is what the row named — and **have no caller anywhere in the SPA, the CLI or the docs**; the `cloudflared` row in `Settings.tsx` renders `extra: () => null`, and the installer sends a body for `powerdns` only, so there is no field through which a tunnel token can reach the panel. `configure_tunnel` is also the only writer of the systemd unit, so the installed binary can never be started: `tunnel_status` answers `running:false, configured:false` permanently. The settings key `tunnel_configured` is written by that one unreachable handler and **read by nothing**. Withdrawn rather than built, because supplying the token is a product decision about where an operator's Cloudflare credential should live. | 2026-08-16 |
 | **148 one-click app templates** — all of them working | `README.md`, `FEATURES.md`, dockpanel.dev, the Apps page | The catalogue had **never been run**. Deploying all 148 for the first time at v2.113.0 found **15 that need nothing from the operator and still cannot start or serve**. Six were fixed in that release; **nine remain broken**. Seven are recorded in `CENSUS_KNOWN_BROKEN` in `docker_apps.rs`, each naming what is wrong; **drone** and **azuracast** are recorded here instead, because both also require a value the operator must type, which means the weekly census cannot support a claim about them in either direction: vector and garage need a config their images do not ship, erpnext needs a bench site no environment value creates, azuracast has a third startup failure behind two that were fixed, drone needs SCM credentials the form never asks for, dozzle needs the Docker socket this panel deliberately does not mount, authelia cannot be given a start command without turning a loud failure into a silent one, flowise is broken upstream on the tag pinned, and wazuh is one container of a three-container stack. A further **34 require an external service the operator supplies**, so they are unproven in either direction rather than broken. The weekly `Template Census` now deploys every template and reports, so this figure cannot go stale again without something going red. | 2026-08-14 |
 
 ## Verified Metrics
@@ -229,7 +233,7 @@ honest:
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
 | App templates | 148 | derived | every commit |
 | HTTP routes | 822 (534 backend + 288 agent) | derived | every commit |
-| Regression-pin assertions | 2291 (69 suites) | derived | every commit |
+| Regression-pin assertions | 2317 (70 suites) | derived | every commit |
 | Frontend pages | 53 | derived | every commit |
 | DB migrations | 110 | derived | every commit |
 | Supervised background services | 15 | derived | every commit |

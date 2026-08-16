@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 822 HTTP routes. 148 app templates. 2291 regression assertions. ~46MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 822 HTTP routes. 148 app templates. 2317 regression assertions. ~46MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -188,7 +188,7 @@ found, including what is still broken.
 
 ### Operations
 - **Multi-Server** — Manage remote servers from one panel. Agent auto-registers.
-- **DNS** — Cloudflare + PowerDNS. Zone templates, propagation checker, DNSSEC. Cloudflare cache purge, security settings, Cloudflare Tunnel.
+- **DNS** — Cloudflare + PowerDNS. Zone templates, propagation checker, DNSSEC. Cloudflare cache purge, security settings, `cloudflared` install/uninstall.
 - **Container Management** — Auto-sleep (stop idle containers), auto-update detection, per-user isolation policies.
 - **Mail** — Postfix + Dovecot + OpenDKIM. Webmail (Roundcube), spam filter (Rspamd), SMTP relay.
 - **Monitoring** — HTTP/TCP/ping uptime checks, SLA tracking, PagerDuty integration.
@@ -229,7 +229,6 @@ found, including what is still broken.
 - **OAuth/SSO** — Google, GitHub, GitLab login.
 - **Extension API** — Webhook events with HMAC signing.
 - **WHMCS Integration** — Provisioning, suspension, termination hooks. Auto-create users from billing.
-- **Horizontal Auto-Scaling** — Rule-based CPU thresholds with min/max replicas and cooldown.
 - **Migration Wizard** — Import from cPanel, HestiaCP. Plesk (beta).
 
 ## Architecture

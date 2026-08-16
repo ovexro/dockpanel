@@ -4,6 +4,77 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.119.0]
+
+### Added — a database backup you could take, verify and drill, but never restore
+
+The Backup Orchestrator listed database and volume backups, let you verify their
+integrity, and let you prove them restorable with a drill that unpacks one into a
+scratch container. It had no control to actually restore one, and none to delete
+one. `restore_db_backup`, `restore_volume_backup` and `delete_db_backup` were
+complete, ownership-scoped, server-pinned handlers with **zero callers anywhere in
+the product** — routed, documented, repaired across several releases, and
+unreachable the whole time. The page could tell you a backup was good and leave you
+no way to use it.
+
+All three now have controls, each behind the same two-step confirm the drill uses,
+each naming what it overwrites: a database restore says it overwrites the live
+database, a volume restore says it unpacks over the live volume. Volume backups get
+a restore and no delete, because no delete endpoint exists — a button that would
+404 is worse than a missing one.
+
+⚠ Wiring a caller to a handler makes its guards reachable for the first time, so the
+ownership scopes are now pinned in the same suite as the controls.
+
+### Added — rotate a server's agent token from the panel
+
+`POST /api/servers/{id}/rotate-token` has existed since the fleet shipped and is
+documented in the API reference. Nothing in the panel called it, so an operator who
+suspected a leaked agent token had no in-product way to rotate one. The Servers page
+now offers it beside the existing TLS-pin rotation, with its own confirm — the two
+are different credentials with different consequences and must not share a control.
+
+### Changed — two advertised capabilities withdrawn
+
+Recorded in `FEATURES.md` § Withdrawn Claims rather than quietly deleted.
+
+**Horizontal Auto-Scaling** was advertised on `README.md` and `FEATURES.md` as
+"rule-based CPU thresholds, min/max replicas, cooldown". There is no scaler:
+`autoscale_rules` is touched by six lines in the whole repository — two in its own
+migration and four in its own CRUD — and nothing in the container runtime reads a
+replica count. There is no UI; the claimed "(via Integrations)" tab does not exist.
+And no rule could ever have been stored: the create endpoint issues
+`INSERT … ON CONFLICT (container_id)` against a table whose only index on that
+column is **not unique**, and Postgres resolves the arbiter index at plan time, so a
+well-formed request raises `42P10` and returns 500 on the first insert into an empty
+table. Withdrawn rather than repaired on purpose — adding the missing `UNIQUE` would
+turn a loud 500 into a silent lie: rules that store cleanly and are never enforced.
+
+**Cloudflare Tunnel**'s "token-based config, systemd service" is withdrawn; the
+installer half is real and stays. `POST /api/tunnel/configure` and
+`GET /api/tunnel/status` have no caller in the SPA, the CLI or the docs, and the
+`cloudflared` row in Settings renders no field through which a token could be
+supplied. That handler is also the only writer of the systemd unit, so the installed
+binary can never be started. The setting it writes, `tunnel_configured`, is read by
+nothing. `FEATURES.md` also pointed at the wrong module for both endpoints.
+
+### Fixed — the background-services table had drifted by three
+
+`FEATURES.md` § Background Services announced 15 supervised services and listed 12.
+`drill_scheduler`, `telemetry_collector` and `cleanup` were missing. The existing
+docs pin derives the count and checks it against `README.md` only, so this table
+could drift with nothing able to see it; the new suite recomputes the **row count**
+against `spawn_supervised` and fails on a mismatch.
+
+### Testing
+
+New `tests/severed-controls-pin-e2e.sh` — 26 assertions, every one mutation-proved
+(26 plants, 26 kills, each on its own named arm). It pins the callers rather than
+the handlers, because a severed pair is invisible to any test that exercises one
+end; it pins the withdrawn claims on every surface at once, because a claim removed
+from one surface survives on the others; and its three controls are themselves
+mutation-proved able to fail. 2291 → **2317** assertions across **70** suites.
+
 ## [2.118.0]
 
 ### Fixed — scheduled site backups recorded no integrity hash (#114)
