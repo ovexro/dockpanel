@@ -3065,10 +3065,17 @@ async fn seed_volume_from_image(
         }
     }
 
+    // The probe is created with no HostConfig, so Docker materialises one anonymous
+    // volume for every path the image declares as a VOLUME. Removing it without the
+    // volumes flag orphans every one of them, on every call, for ever — and nothing
+    // in the product ever reclaims them. The flag removes ONLY anonymous volumes;
+    // named volumes and bind sources are untouched (measured against the daemon),
+    // so it is safe here and at every sibling below.
     let _ = docker
         .remove_container(
             &created.id,
             Some(RemoveContainerOptions {
+                v: true,
                 force: true,
                 ..Default::default()
             }),
@@ -3134,10 +3141,12 @@ async fn read_file_from_image(docker: &Docker, image: &str, path: &str) -> Optio
         }
     }
 
+    // Same probe shape as `seed_volume_from_image` — see the note there.
     let _ = docker
         .remove_container(
             &created.id,
             Some(RemoveContainerOptions {
+                v: true,
                 force: true,
                 ..Default::default()
             }),
@@ -3709,11 +3718,16 @@ pub async fn deploy_app(
         .start_container(&container.id, None::<StartContainerOptions<String>>)
         .await
     {
-        // Clean up orphaned container on start failure
+        // Clean up orphaned container on start failure. It never started, so any
+        // anonymous volume Docker gave it for an unbound image VOLUME is empty by
+        // construction — take them with it rather than stranding the whole set on
+        // every failed deploy. Bind sources hold the app's real data and are not
+        // touched by the volumes flag.
         let _ = docker
             .remove_container(
                 &container.id,
                 Some(bollard::container::RemoveContainerOptions {
+                    v: true,
                     force: true,
                     ..Default::default()
                 }),

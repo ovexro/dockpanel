@@ -4,6 +4,94 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.120.0]
+
+### Fixed — an account that had ever scheduled a maintenance window could never be deleted
+
+Deleting a user who had once scheduled a maintenance window failed, and the only
+thing the operator saw was `Operation failed. Reference: <uuid>`. The owner column
+on `maintenance_windows` carried no delete action, so the account deletion raised a
+foreign-key violation inside its own transaction and rolled back. Nothing in the
+product could clear the blocking row either: the only handler that deletes a
+maintenance window is scoped to its own owner, so an administrator could neither
+see nor remove another account's windows. The account was permanently undeletable
+through the panel, and the message said nothing about why.
+
+The trigger is the most ordinary reason anyone opens the Users screen — retiring a
+departing client or a member of staff — and the blocking row is created by the
+lowest-privilege role, following the product's own guidance to schedule a window
+before planned downtime.
+
+Both remaining owner links now declare what a deletion does. `deploy_approvals.requested_by`
+was not failing in the field, because the requester is always the deployment's owner
+and the row already died with the deployment; it is repaired anyway, so that the
+schema states the rule instead of depending on a comment staying true.
+
+⚠ A new regression pin **enumerates** every account foreign key across the whole
+migration tree and fails any that never declares a delete action, rather than naming
+the two that were wrong. It understands that a later migration can repair an earlier
+declaration, which is how the release before this one fixed a third column.
+
+### Fixed — a cleared Slack, Discord or PagerDuty destination came back
+
+Clearing a notification destination was impossible. The Settings page substituted a
+null for an empty box, and the handler treats a null as "leave this alone", so the
+old destination survived every save — while the save answered "Notification channels
+saved" in green. An operator who rotated a webhook, or decommissioned a channel
+entirely, was told it had been applied and kept alerting to the old address.
+
+The three fields now reach the handler exactly as the operator left them. An empty
+value is safe at both ends: the SSRF validators skip a blank field rather than
+rejecting it, and every sender already declines to deliver to an empty destination.
+
+### Fixed — "All containers are up to date" over a screenful of failed checks
+
+The update check reported success whenever it found no updates, and an image whose
+registry never answered scores exactly like an image that is current. So a run in
+which every single check failed — an anonymous registry rate limit, a private
+registry, a deleted tag, a DNS blip — rendered `All containers are up to date` in
+the success palette, over rows each carrying its own failure badge. The summary
+contradicted the page underneath it, and it is the one that decides whether an
+operator goes looking.
+
+The summary now counts the checks that could not be completed and says so, and a run
+carrying any failure is no longer typed as a success.
+
+### Fixed — a spinner that never stopped, and a deploy failure blamed on the registry
+
+Two reports of a phase that never resolved:
+
+- The update door announced the pull step as running before calling the agent and
+  never resolved it when the call failed, so a live spinner sat under a red
+  "Update failed" header indefinitely. It now reaches a terminal state. That state
+  is deliberately "unknown" rather than "failed": pull, recreate and migrate are one
+  agent call, so the panel genuinely cannot tell whether the image arrived.
+- The deploy door filed **every** failure under the step that pulls the image — the
+  container refusing to start, the proxy, the volume ownership repair, all of it —
+  so an operator whose container would not start was sent to audit a registry that
+  had answered perfectly. This is the defect the update door was repaired for in
+  v2.117.0, 480 lines away in the same file. The deploy failure now names a step
+  that asserts no phase, and the agent's own message says what happened.
+
+### Fixed — five container teardowns orphaned their anonymous volumes
+
+Two image probes, an app deploy that failed to start, a database that failed to
+start and a git build that failed to start all removed their container without its
+anonymous volumes. Docker creates one such volume for every path an image declares
+as a `VOLUME` and the panel does not bind, so each of these left directories behind
+that nothing in the product will ever reclaim. The probes ran on the volume-ownership
+repair that all three recreate doors call, so the leak was continuous rather than
+occasional.
+
+All five now take their anonymous volumes with them. Measured against the daemon
+before shipping: the flag removes **only** anonymous volumes — a named volume
+survived it and a bind mount's source was untouched — so no app's data is in scope.
+A new pin enumerates every container teardown in the agent and fails any that
+inherits the default instead of stating what it does, so the next one is covered
+without an edit.
+
+
+
 ## [2.119.0]
 
 ### Added — a database backup you could take, verify and drill, but never restore

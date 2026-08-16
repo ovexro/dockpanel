@@ -911,11 +911,25 @@ export default function Apps() {
         info[u.container_id] = { update_available: u.update_available, check_error: u.check_error || undefined };
       }
       setUpdateInfo(info);
+      // A registry that never answered scores `update_available: false`, exactly like
+      // an image that is genuinely current, so the count alone cannot tell "nothing to
+      // do" from "nothing could be asked". Reporting the second as success is how an
+      // operator walks away from unpatched images believing the fleet is up to date —
+      // and it needs nothing on the box to be broken: an anonymous registry rate limit,
+      // a private registry, a deleted tag or a DNS blip all land here. The per-row
+      // badges below already carry each reason; the summary has to stop contradicting
+      // them.
+      const unchecked = result.updates.filter(u => u.check_error).length;
+      const n = result.updates_available;
+      const plural = (c: number) => (c > 1 ? "s" : "");
       setMessage({
-        text: result.updates_available > 0
-          ? `${result.updates_available} update${result.updates_available > 1 ? "s" : ""} available`
-          : "All containers are up to date",
-        type: result.updates_available > 0 ? "warning" : "success",
+        text: n > 0
+          ? `${n} update${plural(n)} available` +
+            (unchecked > 0 ? ` · ${unchecked} image${plural(unchecked)} could not be reached` : "")
+          : unchecked > 0
+            ? `No updates found, but ${unchecked} image${plural(unchecked)} could not be reached — see the badge on each row`
+            : "All containers are up to date",
+        type: n > 0 || unchecked > 0 ? "warning" : "success",
       });
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : "Update check failed", type: "error" });

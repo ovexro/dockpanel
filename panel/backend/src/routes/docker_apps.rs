@@ -503,7 +503,21 @@ pub async fn deploy(
                 }
             }
             Err(e) => {
-                emit("pull", "Pulling Docker image", "error", Some(format!("Deploy failed: {e}")));
+                // The deploy door had the defect the update door was repaired for in
+                // v2.117.0, 480 lines below: this one arm catches every way a deploy
+                // can fail — the image refusing to resolve, the container refusing to
+                // create or start, the proxy, the volume ownership repair — and filed
+                // all of them under the step that pulls the image. An operator whose
+                // container would not start was told the pull had failed and went to
+                // audit a registry that had answered perfectly.
+                //
+                // Same shape as the fix there: resolve the pull step honestly rather
+                // than asserting an outcome for it, and report the failure on a step
+                // that names no phase. The agent's own message already says what
+                // happened; classifying it here would mean matching on the wording of
+                // another process's error strings.
+                emit("pull", "Pulling Docker image", "pending", None);
+                emit("deploy", "Deploying app", "error", Some(format!("{e}")));
                 emit("complete", "Deploy failed", "error", None);
                 tracing::error!("App deploy failed: {} ({}): {e}", app_name, template);
 
@@ -986,6 +1000,17 @@ pub async fn update_app(
                 // the step only has to stop asserting one it may never have
                 // reached. Classifying it here would mean matching on the
                 // wording of another process's error strings.
+                // v2.117.0 stopped this arm asserting a phase it may never have
+                // reached, but left the phase it DID assert running: the pull step
+                // was emitted `in_progress` before the agent call above and nothing
+                // resolved it on failure, so the operator watched a live spinner sit
+                // under a red "Update failed" for ever. `pending` rather than `error`
+                // for the same reason the label was dropped — pull, recreate and
+                // migrate are one agent call, so the panel genuinely does not know
+                // whether the image arrived, and saying so is the honest terminal
+                // state. It is also the only one available: an absence arm forbids
+                // reporting this step as a pull failure.
+                emit("pull", "Pulling latest image", "pending", None);
                 emit("update", "Updating app", "error", Some(format!("{e}")));
                 emit("complete", "Update failed", "error", None);
                 tracing::error!("App update failed: {cid}: {e}");

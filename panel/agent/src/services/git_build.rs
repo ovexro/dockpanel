@@ -955,13 +955,16 @@ async fn create_and_start(
         .start_container(&container.id, None::<StartContainerOptions<String>>)
         .await
     {
-        // Clean up orphaned container on start failure
+        // Clean up orphaned container on start failure. The explicit `false` here
+        // dated from this feature's first commit and carried no reason; it is the
+        // same start-failure shape as the app and database teardowns, where the
+        // container never ran and its anonymous volumes are therefore empty.
         docker
             .remove_container(
                 &container.id,
                 Some(RemoveContainerOptions {
                     force: true,
-                    v: false,
+                    v: true,
                     ..Default::default()
                 }),
             )

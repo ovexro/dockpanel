@@ -1975,11 +1975,19 @@ export default function Settings() {
                   setSaving("notify");
                   setMessage({ text: "", type: "" });
                   try {
+                    // Send the field exactly as the operator left it, empty included.
+                    // Substituting a null for an empty box made clearing a destination
+                    // impossible: the handler COALESCEs a null onto the stored value, so
+                    // the old webhook survived, alerts kept being posted to it, and the
+                    // save still answered "Notification channels saved". An empty string
+                    // is the safe sentinel at both ends — the SSRF validators skip a
+                    // blank field rather than rejecting it, and every sender guards on
+                    // the value being non-empty before it delivers.
                     await api.put("/alert-rules", {
                       notify_email: notifyEmail,
-                      notify_slack_url: notifySlackUrl || null,
-                      notify_discord_url: notifyDiscordUrl || null,
-                      notify_pagerduty_key: notifyPagerdutyKey || null,
+                      notify_slack_url: notifySlackUrl,
+                      notify_discord_url: notifyDiscordUrl,
+                      notify_pagerduty_key: notifyPagerdutyKey,
                       muted_types: mutedTypes.join(','),
                       alert_gpu: gpuAlertEnabled,
                       gpu_util_threshold: gpuUtilThreshold,

@@ -138,10 +138,15 @@ pub async fn create_database(
         .start_container(&container.id, None::<StartContainerOptions<String>>)
         .await
     {
+        // This engine declares its data directory as an image VOLUME and the panel
+        // binds nothing here, so the container carries an anonymous volume. It never
+        // started, so that volume is empty — and the sibling teardown a few lines
+        // below (role provisioning failed) already takes it. Match it.
         let _ = docker
             .remove_container(
                 &container.id,
                 Some(bollard::container::RemoveContainerOptions {
+                    v: true,
                     force: true,
                     ..Default::default()
                 }),
