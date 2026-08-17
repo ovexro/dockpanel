@@ -137,6 +137,40 @@ CANDIDATES=$(
     '
   done | grep '^/' | sort -u
 )
+# s370 — THE BLIND SPOT THAT LET /etc/msmtprc THROUGH. The discovery above reads
+# path literals that appear INSIDE the writing function, so a path held in a
+# `const` at the top of the file is invisible to it: `smtp.rs` wrote
+# `fs::write(MSMTP_CONFIG, …)` where `const MSMTP_CONFIG = "/etc/msmtprc"`, a bare
+# file under a read-only `/etc`, and this section — whose entire job is that
+# class — reported a clean sweep for four months. Resolve same-file consts and
+# feed them through the SAME coverage check.
+CONST_CANDIDATES=$(
+  for f in $(grep -rlE "$WRITE_RE" --include='*.rs' "$AGENT_SRC" 2>/dev/null); do
+    src=$(code_of "$f")
+    printf '%s\n' "$src" \
+      | grep -oE 'const [A-Z_][A-Z_0-9]*: &str = "/(etc|var|opt)/[^"]*"' \
+      | sed -E 's/^const ([A-Z_][A-Z_0-9]*): &str = "(.*)"$/\1 \2/' \
+      | while read -r cname cpath; do
+          [ -n "$cname" ] || continue
+          # only if that const is actually handed to a write in this file.
+          # HERE-STRING, never a pipe: under `set -o pipefail` a `grep -q` closes
+          # the pipe on its first match and the writer takes SIGPIPE, so the arm
+          # goes red on correct code — which is what pipefail-sigpipe-pin-e2e.sh
+          # forbids, and what it caught in the first cut of this very block.
+          if grep -qE "(fs::(write|copy|rename)|File::create|\.open)\([[:space:]]*&?${cname}\b" <<< "$src"; then
+            printf '%s\n' "$cpath"
+          fi
+        done
+  done | sort -u
+)
+CONST_N=$(printf '%s\n' "$CONST_CANDIDATES" | grep -c . || true)
+if [ "$CONST_N" -ge 1 ]; then
+  ok "$CONST_N const-held write path(s) resolved and folded into the coverage check"
+else
+  bad "no const-held write paths resolved — the s370 blind spot is back and this arm is measuring nothing"
+fi
+CANDIDATES=$(printf '%s\n%s\n' "$CANDIDATES" "$CONST_CANDIDATES" | grep '^/' | sort -u)
+
 CAND_N=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
 
 if [ "$CAND_N" -ge 25 ]; then

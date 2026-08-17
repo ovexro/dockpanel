@@ -4,6 +4,48 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.123.1]
+
+### Fixed — the SMTP relay could never be configured, on any install
+
+`POST /smtp/configure` wrote msmtp's system-wide config at `/etc/msmtprc` — a
+**bare file at the top of `/etc`**. The agent runs `ProtectSystem=strict`, and
+`ReadWritePaths` names `/etc/postfix`, `/etc/dovecot`, `/etc/php` and a dozen
+more directories but no such file, so every call answered:
+
+```
+Failed to write /etc/msmtprc: Read-only file system (os error 30)
+```
+
+Marking the file in `ReadWritePaths` cannot fix it: marking a path that does not
+exist yet is inert, and *creating* it would need `/etc` itself writable, which is
+what the sandbox exists to prevent. This is the same shape as `/etc/opendkim.conf`
+in v2.36.0, and it takes the same cure the mail installer already took — the
+config now lives at **`/etc/dockpanel/msmtprc`**, inside `ReadWritePaths`, and
+every reader is told where it is: Test Email passes `--file`, and PHP's
+`sendmail_path` carries it too.
+
+Driven on a box, before and after, with the agent binary as the only variable:
+the same request goes from that error to `{"ok":true}`, with the config landing
+`0600` and the relay log `0660 root:www-data`.
+
+⚠ **This is why v2.123.0's msmtp permission work mattered less than it looked**:
+it hardened a path that could not run. Both halves are now real.
+
+### Fixed — the sandbox coverage check could not see a path held in a `const`
+
+`agent-sandbox-paths-pin-e2e.sh` §4 discovers every path the agent writes and
+asserts each one is covered by `ReadWritePaths` — deliberately derived rather
+than listed, so a new write cannot be forgotten. It extracted path **literals
+appearing inside the writing function**, so `fs::write(MSMTP_CONFIG, …)` with
+`const MSMTP_CONFIG = "/etc/msmtprc"` at the top of the file was invisible to it,
+and the section whose entire job is this class reported a clean sweep while the
+defect above sat in the tree.
+
+It now resolves same-file `const` declarations and folds them through the same
+coverage check — 8 const-held write paths on top of the 62 literals. Verified by
+planting the original `/etc/msmtprc` back and watching the arm name it.
+
 ## [2.123.0]
 
 ### Fixed — backup retention destroyed the only record of every archive on another server

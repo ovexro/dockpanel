@@ -1,6 +1,21 @@
 use crate::safe_cmd::{safe_command, safe_command_sync, safe_command_sync_unsandboxed};
 
-const MSMTP_CONFIG: &str = "/etc/msmtprc";
+/// msmtp's own default config path is `/etc/msmtprc` — a BARE FILE at the top of
+/// `/etc`, which `ProtectSystem=strict` makes read-only. `ReadWritePaths` names
+/// `/etc/postfix`, `/etc/dovecot`, `/etc/php` and a dozen more, and it cannot
+/// help here: marking a file that does not exist yet is inert, and CREATING it
+/// would need `/etc` itself writable, which is the whole point of the sandbox.
+///
+/// So `POST /smtp/configure` answered
+/// `Failed to write /etc/msmtprc: Read-only file system (os error 30)` on every
+/// install running the shipped unit — the SMTP relay could never be configured,
+/// and v2.123.0's permission hardening below was hardening a path that never ran.
+///
+/// This is the same shape as `/etc/opendkim.conf`, and takes the same cure the
+/// mail installer already took (`routes/mail.rs`): write into `/etc/dockpanel/`,
+/// which IS in `ReadWritePaths`, and point every reader at it explicitly. Widening
+/// the sandbox to a bare `/etc` file was rejected there for the same reason.
+const MSMTP_CONFIG: &str = "/etc/dockpanel/msmtprc";
 
 /// Named so the route can answer it as a precondition rather than a fault.
 ///
@@ -138,8 +153,10 @@ password       {password}
         )?;
     }
 
-    // Also configure PHP to use msmtp as sendmail
-    let php_ini_content = format!("sendmail_path = /usr/bin/msmtp -t\n");
+    // Also configure PHP to use msmtp as sendmail. The config no longer lives at
+    // msmtp's default path, so every reader has to be told where it is — PHP
+    // included, or `mail()` silently falls back to a file that is not there.
+    let php_ini_content = format!("sendmail_path = /usr/bin/msmtp -t --file={MSMTP_CONFIG}\n");
     let msmtp_ini_dir = "/etc/php/mods-available";
     if std::path::Path::new(msmtp_ini_dir).exists() {
         let ini_path = format!("{msmtp_ini_dir}/msmtp.ini");
@@ -218,8 +235,12 @@ pub async fn send_test(to: &str, from: &str, from_name: &str) -> Result<String, 
          If you received this, your SMTP configuration is working correctly.\r\n"
     );
 
+    // `--file` is not optional: the config is no longer at msmtp's default path,
+    // so without it Test Email reads a file that does not exist and reports the
+    // operator's credentials as wrong — a message about the wrong thing, which is
+    // exactly what MSMTP_MISSING above exists to avoid.
     let mut child = safe_command("msmtp")
-        .args(["--read-envelope-from", to])
+        .args(["--file", MSMTP_CONFIG, "--read-envelope-from", to])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
