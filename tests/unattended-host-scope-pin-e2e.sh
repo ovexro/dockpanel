@@ -371,6 +371,49 @@ else
   bad "E6 policy retention still uses a policy-wide OFFSET — most resources keep zero backups"
 fi
 
+# E7–E9 (s370) — THE THIRD SIBLING. §E was written for the two POLICY sweeps and
+# the SITE sweep (backup_schedules → backups) was left with neither guard: it
+# unlinked a local path, discarded the result, and deleted the row anyway. The
+# rule, the helper and this very section all existed; nothing asserted the third
+# caller. On a fleet install every site backup living on a member host had its
+# only record destroyed while the archive stayed on that host — and `total_pruned`
+# counted it, so the log reported archives it had never touched.
+RC_S=$(fnbody "$AH_S" "run_retention_cleanup")
+if [ -n "$RC_S" ]; then
+  # E7 — all THREE sweeps must retire through the one guarded step.
+  PPB_CALLS=$(count "$RC_S" 'prune_policy_backup\(')
+  if [ "$PPB_CALLS" -ge 3 ]; then
+    ok "E7 all three retention sweeps retire through the guarded step ($PPB_CALLS call sites)"
+  else
+    bad "E7 only $PPB_CALLS of 3 retention sweeps are guarded — one deletes rows on its own"
+  fi
+
+  # E8 — the site sweep must NAME THE HOST. `backups` carries no server of its
+  # own, so the owning host is the site's: the join must select it, not just the
+  # domain it needs for the path.
+  if has "$RC_S" 's\.server_id'; then
+    ok "E8 the site retention sweep selects the owning server, not just the domain"
+  else
+    bad "E8 the site sweep joins sites without server_id — it cannot tell whose host the archive is on"
+  fi
+
+  # E9 — ABSENCE arm: no sweep may delete a backups row directly again.
+  # Positive control first: an absence arm with no control cannot tell "clean"
+  # from "the pattern never ran" (#480). `DELETE FROM ` must still match the
+  # several unguarded purges in this function that are legitimately direct
+  # (token_blacklist, notifications, terminal shares).
+  DEL_ANY=$(count "$RC_S" 'DELETE FROM ')
+  if [ "$DEL_ANY" -lt 1 ]; then
+    bad "E9 CONTROL FAILED — 'DELETE FROM ' matched nothing, so the absence arm below proves nothing"
+  elif has "$RC_S" 'DELETE FROM backups WHERE id'; then
+    bad "E9 a backups row is deleted directly again, bypassing the remote-host guard"
+  else
+    ok "E9 no direct DELETE of a backups row ($DEL_ANY other purges still matched — control non-vacuous)"
+  fi
+else
+  skip "E7/E8/E9 — run_retention_cleanup body not extractable"
+fi
+
 echo
 echo "§F the scheduled and webhook paths name the host too (s299)"
 

@@ -4,6 +4,103 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.123.0]
+
+### Fixed — backup retention destroyed the only record of every archive on another server
+
+The nightly retention sweep enforces `retention_count` by unlinking the archive
+and then deleting the row that names it. For site schedules it did both
+unconditionally: it built a path on the **panel's** filesystem, called
+`remove_file`, discarded the result, and deleted the row anyway.
+
+On a single-server install that is correct. On a fleet it is not. `std::fs`
+reaches the panel host and no other, so for a site hosted on a member the unlink
+hits a path that does not exist there, the `NotFound` goes into a `let _ =`, and
+the row is deleted regardless. **The archive stays on the member with nothing
+pointing at it** — the row is the only record `list`, `restore` and `delete` all
+start from, so the backup is unreachable by every route the panel has. The
+pruned count was incremented in the same breath, so the log reported archives it
+had never touched.
+
+Nothing about this is opt-in. Creating a site auto-creates a daily schedule with
+`retention_count = 7`, and the sweep runs outside the auto-healing switch, so it
+begins on day 8 for every remote site and needs no operator action to start.
+
+The rule was already written down, and the guard already existed. Two hundred
+lines above, `prune_policy_backup` refuses a backup belonging to another server —
+*"a local unlink cannot reach it, and deleting the row would orphan the archive
+with no record of where it is"* — and it keeps the row when an unlink fails for
+any reason other than "already gone". It was wired into the two **policy** sweeps
+(`database_backups`, `volume_backups`) and not into the site sweep, which had
+been written earlier with its own copy of the logic. Three siblings, two guarded.
+
+All three now retire through that one step. The site sweep resolves the owning
+host through `sites.server_id`, which is where a site backup's server actually
+lives — `backups` carries no server of its own.
+
+### Fixed — Node and Python sites started their process in an empty directory
+
+A managed site runtime got `WorkingDirectory=/var/www/{domain}/public`, hardcoded
+for every runtime — and that unit is only ever written for **node** and
+**python**, the two runtimes whose files live at the site root. `public/` is
+where static and PHP sites are served from; the git clone, the vhost document
+root, `EnvironmentFile` and `ReadWritePaths` all point at the site root instead.
+The function then *created* the empty `public/` directory it was about to point
+at, two lines before `systemctl enable --now`.
+
+So the process started in a directory with nothing in it. Measured, with the
+controls run from the site root:
+
+```
+node server.js    cwd=public/  ->  rc=1  Cannot find module      |  site root  rc=0
+python3 app.py    cwd=public/  ->  rc=2  can't open file         |  site root  rc=0
+npm start         cwd=public/  ->  rc=0                          |  site root  rc=0
+```
+
+With `Restart=always` the first two are a permanent crash loop rather than a
+visible failure. The third is why this lasted: `npm start` walks up to the
+nearest `package.json` and re-roots the working directory there, and it is the
+**first** of the three examples the site form offers — *"e.g., npm start, node
+server.js, npx next start"*. One of the three suggestions worked, so the runtime
+read as fussy rather than broken.
+
+The working directory is now derived from the runtime through `document_root_for`,
+the one function that knows which runtimes nest under `public/`, rather than
+spelled a second time. Units written before this release keep working: unit
+ownership is keyed on that same `WorkingDirectory` line, so both spellings are
+recognised — dropping the old one would have made every app unit already on disk
+unstoppable and undeletable, which is the opposite of a repair.
+
+The same confusion sat behind the WebP/AVIF buttons: image optimization scanned
+`public/` for every runtime, so on a node or python site it scanned the empty
+directory above and reported a clean run over zero files. It now scans the site's
+own document root, and the panel sends the runtime it needs to work that out.
+
+### Fixed — the SMTP password was world-readable while it was being written
+
+`/etc/msmtprc` holds the relay password. It was created with `fs::write`, which
+applies the process umask — 0644 — and chmodded to 0600 on the next statement, so
+the password was readable by every local account for the length of the write. The
+chmod's own failure was discarded with `.ok()`, in which case the file simply
+stayed 0644 with a password in it and nothing said so. It is now created 0600 in
+one step, the mode is re-asserted for configs written by older agents, and a
+failure to restrict it is returned rather than swallowed.
+
+The msmtp relay log was created world-writable (0666) so that both root and
+`www-data` could write it, which also made the envelope metadata in it — who
+mailed whom, and when — readable by every local account, and let any of them
+forge entries. It is now `root:www-data` and 0660. If the group does not exist
+the old mode is kept deliberately and the reason is logged, because taking the
+log away from the relay mid-send would be a worse bug than the one being fixed.
+
+### Fixed — the Migration screen still offered a path the panel refuses
+
+v2.122.2 taught the archive-path guard to refuse `/tmp` and to explain why, and
+its release note says `/tmp` is no longer offered. The **agent's** refusal
+changed; the screen the operator actually reads did not, and went on instructing
+them to use `/tmp/`. The note was true of the guard and false of the panel. The
+field now names `/var/backups/` alone and says why `/tmp` cannot work.
+
 ## [2.122.2]
 
 ### Fixed — the Migration Wizard offered a location the agent cannot read

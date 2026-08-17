@@ -102,13 +102,40 @@ password       {password}
 "#
     );
 
-    std::fs::write(MSMTP_CONFIG, &config)
-        .map_err(|e| format!("Failed to write {MSMTP_CONFIG}: {e}"))?;
+    // Create the file 0600 from the outset. `fs::write` creates under the umask —
+    // 0644 on every distro the installer supports — and line 6 of what is being
+    // written is the SMTP password, so create-then-chmod published the password to
+    // every local account for the length of the write. The old
+    // `set_permissions(...).ok()` also discarded its own failure, in which case
+    // the file simply stayed 0644 with a password in it and nothing said so.
+    #[cfg(unix)]
+    let written = {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(MSMTP_CONFIG)
+            .and_then(|mut f| f.write_all(config.as_bytes()))
+    };
+    #[cfg(not(unix))]
+    let written = std::fs::write(MSMTP_CONFIG, &config);
 
+    written.map_err(|e| format!("Failed to write {MSMTP_CONFIG}: {e}"))?;
+
+    // `.mode()` applies only when the file is CREATED, so a config already on disk
+    // keeps whatever mode it has — including a 0644 left by a pre-v2.123.0 agent,
+    // which is the case an upgrade has to repair. Asserted explicitly, and this
+    // time the failure is returned rather than swallowed: there is no sensible way
+    // to carry on having failed to protect a stored password.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(MSMTP_CONFIG, std::fs::Permissions::from_mode(0o600)).ok();
+        std::fs::set_permissions(MSMTP_CONFIG, std::fs::Permissions::from_mode(0o600)).map_err(
+            |e| format!("Failed to restrict {MSMTP_CONFIG}, which holds the SMTP password: {e}"),
+        )?;
     }
 
     // Also configure PHP to use msmtp as sendmail
@@ -134,12 +161,38 @@ password       {password}
         }
     }
 
-    // Create log file
+    // Create the relay log named by `logfile` above. msmtp writes it as whoever
+    // sent the mail: root for the panel's own Test Email, `www-data` for anything
+    // PHP relays through `sendmail_path` (every FPM pool this agent writes runs as
+    // www-data). 0666 was the shortest way to let both — and it also made the log
+    // world-READABLE, which is envelope metadata (who mailed whom, when), and
+    // world-WRITABLE, so any local account could forge entries or fill the disk.
+    //
+    // 0660 owned by root:www-data covers both writers and nobody else. The chown
+    // is attempted FIRST and the mode only follows if it succeeded: on a host with
+    // no www-data group, tightening the mode regardless would take the log away
+    // from msmtp-as-www-data and break relaying to fix a disclosure. Repairing a
+    // loud problem must not manufacture a silent one, so that case keeps the old
+    // mode and says why.
     std::fs::write("/var/log/msmtp.log", "").ok();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions("/var/log/msmtp.log", std::fs::Permissions::from_mode(0o666)).ok();
+        let grouped = safe_command_sync("chown")
+            .args(["root:www-data", "/var/log/msmtp.log"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if grouped {
+            std::fs::set_permissions("/var/log/msmtp.log", std::fs::Permissions::from_mode(0o660))
+                .ok();
+        } else {
+            tracing::warn!(
+                "SMTP: no www-data group to own /var/log/msmtp.log, so it stays \
+                 world-writable — PHP relays keep logging, but envelope metadata in \
+                 it is readable by any local account on this host."
+            );
+        }
     }
 
     tracing::info!("SMTP configured: {host}:{port} from={from}");

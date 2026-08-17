@@ -3422,7 +3422,14 @@ pub async fn optimize_images(
     let result = agent
         .post_long(
             &format!("/nginx/sites/{}/optimize-images", site.domain),
-            Some(serde_json::json!({ "format": format, "quality": quality })),
+            // The agent cannot know where this site's files are without the
+            // runtime: node/python/proxy serve from the site root, static and php
+            // from `public/`. Without it the scan hardcoded `public/`.
+            Some(serde_json::json!({
+                "format": format,
+                "quality": quality,
+                "runtime": site.runtime,
+            })),
             300,
         )
         .await

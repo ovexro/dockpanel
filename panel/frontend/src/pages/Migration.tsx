@@ -364,7 +364,9 @@ export default function Migration() {
             />
             <p className="text-xs text-dark-400 mt-1">
               Upload the backup to your server via SFTP first, then enter the full path here.
-              It must be under <code className="text-dark-200">/var/backups/</code> or <code className="text-dark-200">/tmp/</code>.
+              It must be under <code className="text-dark-200">/var/backups/</code>.{" "}
+              <code className="text-dark-200">/tmp/</code> will not work: the agent runs with a
+              private <code className="text-dark-200">/tmp</code> and cannot see the host's.
             </p>
           </div>
 

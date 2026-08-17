@@ -234,14 +234,25 @@ fn owner_by_lines(path: &str, markers: &[String]) -> Owner {
 
 /// Does the systemd unit at `path` run `domain`'s app process?
 ///
-/// `create_app_service` writes `WorkingDirectory=/var/www/{domain}/public` and
+/// `create_app_service` writes a `WorkingDirectory` under `/var/www/{domain}` and
 /// `Description=DockPanel App: {domain}`; either identifies the owner, and a
 /// hand-edited description should not be able to make the unit undeletable, so
 /// both are accepted.
+///
+/// ⚠ BOTH working-directory forms are listed, and the `/public` one may not be
+/// dropped. Units written before v2.123.0 hardcoded `{domain}/public`; v2.123.0
+/// starts the process at the site root instead (the crash-loop fix in
+/// `app_process`). Recognising only the new form would hand every unit already on
+/// disk to the `Theirs` branch — `owned_service_name` refuses to stop, restart or
+/// delete one of those — so an upgrade would strand exactly the sites the release
+/// exists to repair. The `Description` marker happens to cover the same case, but
+/// this function's whole reason for accepting two markers is that either one alone
+/// can be edited away.
 pub fn systemd_unit(path: &str, domain: &str) -> Owner {
     owner_by_lines(
         path,
         &[
+            format!("WorkingDirectory=/var/www/{domain}"),
             format!("WorkingDirectory=/var/www/{domain}/public"),
             format!("Description=DockPanel App: {domain}"),
         ],
@@ -368,6 +379,36 @@ mod tests {
         );
         assert_eq!(systemd_unit(&p, "a.b.com"), Owner::Ours);
         assert_eq!(systemd_unit(&p, "a-b.com"), Owner::Theirs);
+    }
+
+    /// v2.123.0 moved a managed process off `{domain}/public` and onto the site
+    /// root. Ownership is keyed on that very line, so BOTH spellings have to be
+    /// recognised — and the one that matters on an upgrade is the OLD one: every
+    /// unit already on disk carries it, and `owned_service_name` refuses to stop,
+    /// restart or delete anything this function calls `Theirs`. Dropping the
+    /// superseded marker would strand exactly the sites the release repairs.
+    ///
+    /// The description is deliberately omitted from both fixtures. With it
+    /// present either marker alone satisfies the check, and the arm would pass
+    /// without ever exercising the WorkingDirectory line it exists to pin.
+    #[test]
+    fn both_working_directory_forms_are_ours_and_neither_leaks_to_a_collision() {
+        let (_d1, new_form) =
+            tmpfile("[Service]\nWorkingDirectory=/var/www/a.b.com\nExecStart=node server.js\n");
+        assert_eq!(systemd_unit(&new_form, "a.b.com"), Owner::Ours);
+        assert_eq!(systemd_unit(&new_form, "a-b.com"), Owner::Theirs);
+
+        let (_d2, old_form) = tmpfile(
+            "[Service]\nWorkingDirectory=/var/www/a.b.com/public\nExecStart=node server.js\n",
+        );
+        assert_eq!(systemd_unit(&old_form, "a.b.com"), Owner::Ours);
+        assert_eq!(systemd_unit(&old_form, "a-b.com"), Owner::Theirs);
+
+        // The site-root marker is a strict PREFIX of the public one, so an
+        // unanchored comparison would let a unit for `a.b.com` answer for a
+        // sibling whose name merely starts the same way. `owner_by_lines` compares
+        // whole trimmed lines; this asserts it stays that way.
+        assert_eq!(systemd_unit(&new_form, "a.b.co"), Owner::Theirs);
     }
 
     #[test]

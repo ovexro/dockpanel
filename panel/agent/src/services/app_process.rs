@@ -54,7 +54,23 @@ pub fn create_app_service(
     command_filter::is_safe_exec_start(command, runtime)?;
 
     let svc = service_name(domain);
-    let working_dir = format!("/var/www/{domain}/public");
+    let site_dir = format!("/var/www/{domain}");
+
+    // A managed process has to start where its code is. `document_root_for` is the
+    // one place that knows where that is per runtime — node/python/proxy keep the
+    // site root, static and php nest under `public/` — and it is what the vhost,
+    // the git clone and `EnvironmentFile` below all already agree on.
+    //
+    // This used to hardcode `{site_dir}/public` for every runtime, and this
+    // function only ever runs for node and python (`routes/nginx.rs`, the
+    // node|python branch). So every managed process was started in a directory the
+    // panel itself created EMPTY two lines before `systemctl enable --now`.
+    // `node server.js` (rc=1, MODULE_NOT_FOUND) and `python3 app.py` (rc=2) both
+    // resolve their entry point against the cwd, and `Restart=always` below turns
+    // that into a permanent crash loop. `npm start` is the exception that hid it
+    // for so long: npm walks up to the nearest package.json and re-roots the cwd
+    // there, and it is the first of the three examples the site form offers.
+    let working_dir = crate::services::nginx::document_root_for(&site_dir, runtime);
 
     // Determine the ExecStart based on runtime
     let exec_start = match runtime {

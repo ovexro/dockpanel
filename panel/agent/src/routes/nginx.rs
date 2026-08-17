@@ -2282,7 +2282,17 @@ async fn optimize_images(
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid domain"}))));
     }
 
-    let site_dir = format!("/var/www/{domain}/public");
+    // Where this site's files actually are. node/python/proxy serve from the site
+    // root; static and php nest under `public/`. This hardcoded `public/`, which
+    // for a node or python site is not where the images are — and before v2.123.0
+    // that directory existed and was empty (`create_app_service` made it), so the
+    // WebP/AVIF buttons reported a clean run over zero files rather than failing.
+    // An absent `runtime` means an older backend, and keeps the previous behaviour.
+    let runtime = body.get("runtime").and_then(|v| v.as_str());
+    let site_dir = crate::services::nginx::document_root_for(
+        &format!("/var/www/{domain}"),
+        runtime.unwrap_or("static"),
+    );
     if !std::path::Path::new(&site_dir).exists() {
         return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Site directory not found"}))));
     }

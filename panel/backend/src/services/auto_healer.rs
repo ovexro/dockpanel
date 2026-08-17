@@ -1187,7 +1187,14 @@ async fn send_weekly_digest(pool: &PgPool) {
     }
 }
 
-/// Retire one policy-created backup: remove the archive, then the row that names it.
+/// Retire one backup: remove the archive, then the row that names it.
+///
+/// Serves all three retention sweeps — `backups` (site schedules), plus
+/// `database_backups` and `volume_backups` (policies). The site sweep wrote its
+/// own copy of this logic without either guard until v2.123.0: it unlinked a
+/// local path and deleted the row unconditionally, so on a fleet install every
+/// site backup living on a remote host had its only record destroyed while the
+/// archive stayed on that host, and the pruned count reported it as done.
 ///
 /// The row is the ONLY record of where the archive lives, so it is deleted last and
 /// only when the archive is genuinely gone. Two cases keep it:
@@ -1401,14 +1408,30 @@ async fn run_retention_cleanup(pool: &PgPool) {
     // For each backup schedule, enforce retention_count by deleting oldest backups
     // that exceed the limit (both DB records and local files via filesystem).
 
-    let schedules: Vec<(uuid::Uuid, uuid::Uuid, i32, String)> = sqlx::query_as(
-        "SELECT bs.id, bs.site_id, bs.retention_count, s.domain \
+    // The local server's id. A retention sweep unlinks a path on THIS filesystem,
+    // so it may only act on rows whose backup was written here — see
+    // `prune_policy_backup` for what happens to the rest.
+    let local_server_id: Option<uuid::Uuid> =
+        sqlx::query_scalar("SELECT id FROM servers WHERE is_local = TRUE LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+    // `backups` carries no server of its own, so the owning host is the one that
+    // hosts the site: `sites.server_id`. It is NOT NULL
+    // (20260319000000_multi_server.sql:76) and is selected as a plain `Uuid` on
+    // purpose — a NULL fails the query and prunes nothing, where an `Option` would
+    // hand `None` to the guard below, which skips on `None` and unlinks locally.
+    // Of the two ways to be wrong, only one destroys a record.
+    let schedules: Vec<(uuid::Uuid, uuid::Uuid, i32, String, uuid::Uuid)> = sqlx::query_as(
+        "SELECT bs.id, bs.site_id, bs.retention_count, s.domain, s.server_id \
          FROM backup_schedules bs JOIN sites s ON s.id = bs.site_id \
          WHERE bs.retention_count > 0"
     ).fetch_all(pool).await.unwrap_or_default();
 
     let mut total_pruned = 0u64;
-    for (_schedule_id, site_id, retention_count, domain) in &schedules {
+    for (_schedule_id, site_id, retention_count, domain, server_id) in &schedules {
         // Find backups exceeding retention_count (ordered newest first, skip retention_count)
         let excess: Vec<(uuid::Uuid, String)> = sqlx::query_as(
             "SELECT id, filename FROM backups WHERE site_id = $1 \
@@ -1419,16 +1442,19 @@ async fn run_retention_cleanup(pool: &PgPool) {
         .fetch_all(pool).await.unwrap_or_default();
 
         for (backup_id, filename) in &excess {
-            // Delete the local backup file if it exists
             let filepath = format!("/var/backups/dockpanel/{domain}/{filename}");
-            let _ = std::fs::remove_file(&filepath);
-
-            // Delete the DB record
-            let _ = sqlx::query("DELETE FROM backups WHERE id = $1")
-                .bind(backup_id)
-                .execute(pool).await;
-
-            total_pruned += 1;
+            if prune_policy_backup(
+                pool,
+                "backups",
+                *backup_id,
+                &filepath,
+                Some(*server_id),
+                local_server_id,
+            )
+            .await
+            {
+                total_pruned += 1;
+            }
         }
     }
     if total_pruned > 0 {
@@ -1439,16 +1465,6 @@ async fn run_retention_cleanup(pool: &PgPool) {
     let policies: Vec<(uuid::Uuid, i32)> = sqlx::query_as(
         "SELECT id, retention_count FROM backup_policies WHERE retention_count > 0"
     ).fetch_all(pool).await.unwrap_or_default();
-
-    // The local server's id. A retention sweep unlinks a path on THIS filesystem,
-    // so it may only act on rows whose backup was written here — see
-    // `prune_policy_backup` for what happens to the rest.
-    let local_server_id: Option<uuid::Uuid> =
-        sqlx::query_scalar("SELECT id FROM servers WHERE is_local = TRUE LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
 
     for (policy_id, retention_count) in &policies {
         // Retention is per DATABASE, not per policy. `OFFSET n` over a policy's
