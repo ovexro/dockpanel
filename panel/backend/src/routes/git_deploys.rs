@@ -789,8 +789,10 @@ pub async fn remove(
     // alone — so addressing the wrong box does not error, it finds the same-named
     // neighbour and acts on THAT. Removal is the sharpest form of it. `/git/cleanup`
     // stops the container and deletes its image, vhost, certificate and checkout,
-    // and the calls below are fire-and-forget (`.ok()`), so a teardown aimed at the
-    // wrong machine destroys another tenant's deployment and reports success.
+    // and the calls below used to be fire-and-forget, so a teardown aimed at the
+    // wrong machine destroyed another tenant's deployment and reported success.
+    // They are checked now, and this handler refuses rather than deleting records
+    // for containers the server did not confirm it removed.
     //
     // `server_id` is NOT NULL on this table, hence the bare `Some(...)`; the only
     // arm of the helper that can fire here is the unreachable-host one, and it
@@ -814,30 +816,67 @@ pub async fn remove(
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
+    let mut standing: Vec<String> = Vec::new();
     for (container_name, domain, host_port) in &previews {
-        agent
+        if let Err(e) = agent
             .post(
                 "/git/cleanup",
                 Some(preview_cleanup_body(container_name, domain.as_deref(), Some(*host_port))),
             )
             .await
-            .ok();
+        {
+            tracing::warn!(
+                "Failed to tear down preview {container_name} of git deploy {name}: {e}"
+            );
+            standing.push(container_name.clone());
+        }
     }
-    if !previews.is_empty() {
+    if !previews.is_empty() && standing.is_empty() {
         tracing::info!(
             "Removed {} preview container(s) alongside git deploy {name}",
             previews.len()
         );
     }
 
-    // Tell agent to stop and remove container + cleanup
-    agent
+    // Tell agent to stop and remove container + cleanup. Discarding THIS result
+    // was the same defect as the loop above — three lines apart, on the larger
+    // subject: the deployment's own container, image, vhost, certificate and
+    // checkout. The comment at the top of this function already said the calls
+    // here were fire-and-forget and reported success; it described a defect
+    // rather than a decision.
+    if let Err(e) = agent
         .post(
             "/git/cleanup",
             Some(serde_json::json!({ "name": name, "scope": "deploy" })),
         )
         .await
-        .ok();
+    {
+        tracing::warn!("Failed to tear down git deploy {name}: {e}");
+        standing.push(name.clone());
+    }
+
+    // REFUSE, and name what is still up. The cascade below is the last moment
+    // anything knows these containers exist: `git_previews` rows go with the
+    // parent, so deleting anyway leaves containers running, holding their ports
+    // and serving their vhosts, with nothing in the panel able to find them
+    // again. Retryable by construction — `/git/cleanup` answers Ok for a
+    // container that is already gone, so pressing Delete again once the server
+    // answers finishes the job rather than double-deleting.
+    //
+    // This cannot become a permanent block: `agent_for_site_server` above
+    // already refuses when the host is unreachable, so a decommissioned server
+    // fails earlier than here and for a different reason.
+    if !standing.is_empty() {
+        return Err(err(
+            StatusCode::CONFLICT,
+            &format!(
+                "The server did not confirm teardown of {}. Nothing was deleted — these \
+                 records are the only thing that can still find those containers, their \
+                 ports and their vhosts. Retry once the server answers.",
+                standing.join(", ")
+            ),
+        ));
+    }
 
     // Delete from DB (CASCADE deletes history)
     sqlx::query("DELETE FROM git_deploys WHERE id = $1")
@@ -1568,31 +1607,85 @@ pub async fn webhook(
             Err(e) => { tracing::warn!("Failed to query git preview for cleanup: {e}"); None }
         };
 
+        let mut preview_retained = false;
         if let Some((preview_id, container_name, domain, host_port)) = deleted {
             // Reached with NO authentication — the webhook route has no auth
             // extractor, and a `deleted: true` payload names the branch. Which
             // makes it the sharpest of the four preview-teardown call sites, and
             // the one that most needs to address the preview's own space.
-            let _ = agent
+            match agent
                 .post(
                     "/git/cleanup",
                     Some(preview_cleanup_body(&container_name, domain.as_deref(), Some(host_port))),
                 )
-                .await;
-            let _ = sqlx::query("DELETE FROM git_previews WHERE id = $1").bind(preview_id).execute(&state.db).await;
-            tracing::info!("Cleaned up preview for deleted branch: {push_branch}");
+                .await
+            {
+                Ok(_) => {
+                    if let Err(e) = sqlx::query("DELETE FROM git_previews WHERE id = $1")
+                        .bind(preview_id)
+                        .execute(&state.db)
+                        .await
+                    {
+                        tracing::warn!("Failed to delete preview record for {container_name}: {e}");
+                    }
+                    tracing::info!("Cleaned up preview for deleted branch: {push_branch}");
+                }
+                Err(e) => {
+                    // KEEP THE ROW, for the reason `preview_cleanup` gives at its own
+                    // teardown: the row is the only record that this container, this
+                    // port and this vhost exist. Retiring it while the container is
+                    // still up hands the port to the next preview push, which then
+                    // cannot bind, and takes the container out of the sweep, the
+                    // previews list and the operator's Delete button alike. Nothing
+                    // on the box reaps a preview that has no row.
+                    //
+                    // This door is the one that most needs the row kept, because
+                    // deleting a branch is nobody's retryable action — no operator is
+                    // watching this response. Keeping it is what leaves a way back,
+                    // and the ways back all read this row: Delete Preview always, and
+                    // `preview_cleanup` once the preview is ELIGIBLE, which is not the
+                    // same as its five-minute cadence — an hour for a `deploying` or
+                    // `failed` one, `preview_ttl_hours` for a `running` one, and NEVER
+                    // when that is 0, the documented opt-out from automatic cleanup.
+                    // So on an opted-out install the operator's button is the only
+                    // path, which is precisely why the record has to survive.
+                    preview_retained = true;
+                    tracing::warn!(
+                        "Failed to tear down preview {container_name} for deleted branch \
+                         {push_branch}: {e}. Keeping the git_previews row so the cleanup \
+                         sweep retries rather than orphaning the container."
+                    );
+                }
+            }
         }
 
-        return Ok(Json(serde_json::json!({ "ok": true, "action": "branch_deleted", "branch": push_branch })));
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "action": "branch_deleted",
+            "branch": push_branch,
+            "preview_retained": preview_retained,
+        })));
     }
 
     if !push_branch.is_empty() && push_branch != config.branch {
-        // Preview deployment for non-configured branches
-        handle_preview_deploy(&state, &agent, &config, push_branch, &payload).await;
-        return Ok(Json(serde_json::json!({
-            "ok": true,
-            "message": format!("Preview deploy triggered for branch '{push_branch}'"),
-        })));
+        // Preview deployment for non-configured branches. Report what actually
+        // happened: three paths abandon the push before anything is spawned, and
+        // answering "triggered" for those told the pusher work had started in the
+        // one place they would look for it — GitHub's own delivery log. Still a
+        // 200, deliberately: the delivery itself succeeded and a non-2xx would put
+        // GitHub into retry over a decision that will not change on a retry.
+        return match handle_preview_deploy(&state, &agent, &config, push_branch, &payload).await {
+            Ok(()) => Ok(Json(serde_json::json!({
+                "ok": true,
+                "message": format!("Preview deploy triggered for branch '{push_branch}'"),
+            }))),
+            Err(reason) => Ok(Json(serde_json::json!({
+                "ok": false,
+                "message": format!(
+                    "No preview deploy for branch '{push_branch}': {reason}"
+                ),
+            }))),
+        };
     }
 
     // Deploy lock (atomic — see deploy(); the old git_deploy_history guard was inert)
@@ -2893,9 +2986,27 @@ async fn record_failed_history(db: &sqlx::PgPool, git_deploy_id: Uuid, commit_ha
 }
 
 /// Handle preview deployment for non-configured branches.
-async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &GitDeploy, branch: &str, _payload: &serde_json::Value) {
+///
+/// Returns the reason the push was NOT taken up, when it was not. Three things
+/// abandon a preview BEFORE the build task is spawned, and the webhook answered
+/// `Preview deploy triggered` for all three — a claim about work that never
+/// started, delivered to the one place a pusher would look for it. Past the spawn
+/// the answer is honest: a clone or build failure after that point is recorded on
+/// the row as `status = 'failed'` and shown in the previews list.
+async fn handle_preview_deploy(
+    state: &AppState,
+    agent: &AgentHandle,
+    config: &GitDeploy,
+    branch: &str,
+    _payload: &serde_json::Value,
+) -> Result<(), String> {
     let branch_slug = dns_label(branch);
-    if branch_slug.len() > 50 { return; } // Safety limit
+    if branch_slug.len() > 50 {
+        // Safety limit
+        return Err(format!(
+            "branch name '{branch}' is too long to form a preview host name"
+        ));
+    }
 
     // Allocate preview port (scoped to this server via git_deploys)
     let used_ports: Vec<(i32,)> = sqlx::query_as(
@@ -2908,7 +3019,10 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
     let used: std::collections::HashSet<i32> = used_ports.into_iter().map(|(p,)| p).collect();
     let port = match (8000..=8999).find(|p| !used.contains(p)) {
         Some(p) => p,
-        None => { tracing::warn!("No preview ports available"); return; }
+        None => {
+            tracing::warn!("No preview ports available");
+            return Err("no preview port is free — 8000-8999 are all in use".to_string());
+        }
     };
 
     // The preview's own name space. Before v2.55.0 this was
@@ -2940,7 +3054,7 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
                 "Preview {prev_name} predates the preview name space; tearing it down before \
                  deploying {container_name}"
             );
-            agent
+            if let Err(e) = agent
                 .post(
                     "/git/cleanup",
                     Some(preview_cleanup_body(
@@ -2950,7 +3064,25 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
                     )),
                 )
                 .await
-                .ok();
+            {
+                // ABANDON THIS PUSH. The comment above the query says what the
+                // upsert below costs if this teardown did not happen: it
+                // overwrites `container_name`, and from that moment the
+                // predecessor's container, port, vhost and checkout are orphaned
+                // with nothing in the database naming them. Leaving the row
+                // pointing at the container that still exists keeps it findable
+                // by the sweep, by the previews list and by Delete Preview, and
+                // the next push retries this teardown from the same state.
+                tracing::warn!(
+                    "Failed to tear down predecessor preview {prev_name}: {e}. Leaving the \
+                     git_previews row pointing at it and skipping this preview deploy — \
+                     overwriting the row here is what orphans the container."
+                );
+                return Err(format!(
+                    "the previous preview container {prev_name} could not be torn down, so \
+                     this push was not taken up — retry once the server answers"
+                ));
+            }
         }
     }
 
@@ -3115,6 +3247,8 @@ async fn handle_preview_deploy(state: &AppState, agent: &AgentHandle, config: &G
             }
         }
     });
+
+    Ok(())
 }
 
 /// GET /api/git-deploys/{id}/previews — List preview deployments.
@@ -3164,7 +3298,7 @@ pub async fn delete_preview(
     // Clean up container — the stored name carries both the `dockpanel-git-`
     // prefix the agent re-adds and, for rows written from v2.55.0 on, the
     // preview scope. `preview_cleanup_target` resolves both.
-    agent
+    if let Err(e) = agent
         .post(
             "/git/cleanup",
             Some(preview_cleanup_body(
@@ -3174,7 +3308,29 @@ pub async fn delete_preview(
             )),
         )
         .await
-        .ok();
+    {
+        // KEEP THE ROW and SAY SO. This door answered `{"ok": true}` over a
+        // teardown that had failed, which is the worst of the four: the operator
+        // is told it worked, so they never look again, and the row they would
+        // have needed to try again with is already gone.
+        //
+        // The agent's own sentence travels only on a 4xx (`error.rs`), so take
+        // it where there is one and name the transport failure where there is
+        // not — and in both cases state that the preview was kept, because that
+        // is what makes this retryable rather than just failed.
+        tracing::warn!("Failed to tear down preview {container_name}: {e}");
+        let unanswered = "the server did not answer".to_string();
+        let (status, detail) =
+            crate::error::agent_actionable(&e).unwrap_or((StatusCode::BAD_GATEWAY, unanswered));
+        return Err(err(
+            status,
+            &format!(
+                "Could not tear down preview {container_name}: {detail}. The preview was \
+                 kept — its record is the only thing that can still find that container, \
+                 its port and its vhost. Retry once the server answers."
+            ),
+        ));
+    }
 
     if let Err(e) = sqlx::query("DELETE FROM git_previews WHERE id = $1").bind(preview_id).execute(&state.db).await {
         tracing::warn!("Failed to delete git preview record: {e}");

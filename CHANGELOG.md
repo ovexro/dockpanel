@@ -4,6 +4,81 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.124.0]
+
+### Fixed — a deleted branch orphaned a running preview, and the panel reported success
+
+Tearing a preview deployment down is two steps: ask the server to remove the
+container, its port and its vhost, then delete the `git_previews` row. That row is
+the only record any of it exists — the five-minute cleanup sweep, the previews
+list, the operator's Delete button and the port allocator all start from it.
+
+`preview_cleanup.rs` has always known this and says so at its own teardown:
+
+> KEEP THE ROW. It is the only record that this container, this port and this
+> vhost exist — deleting it anyway frees the port for reallocation while the
+> container still holds it, and leaves the container invisible to every list,
+> cleanup and delete path there is.
+
+That guard was wired into the two sweeps. There are **seven** doors that tear a
+preview down, and the other five discarded the server's answer and deleted the
+record regardless. Nothing in the repository asked how many callers existed; the
+pin arm counted the doors and passed at four or more, which two guarded plus five
+unguarded satisfies just as well.
+
+The consequences, per door:
+
+- **The webhook (`deleted: true`)** — reached with **no authentication**, so an
+  ordinary branch deletion by anyone who can push fires it. If the teardown
+  failed for any reason — server offline, agent mid-restart, Docker busy — the
+  container kept running and serving the deleted branch's code, holding its port,
+  with nothing left that could find it. The sweep could not retry, because the
+  sweep reads the row. The port went back into the 8000-8999 pool and the next
+  preview push could not bind.
+- **Delete Preview** — answered `{"ok": true}` over a failed teardown. The
+  operator was told it worked, so they never looked again, and the record they
+  would have retried with was already gone.
+- **Deleting a git deploy** — the same discard for every preview *and* for the
+  deployment's own container, image, vhost, certificate and checkout, three lines
+  apart, immediately before the cascade that removes the last record of them all.
+- **Re-deploying a preview** whose container predates the v2.55.0 name space —
+  the upsert overwrites `container_name`, so a teardown that quietly failed left
+  the predecessor orphaned. The comment above that query already described this
+  outcome; nothing acted on it.
+
+Now every door reads the answer. A failed teardown keeps the record, and the two
+operator-facing doors **refuse** and name what is still standing rather than
+reporting success — retryable by construction, since `/git/cleanup` answers Ok for
+a container that is already gone. Deleting a git deploy cannot become permanently
+blocked: the same handler already refuses earlier when the host is unreachable.
+
+Worth being exact about what keeping the record buys, because the cleanup sweep's
+five-minute cadence is not the same thing as a preview being eligible for it:
+`preview_cleanup` collects a `deploying` or `failed` preview an hour after its last
+update, a `running` one after `preview_ttl_hours`, and **neither, ever, when that is
+set to 0** — the documented opt-out from automatic cleanup. On an opted-out install
+the operator's own Delete Preview button is the only way back, which is exactly why
+the record has to survive: before this, that button had nothing left to act on.
+
+`container-identity-pin-e2e.sh` gains §H, which derives the doors from the
+operation's own syntax and asserts every one of them individually — a membership
+test, because a count is what let this through. Against the previous release it
+reports *"only 2 of 7 teardown doors read the result at all."*
+
+### Fixed — the webhook said "preview deploy triggered" for pushes it had dropped
+
+Found while fixing the above, and the same class of claim. Three things abandon a
+preview *before* anything is spawned — a branch name too long to form a host name,
+no free port in 8000-8999, and now a predecessor container that could not be torn
+down — and the webhook answered `Preview deploy triggered for branch 'x'` for all
+three. That answer goes to GitHub's delivery log, which is the one place the person
+who pushed would look to find out what happened.
+
+It now reports the reason instead. Still HTTP 200, deliberately: the delivery
+itself succeeded, and a non-2xx would put GitHub into a retry over a decision that
+a retry cannot change. Failures *after* the build task is spawned were already
+honest — they land on the row as `status = 'failed'` and show in the previews list.
+
 ## [2.123.1]
 
 ### Fixed — the SMTP relay could never be configured, on any install

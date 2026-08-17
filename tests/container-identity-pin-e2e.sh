@@ -567,6 +567,98 @@ else
   fi
 fi
 
+# ── §H EVERY teardown door, not the ones a count happens to reach ──────
+#
+# G3 above counts the call sites that go through `preview_cleanup_body` and
+# passes at four or more. It passed for months while FOUR of the six doors threw
+# the teardown's result away and deleted the row regardless — because a count is
+# satisfied by the defect: two guarded plus four unguarded is still six. §G
+# asserted the two SWEEPS keep the row; nothing asked how many callers existed.
+# That is lesson #558 exactly, and this section is the membership test G3 is not:
+# every member of a DERIVED population must individually comply.
+#
+# The population is derived from the operation's own syntax — every post to
+# `/git/cleanup` in the panel — and each call site is flattened to one line whose
+# bounds come from the code's punctuation, never a fixed `-A n` window (#172).
+echo
+echo "§H every preview teardown door checks whether the teardown happened"
+
+# One line per `/git/cleanup` call site. Walks back to the end of the previous
+# statement and forward to this expression's own terminator (`;`, `{` or `}`), so
+# the marker that decides whether the result is read is always inside the window
+# and the next statement never is.
+cleanup_stmts() {
+  awk '
+    { L[NR]=$0 }
+    END {
+      for (i=1;i<=NR;i++) {
+        if (L[i] !~ /"\/git\/cleanup"/) continue
+        s=i
+        while (s>1) { p=L[s-1]; sub(/[ \t\r]+$/,"",p); if (p ~ /[;{}]$/) break; s-- }
+        e=i
+        while (e<NR) { t=L[e]; sub(/[ \t\r]+$/,"",t); if (t ~ /[;{}]$/) break; e++ }
+        stmt=""
+        for (j=s;j<=e;j++) { t=L[j]; sub(/^[ \t]+/,"",t); stmt=stmt " " t }
+        print stmt
+      }
+    }
+  ' <<< "$1"
+}
+
+if [ -z "$P" ] || [ -z "$B" ]; then
+  skip "§H — a subject could not be read"
+else
+  STMTS=$(printf '%s\n%s\n' "$(cleanup_stmts "$B")" "$(cleanup_stmts "$P")" | grep -E '.' || true)
+  DOORS_H=$(count "$STMTS" '"/git/cleanup"')
+  # A discarded result, in either of the two spellings this repo has used.
+  DROPPED=$(count "$STMTS" 'let _ =|\.ok\(\);')
+  # An ABSENCE arm with no positive control cannot tell "no violations" from "the
+  # pattern never matched" (#480), so the population is asserted in the same arm.
+  if [ "$DOORS_H" -ge 6 ] && [ "$DROPPED" -eq 0 ]; then
+    ok "H1 no preview teardown throws its result away ($DOORS_H doors derived, 0 discarded)"
+  else
+    bad "H1 $DROPPED of $DOORS_H teardown doors discard the result (need >=6 doors and 0 discarded)"
+  fi
+
+  # The other direction, because an absence arm only ever sees the spellings it
+  # was taught (#494): every door must POSITIVELY read the result. A third way to
+  # discard one would leave H1 green and this arm red.
+  CHECKED=$(count "$STMTS" 'if let Err|match |\?;')
+  if [ "$DOORS_H" -ge 6 ] && [ "$CHECKED" -eq "$DOORS_H" ]; then
+    ok "H2 every one of the $DOORS_H doors reads the teardown result before acting on it"
+  else
+    bad "H2 only $CHECKED of $DOORS_H teardown doors read the result at all"
+  fi
+
+  # The record is what every list, sweep and delete path starts from, so the row
+  # may only be retired by a teardown that reported success.
+  ROWKILL=$(printf '%s\n%s\n' "$B" "$P" | grep -E 'DELETE FROM git_previews' || true)
+  ROWS=$(count "$ROWKILL" 'DELETE FROM git_previews')
+  ROWDROP=$(count "$ROWKILL" 'let _ = sqlx::query\("DELETE FROM git_previews')
+  if [ "$ROWS" -ge 4 ] && [ "$ROWDROP" -eq 0 ]; then
+    ok "H3 no preview record is retired by a statement that ignored its own result ($ROWS sites)"
+  else
+    bad "H3 $ROWDROP of $ROWS preview-record deletions run regardless of the outcome"
+  fi
+
+  # A refusal is only as good as the layer that can carry it (#556). Both
+  # operator-facing doors answered `{"ok": true}` over a failed teardown, which is
+  # worse than failing: the operator stops looking, and the record they would have
+  # retried with is gone. The refusal must be returned, not logged.
+  RMB=$(fnbody "$B" "remove")
+  DPB=$(fnbody "$B" "delete_preview")
+  RM_REFUSE=$(lineof "$RMB" 'return Err\(')
+  RM_CASCADE=$(lineof "$RMB" 'DELETE FROM git_deploys')
+  DP_REFUSE=$(lineof "$DPB" 'return Err\(')
+  DP_ROW=$(lineof "$DPB" 'DELETE FROM git_previews')
+  if [ "$RM_REFUSE" -gt 0 ] && [ "$RM_CASCADE" -gt 0 ] && [ "$RM_REFUSE" -lt "$RM_CASCADE" ] \
+     && [ "$DP_REFUSE" -gt 0 ] && [ "$DP_ROW" -gt 0 ] && [ "$DP_REFUSE" -lt "$DP_ROW" ]; then
+    ok "H4 both operator doors refuse before destroying the record (remove@$RM_REFUSE<$RM_CASCADE, delete_preview@$DP_REFUSE<$DP_ROW)"
+  else
+    bad "H4 an operator door still reports success over a teardown that did not happen (remove@$RM_REFUSE<$RM_CASCADE, delete_preview@$DP_REFUSE<$DP_ROW)"
+  fi
+fi
+
 # ── summary ────────────────────────────────────────────────────────────
 echo
 if [ "$SKIP" -gt 0 ]; then

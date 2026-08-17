@@ -1,6 +1,6 @@
 [package]
 name = "dockpanel"
-version = "2.123.1"
+version = "2.124.0"
 license = "AGPL-3.0-only"
 edition = "2024"
 description = "CLI for DockPanel — self-hosted server management"
