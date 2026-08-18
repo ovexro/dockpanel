@@ -576,7 +576,20 @@ export default function WordPressToolkit() {
             {sites.map((site) => {
               const checks = securityChecks[site.site_id];
               const failedChecks = checks?.filter((c) => c.status === "fail") || [];
-              const fixableIds = failedChecks.filter((c) => c.auto_fixable).map((c) => c.name);
+              // "All Passed" used to be printed whenever nothing had FAILED,
+              // which was a lie over any row already rendering a warning
+              // triangle — and it would now contradict a Fix button counting
+              // the same warning. One population, read by the badge and by the
+              // bulk control alike.
+              const openChecks = checks?.filter((c) => c.status !== "pass") || [];
+              // A fix is offered for anything that is not passing, not only for
+              // `fail`. `auto-updates` grades an absent WP_AUTO_UPDATE_CORE as
+              // `warning` — WordPress's own default rather than a regression —
+              // and gating the controls on `fail` alone left its working
+              // backend arm unreachable from the panel: a fix that exists, is
+              // advertised as auto-fixable, and no operator can press.
+              const fixableIds =
+                checks?.filter((c) => c.status !== "pass" && c.auto_fixable).map((c) => c.name) || [];
 
               return (
                 <div
@@ -590,14 +603,16 @@ export default function WordPressToolkit() {
                       {checks && (
                         <span
                           className={`px-2 py-0.5 rounded text-[10px] font-medium ${
-                            failedChecks.length === 0
+                            openChecks.length === 0
                               ? "bg-rust-500/15 text-rust-400"
-                              : "bg-danger-500/15 text-danger-400"
+                              : failedChecks.length > 0
+                                ? "bg-danger-500/15 text-danger-400"
+                                : "bg-warn-500/15 text-warn-400"
                           }`}
                         >
-                          {failedChecks.length === 0
+                          {openChecks.length === 0
                             ? "All Passed"
-                            : `${failedChecks.length} Issue${failedChecks.length !== 1 ? "s" : ""}`}
+                            : `${openChecks.length} Issue${openChecks.length !== 1 ? "s" : ""}`}
                         </span>
                       )}
                     </div>
@@ -649,7 +664,7 @@ export default function WordPressToolkit() {
                             )}
                           </div>
 
-                          {check.status === "fail" && check.auto_fixable && (
+                          {check.status !== "pass" && check.auto_fixable && (
                             <button
                               onClick={() => handleHarden(site.site_id, [check.name])}
                               disabled={hardening === site.site_id}

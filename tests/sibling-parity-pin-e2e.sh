@@ -358,6 +358,56 @@ else
   ok "E7 the uploads hardening creates its parent directory and gives it to the web user"
 fi
 
+# E8 — a hardening CHECK must read the value bound to its own constant.
+# Every wp-config check used to ask two independent questions of the whole file
+# — is the name present anywhere, is the value literal present anywhere — and
+# answered pass when both were true of two unrelated lines. `apply_hardening`
+# writes exactly those literals, so ONE hardening run pinned three of the four
+# green for ever: the fix disarmed the verifier. Population is DERIVED from what
+# apply_hardening actually manages, never from a list written here (#551).
+HARDEN=$(fnbody "$(code "$WP_VULN")" "apply_hardening")
+CHECKFN=$(fnbody "$(code "$WP_VULN")" "check_security")
+MANAGED=$(grep -oE 'set_wp_constant\(&root, "[A-Z_0-9]+"' <<< "$HARDEN" | grep -oE '"[A-Z_0-9]+"' | tr -d '"' | sort -u)
+MANAGED_N=$(grep -c . <<< "$MANAGED" || true)
+
+if [ -z "$HARDEN" ] || [ -z "$CHECKFN" ]; then
+  bad "E8 could not extract apply_hardening or check_security — this arm measures nothing"
+elif [ "${MANAGED_N:-0}" -eq 0 ]; then
+  bad "E8 derived no wp-config constants from apply_hardening — this arm measures nothing"
+else
+  E8_BAD=0
+  while read -r c; do
+    [ -n "$c" ] || continue
+    if ! has "$CHECKFN" "wp_constant\(&code, \"$c\"\)"; then
+      bad "E8 check_security does not read $c through wp_constant — a check that does not read its own constant's value grades something else"
+      E8_BAD=$((E8_BAD+1))
+    fi
+    if has "$CHECKFN" "wp_config\.contains\(\"$c\""; then
+      bad "E8 check_security tests the whole file for $c again — any occurrence of the value literal anywhere satisfies it, and apply_hardening writes that literal"
+      E8_BAD=$((E8_BAD+1))
+    fi
+  done <<< "$MANAGED"
+  [ "$E8_BAD" -eq 0 ] && ok "E8 all $MANAGED_N hardening-managed constant(s) are graded on the value bound to their own name"
+fi
+
+# E9 — the fix has to be REACHABLE. Both fix controls used to render only for
+# `status === "fail"`, while `auto-updates` grades an absent constant as
+# `warning` — so a fix that exists, works, and is advertised as auto-fixable
+# had no button and was excluded from the bulk run. Same class as a route with
+# no caller: the capability shipped and no operator could reach it.
+WP_UI=panel/frontend/src/pages/WordPressToolkit.tsx
+if [ ! -f "$WP_UI" ]; then
+  bad "E9 $WP_UI missing — this arm measures nothing"
+elif ! has "$(cat "$WP_UI")" 'check\.status !== "pass" && check\.auto_fixable'; then
+  bad "E9 the per-check Fix button gates on something other than 'not passing' — an auto-fixable check that grades warning loses its control"
+elif ! has "$(cat "$WP_UI")" 'c\.status !== "pass" && c\.auto_fixable'; then
+  bad "E9 the bulk fix list is not built from every non-passing auto-fixable check — a fix outside it can never run"
+elif has "$(cat "$WP_UI")" 'check\.status === "fail" && check\.auto_fixable'; then
+  bad "E9 a fix control gates on 'fail' again — auto-updates never grades fail when its constant is absent, so its working backend arm becomes unreachable"
+else
+  ok "E9 both fix controls render for any non-passing auto-fixable check, so no working fix is stranded behind a status word"
+fi
+
 # ── §D context ──────────────────────────────────────────────────────────────
 echo
 echo "§D  context (green at both tags)"

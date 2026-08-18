@@ -4,6 +4,84 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.126.0]
+
+### Fixed — a hardening check that reported "pass" because its own fix had written the word it was looking for
+
+Four of the WordPress toolkit's seven security checks read `wp-config.php` as one
+long string and asked two **independent** questions of it: does the constant's
+name appear anywhere in the file, and does the value literal appear anywhere in
+the file. They answered `pass` when both were true — of two entirely unrelated
+lines.
+
+```rust
+status: if wp_config.contains("DISALLOW_FILE_EDIT") && wp_config.contains("true")
+```
+
+Any `true` anywhere in the file satisfied `DISALLOW_FILE_EDIT` and
+`FORCE_SSL_ADMIN`. Any `false` anywhere satisfied `WP_DEBUG`.
+`WP_AUTO_UPDATE_CORE` was never compared to a value at all — its presence was the
+whole test, so `WP_AUTO_UPDATE_CORE false` reported `pass`.
+
+**The fix disarmed the verifier.** `apply_hardening` writes exactly those
+literals — `DISALLOW_FILE_EDIT true`, `WP_DEBUG false`, `FORCE_SSL_ADMIN true`,
+`WP_AUTO_UPDATE_CORE true` — so after a single hardening run the file contains
+both words, and three of the four checks can never report a regression again.
+Turn `DISALLOW_FILE_EDIT` back off on a site DockPanel has hardened and the panel
+still says "File Editing Disabled: pass". A site following wordpress.org's own
+debugging recipe — `WP_DEBUG` on beside `WP_DEBUG_DISPLAY` off — reported "Debug
+Mode Disabled: pass" with debug on.
+
+It is worse than a wrong label, because the panel's controls key off the verdict:
+both the per-check **Fix** button and the bulk fix render only for a check that is
+not passing, and the site badge reads "All Passed". A falsely-passing check takes
+its own remediation off the screen and tells the operator there is nothing to
+remediate.
+
+Each check now reads the value bound to its **own** constant. The parser handles
+what a real `wp-config.php` carries: commented-out `define`s do not count, a `//`
+inside `'https://example.com'` is not a comment, the first `define` wins because
+that is what PHP does, and a non-empty string is truthy — so `'false'` is `true`,
+which is the spelling that reads most like its opposite. A value it cannot
+classify grades as a failure to verify, never as a pass: on a safety check the
+unverifiable case must not land on the safe-looking side.
+
+`$table_prefix` is left as it was. It tests one exact assignment rather than two
+independent substrings, so it does not carry this defect.
+
+### Fixed — a working fix that no operator could reach
+
+`auto-updates` is declared auto-fixable and has a working arm in
+`apply_hardening`, but its failing status was `warning` and never `fail`, while
+both fix controls rendered only for `fail`. The fix existed, was advertised, and
+had no button — reachable only by hand-crafting the HTTP request.
+
+Both controls now render for any non-passing auto-fixable check, and an explicit
+`WP_AUTO_UPDATE_CORE false` grades as a failure rather than a pass. An absent
+constant stays a warning, because that is WordPress's own default rather than a
+regression — and it now offers its fix too.
+
+The site badge is read off the same population. "All Passed" was printed whenever
+nothing had *failed*, which was already untrue over any row rendering a warning
+triangle, and would now have sat beside a "Fix 1 Issue" button counting that same
+warning. The badge and the bulk control read one list.
+
+This is the third correction to a claim v2.125.0 made about that guide's "7
+checks (6 auto-fixable)". The first release made four of them run, the second
+made the fifth work, and this one makes the sixth reachable and stops the other
+four from grading the wrong thing.
+
+### Testing
+
+14 new unit tests, and they are the verification rather than a companion to it:
+each of the four constants is sabotaged in the file `apply_hardening` itself
+produces, and only that constant's own check is allowed to turn red. Unit tests
+582 (357 backend, 225 agent). `sibling-parity-pin-e2e.sh` gains §E8 — every
+constant the hardening path manages must be graded on the value bound to its own
+name, with the population derived from `apply_hardening` rather than listed — and
+§E9, that no working fix is stranded behind a status word the UI does not accept.
+Both arms go red against v2.125.1.
+
 ## [2.125.1]
 
 ### Fixed — the sixth hardening fix failed on exactly the sites most likely to use it
