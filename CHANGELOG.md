@@ -4,6 +4,38 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.125.1]
+
+### Fixed — the sixth hardening fix failed on exactly the sites most likely to use it
+
+v2.125.0 repaired the four WordPress hardening fixes that ran through wp-cli and
+said, in this file, that `docs/guides/wordpress.md`'s "7 checks (6 auto-fixable)"
+was true for the first time. It was not. Verifying that claim found the sixth
+one broken for an unrelated reason.
+
+`block-php-uploads` writes a deny rule to `wp-content/uploads/.htaccess` with a
+bare `std::fs::write`. **WordPress core does not ship `wp-content/uploads`** — it
+is created on the first media upload. So on a freshly installed site the write
+failed with "No such file or directory", which is precisely when an operator
+hardens one. Five of six worked, not six.
+
+It now creates the directory — and hands it to the web user in the same
+statement. Creating it alone would have been worse than the bug: a root-owned
+`uploads` directory stops WordPress writing media at all, so the hardening would
+have traded a skipped rule for a broken media library. The sibling chown that
+already existed covered the `.htaccess` file and not its parent.
+
+Proven by execution rather than by reading: a `wp core download` of current
+WordPress ships `wp-content/{index.php,plugins,themes}` and no `uploads`, and a
+write to that path returns `ENOENT`.
+
+`sibling-parity-pin-e2e.sh` §E gains E7, asserting both halves — the parent is
+created, and the chown names the directory. Both were mutation-tested, and the
+first version of the arm was decorative twice over: it matched the bare word
+`chown`, which survives a rename to `chownX`, and its anchored replacement
+spanned two source lines where the matcher is line-based. Neither showed up in
+review; both showed up the moment a defect was planted.
+
 ## [2.125.0]
 
 ### Security — h2 unbounded empty DATA frames (RUSTSEC-2026-0258)

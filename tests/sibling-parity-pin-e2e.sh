@@ -333,6 +333,31 @@ else
   fi
 fi
 
+# E7 — the one hardening fix that does not go through wp-cli writes into
+# `wp-content/uploads`, which WordPress core DOES NOT SHIP; it appears on the
+# first media upload. A bare write there failed with ENOENT on every freshly
+# installed site — the moment an operator hardens one. Creating it is only half
+# the fix: a root-owned uploads directory stops WordPress writing media at all,
+# so the chown is asserted with it.
+# Subject is the extracted helper, not `apply_hardening` — extracting a helper
+# moves the subject of every pin that measured it (#555), and this arm was
+# written against the inline version one commit earlier.
+UPLOADS=$(fnbody "$(code "$WP_VULN")" "block_php_uploads")
+# Flattened, because the chown spans four source lines and `has` is line-based —
+# a multi-line pattern in a line-based grep can never fire (#409).
+UPLOADS_FLAT=$(tr '\n' ' ' <<< "$UPLOADS" | tr -s ' ')
+if [ -z "$UPLOADS" ]; then
+  bad "E7 could not extract block_php_uploads — this arm measures nothing"
+elif ! has "$UPLOADS" 'create_dir_all'; then
+  bad "E7 the uploads hardening writes .htaccess without creating wp-content/uploads — ENOENT on every fresh install, which is exactly when a site is hardened"
+elif ! has "$UPLOADS_FLAT" 'safe_command\("chown"\)[^;]*uploads_dir'; then
+  # Anchored on the invocation AND its argument, not on the bare word: `chown`
+  # as a substring survives a rename to `chownX` and the arm reads green (#564).
+  bad "E7 the uploads directory is created but never handed to the web user — a root-owned uploads dir stops WordPress writing media, which is worse than skipping the hardening"
+else
+  ok "E7 the uploads hardening creates its parent directory and gives it to the web user"
+fi
+
 # ── §D context ──────────────────────────────────────────────────────────────
 echo
 echo "§D  context (green at both tags)"
