@@ -14,10 +14,18 @@ was true for the first time. It was not. Verifying that claim found the sixth
 one broken for an unrelated reason.
 
 `block-php-uploads` writes a deny rule to `wp-content/uploads/.htaccess` with a
-bare `std::fs::write`. **WordPress core does not ship `wp-content/uploads`** — it
-is created on the first media upload. So on a freshly installed site the write
-failed with "No such file or directory", which is precisely when an operator
-hardens one. Five of six worked, not six.
+bare `std::fs::write`, and **WordPress core does not ship `wp-content/uploads`** —
+`wp core download` produces `wp-content/{index.php,plugins,themes}` and nothing
+else. Wherever that directory is absent the write returned "No such file or
+directory" and the fix silently did not apply. Five of six worked, not six.
+
+Scope, measured rather than assumed: a site installed through DockPanel's own
+WordPress flow is **not** affected — `wp core install` creates the uploads tree
+on the way through, so the directory is already there. The toolkit hardens any
+site carrying a `wp-config.php`, though, so the ones it bit are the ones it did
+not install: WordPress an operator uploaded or unpacked themselves, a site
+restored from an archive or brought in by the migration importer, and any install
+whose uploads directory had not been created yet.
 
 It now creates the directory — and hands it to the web user in the same
 statement. Creating it alone would have been worse than the bug: a root-owned
@@ -25,9 +33,13 @@ statement. Creating it alone would have been worse than the bug: a root-owned
 have traded a skipped rule for a broken media library. The sibling chown that
 already existed covered the `.htaccess` file and not its parent.
 
-Proven by execution rather than by reading: a `wp core download` of current
-WordPress ships `wp-content/{index.php,plugins,themes}` and no `uploads`, and a
-write to that path returns `ENOENT`.
+Driven on a throwaway server, agent binary the only variable, against a real
+WordPress site with the directory absent: v2.125.0 answered
+`{"applied": false, "message": "Failed: No such file or directory (os error 2)"}`;
+v2.125.1 answered `applied: true`, created the directory owned `www-data:www-data`,
+wrote the rule — and `www-data` could still create a file there, which is the
+check that matters, because the version of this fix that only creates the
+directory would have left it root-owned and broken media uploads outright.
 
 `sibling-parity-pin-e2e.sh` §E gains E7, asserting both halves — the parent is
 created, and the chown names the directory. Both were mutation-tested, and the
