@@ -8,6 +8,11 @@ interface Endpoint {
   id: string; name: string; description: string | null; token: string;
   verify_mode: string; enabled: boolean; total_received: number;
   last_received_at: string | null; created_at: string;
+  // Whether the endpoint holds a secret it can actually verify with. The secret
+  // itself is no longer sent to the browser, so this is the only thing the
+  // screen can ask — and it has to ask, because an endpoint stored before the
+  // presence check can name a verification mode it cannot perform.
+  verify_secret_set: boolean;
 }
 
 interface Delivery {
@@ -80,7 +85,16 @@ export default function WebhookGateway() {
     }
   }, [selectedEndpoint]);
 
+  // Picking a verification mode and leaving either field empty is the one
+  // combination the backend refuses, because an endpoint cannot be edited
+  // afterwards — it would have to be deleted and created again. Refusing it here
+  // too means the operator sees it while the form is still open.
+  const verifyHalvesMissing =
+    epForm.verify_mode !== "none" &&
+    (!epForm.verify_secret.trim() || !epForm.verify_header.trim());
+
   const createEndpoint = async () => {
+    if (verifyHalvesMissing) return;
     try {
       await api.post("/webhook-gateway/endpoints", epForm);
       setShowEpForm(false);
@@ -226,8 +240,17 @@ export default function WebhookGateway() {
                   </div>
                 </div>
               )}
-              <div className="flex justify-end">
-                <button onClick={createEndpoint} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium font-mono hover:bg-rust-600">Create</button>
+              <div className="flex items-center justify-end gap-3">
+                {verifyHalvesMissing && (
+                  <span className="text-xs text-warn-400 font-mono">
+                    Signature verification needs both a secret and the header carrying it — an endpoint cannot be edited afterwards.
+                  </span>
+                )}
+                <button
+                  onClick={createEndpoint}
+                  disabled={verifyHalvesMissing}
+                  className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium font-mono hover:bg-rust-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                >Create</button>
               </div>
             </div>
           )}
@@ -252,7 +275,18 @@ export default function WebhookGateway() {
                     <tr key={ep.id} className={`hover:bg-dark-700/30 transition-colors cursor-pointer ${selectedEndpoint === ep.id ? "bg-dark-700/20" : ""}`}
                       onClick={() => setSelectedEndpoint(ep.id)}>
                       <td className="px-5 py-4 text-sm text-dark-50 font-mono">{ep.name}</td>
-                      <td className="px-5 py-4 text-xs text-dark-200 font-mono">{ep.verify_mode}</td>
+                      <td className="px-5 py-4 text-xs font-mono">
+                        {/* The mode alone used to be the whole cell, so an
+                            endpoint that named a verification mode it could not
+                            perform read exactly like one that could. */}
+                        <span className="text-dark-200">{ep.verify_mode}</span>
+                        {ep.verify_mode !== "none" && !ep.verify_secret_set && (
+                          <span className="ml-2 px-2 py-0.5 bg-danger-500/10 text-danger-400 rounded-md"
+                            title="This endpoint names a verification mode but holds no secret, so it can verify nothing. Deliveries to it are rejected. Delete it and create it again with a secret and a signature header.">
+                            no secret — rejecting
+                          </span>
+                        )}
+                      </td>
                       <td className="px-5 py-4 text-sm text-dark-200 font-mono">{ep.total_received}</td>
                       <td className="px-5 py-4 text-xs text-dark-300 font-mono">{ep.last_received_at ? formatDate(ep.last_received_at) : "Never"}</td>
                       <td className="px-5 py-4">

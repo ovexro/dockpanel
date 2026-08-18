@@ -20,6 +20,14 @@ pub struct WebhookEndpoint {
     pub name: String,
     pub description: Option<String>,
     pub token: String,
+    // The shared secret this endpoint verifies signatures with. It used to ride
+    // out to the browser on every list of the Webhook Gateway screen: the struct
+    // is returned straight to the client and nothing suppressed the field. The
+    // SPA never displayed it, which is why it went unnoticed — it was on the
+    // wire, not on the page. Six other route modules already suppress a stored
+    // credential this way (`cdn`, `dns`, `extensions`, `servers`, `sites`,
+    // `update`); this one did not.
+    #[serde(skip_serializing)]
     pub verify_secret: Option<String>,
     pub verify_mode: String,
     pub verify_header: Option<String>,
@@ -28,6 +36,14 @@ pub struct WebhookEndpoint {
     pub last_received_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    // Not a column. Whether this endpoint holds a secret it could actually
+    // verify with, which is what the operator needs to know and what the secret
+    // itself must never be used to answer. Endpoints stored before the presence
+    // check below can hold a verifying mode with no secret, and there is no
+    // update route — the only repair is delete and recreate — so the screen has
+    // to be able to say so.
+    #[sqlx(default)]
+    pub verify_secret_set: bool,
 }
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -65,6 +81,19 @@ pub struct WebhookRoute {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+impl WebhookEndpoint {
+    /// Answer the presence question from the stored secret, then let the secret
+    /// itself be dropped from the response. Blank counts as absent: a blank
+    /// secret is what the form used to post when the operator picked a
+    /// verification mode and left the field empty, and it verifies nothing.
+    fn derive_verify_secret_set(&mut self) {
+        self.verify_secret_set = self
+            .verify_secret
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty());
+    }
+}
+
 #[derive(serde::Deserialize)]
 pub struct CreateEndpointRequest {
     pub name: String,
@@ -98,12 +127,16 @@ pub async fn list_endpoints(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
 ) -> Result<Json<Vec<WebhookEndpoint>>, ApiError> {
-    let endpoints: Vec<WebhookEndpoint> = sqlx::query_as(
+    let mut endpoints: Vec<WebhookEndpoint> = sqlx::query_as(
         "SELECT * FROM webhook_endpoints WHERE user_id = $1 ORDER BY created_at DESC LIMIT 500"
     )
     .bind(claims.sub)
     .fetch_all(&state.db).await
     .map_err(|e| internal_error("list endpoints", e))?;
+
+    for e in &mut endpoints {
+        e.derive_verify_secret_set();
+    }
 
     Ok(Json(endpoints))
 }
@@ -125,7 +158,32 @@ pub async fn create_endpoint(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid verify_mode"));
     }
 
-    let endpoint: WebhookEndpoint = sqlx::query_as(
+    // Blank is absent. The form posts "" for a field the operator left empty, so
+    // taking the strings as they arrive is how an endpoint came to be stored
+    // asking for HMAC verification it had no secret to perform — displayed as
+    // `hmac_sha256`, verifying nothing.
+    let verify_secret = req
+        .verify_secret
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let verify_header = req
+        .verify_header
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    // A verification mode is a promise the endpoint cannot keep without both
+    // halves, and there is no update route to add the missing half later, so the
+    // only moment this can be caught is here.
+    if verify_mode != "none" && (verify_secret.is_none() || verify_header.is_none()) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Signature verification needs both a secret and the header carrying the signature",
+        ));
+    }
+
+    let mut endpoint: WebhookEndpoint = sqlx::query_as(
         "INSERT INTO webhook_endpoints (user_id, name, description, token, verify_mode, verify_secret, verify_header) \
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *"
     )
@@ -134,10 +192,12 @@ pub async fn create_endpoint(
     .bind(&req.description)
     .bind(&token)
     .bind(verify_mode)
-    .bind(&req.verify_secret)
-    .bind(&req.verify_header)
+    .bind(verify_secret)
+    .bind(verify_header)
     .fetch_one(&state.db).await
     .map_err(|e| internal_error("create endpoint", e))?;
+
+    endpoint.derive_verify_secret_set();
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "webhook_endpoint.create",
@@ -357,37 +417,27 @@ pub async fn receive_webhook(
         }
     }
 
-    // Verify signature if configured
-    let signature_valid = match endpoint.verify_mode.as_str() {
-        "hmac_sha256" => {
-            if let (Some(secret), Some(header_name)) = (&endpoint.verify_secret, &endpoint.verify_header) {
-                let sig_header = headers_json.get(header_name.to_lowercase().as_str())
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                Some(verify_hmac_sha256(secret, &body, sig_header))
-            } else {
-                None
-            }
-        }
-        "hmac_sha1" => {
-            if let (Some(secret), Some(header_name)) = (&endpoint.verify_secret, &endpoint.verify_header) {
-                let sig_header = headers_json.get(header_name.to_lowercase().as_str())
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                Some(verify_hmac_sha1(secret, &body, sig_header))
-            } else {
-                None
-            }
-        }
-        _ => None, // No verification configured
-    };
+    let verdict = classify_signature(
+        &endpoint.verify_mode,
+        endpoint.verify_secret.as_deref(),
+        endpoint.verify_header.as_deref(),
+        &headers_json,
+        &body,
+    );
 
-    // Reject invalid signatures
-    if signature_valid == Some(false) {
-        return Err(err(StatusCode::UNAUTHORIZED, "Invalid webhook signature"));
-    }
-
-    // Record delivery
+    // Record the delivery BEFORE deciding whether to accept it. The rejection
+    // used to return here, above the INSERT, so `signature_valid = FALSE` had no
+    // writer at all: the column could only ever hold TRUE or NULL, the list's red
+    // "Invalid" badge could never render, and the guide's promise that "failed
+    // verifications are logged" was false. A rejected delivery is the one an
+    // operator most needs to see — it is the only evidence that something is
+    // signing badly, or not signing at all.
+    //
+    // The trade-off is stated rather than hidden: a caller who knows the endpoint
+    // token can now cause a row to be written without knowing the secret. That
+    // was already true for an endpoint verifying nothing, the rows carry the
+    // same retention sweep as any other delivery (`auto_healer`'s
+    // `webhook_deliveries` purge), and nothing is forwarded.
     let delivery_id: Uuid = sqlx::query_scalar(
         "INSERT INTO webhook_deliveries (endpoint_id, method, headers, body, source_ip, signature_valid) \
          VALUES ($1, 'POST', $2, $3, $4, $5) RETURNING id"
@@ -396,16 +446,23 @@ pub async fn receive_webhook(
     .bind(serde_json::Value::Object(headers_json))
     .bind(&body_str)
     .bind(&source_ip)
-    .bind(signature_valid)
+    .bind(verdict.recorded())
     .fetch_one(&state.db).await
     .map_err(|e| internal_error("receive webhook", e))?;
 
-    // Update endpoint stats
+    // Counts every delivery this endpoint recorded, so the "Received" column and
+    // the delivery list below it answer for the same population.
     let _ = sqlx::query(
         "UPDATE webhook_endpoints SET total_received = total_received + 1, last_received_at = NOW() WHERE id = $1"
     )
     .bind(endpoint.id)
     .execute(&state.db).await;
+
+    // Reject anything the endpoint asked to verify and could not vouch for —
+    // including a delivery it had no secret to check, which used to pass.
+    if let Some(reason) = verdict.rejection() {
+        return Err(err(StatusCode::UNAUTHORIZED, reason));
+    }
 
     // Forward to all enabled routes (async, fire-and-forget)
     let routes: Vec<WebhookRoute> = sqlx::query_as(
@@ -444,6 +501,100 @@ pub async fn receive_webhook(
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+/// What an endpoint's configuration says one delivery's signature is worth.
+///
+/// The distinction that matters is between *not asked to verify* and *asked to
+/// verify and unable to*. Collapsing those two into one `None` is what let an
+/// endpoint advertise `hmac_sha256` on the list while passing every unsigned
+/// request straight through to its forwarding routes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SignatureVerdict {
+    /// The endpoint asks for no verification. There is nothing to attest, and
+    /// the delivery records no attestation.
+    NotConfigured,
+    /// Verification ran and the request satisfied it.
+    Valid,
+    /// Verification ran and the request did not satisfy it.
+    Invalid,
+    /// The endpoint asks for verification it cannot perform — no secret, no
+    /// header, or a mode this build does not implement. Never a pass: a promise
+    /// that cannot be kept is not the same as no promise.
+    Unverifiable,
+}
+
+impl SignatureVerdict {
+    /// The value written to `webhook_deliveries.signature_valid`. `NULL` only
+    /// where the endpoint never claimed to verify anything, so a `NULL` in that
+    /// column means "not checked" and can no longer mean "could not check".
+    pub(crate) fn recorded(self) -> Option<bool> {
+        match self {
+            SignatureVerdict::NotConfigured => None,
+            SignatureVerdict::Valid => Some(true),
+            SignatureVerdict::Invalid | SignatureVerdict::Unverifiable => Some(false),
+        }
+    }
+
+    /// The sentence sent back to the caller, or `None` to accept the delivery.
+    /// It travels as a 401 so it reaches the sender intact — `error.rs` passes a
+    /// sentence through only on a 4xx.
+    pub(crate) fn rejection(self) -> Option<&'static str> {
+        match self {
+            SignatureVerdict::NotConfigured | SignatureVerdict::Valid => None,
+            SignatureVerdict::Invalid => Some("Invalid webhook signature"),
+            SignatureVerdict::Unverifiable => Some(
+                "This endpoint requires signature verification but has no usable secret. \
+                 Delete it and create it again with a secret and a signature header.",
+            ),
+        }
+    }
+}
+
+/// Grade one delivery against the endpoint's verification settings.
+///
+/// Split out from the handler so the decision can be tested without a database
+/// or a socket — every way this can be wrong is a way an unsigned request gets
+/// treated as a signed one.
+pub(crate) fn classify_signature(
+    verify_mode: &str,
+    verify_secret: Option<&str>,
+    verify_header: Option<&str>,
+    headers: &serde_json::Map<String, serde_json::Value>,
+    body: &[u8],
+) -> SignatureVerdict {
+    if verify_mode == "none" {
+        return SignatureVerdict::NotConfigured;
+    }
+
+    // Blank is absent, exactly as at creation. A blank secret is not a weak
+    // secret: `Hmac::new_from_slice` accepts a zero-length key, so an endpoint
+    // stored with `verify_secret = ""` used to verify signatures against the
+    // empty key — and anyone who guessed that could compute one, be recorded
+    // `signature_valid = true`, and be relayed onward as authentic.
+    let secret = verify_secret.map(str::trim).filter(|s| !s.is_empty());
+    let header_name = verify_header.map(str::trim).filter(|s| !s.is_empty());
+    let (Some(secret), Some(header_name)) = (secret, header_name) else {
+        return SignatureVerdict::Unverifiable;
+    };
+
+    let presented = headers
+        .get(header_name.to_lowercase().as_str())
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let ok = match verify_mode {
+        "hmac_sha256" => verify_hmac_sha256(secret, body, presented),
+        "hmac_sha1" => verify_hmac_sha1(secret, body, presented),
+        // A mode this build cannot compute is a promise it cannot keep.
+        _ => return SignatureVerdict::Unverifiable,
+    };
+
+    if ok {
+        SignatureVerdict::Valid
+    } else {
+        SignatureVerdict::Invalid
+    }
+}
 
 fn verify_hmac_sha256(secret: &str, body: &[u8], signature_header: &str) -> bool {
     use hmac::{Hmac, Mac};
@@ -590,4 +741,268 @@ async fn forward_to_route(db: &sqlx::PgPool, route: &WebhookRoute, body: &str, d
     )
     .bind(route.id).bind(last_status)
     .execute(db).await;
+}
+
+#[cfg(test)]
+mod signature_verdict_tests {
+    use super::*;
+    use hmac::{Hmac, Mac};
+
+    const BODY: &[u8] = br#"{"action":"opened","number":7}"#;
+    const HEADER: &str = "x-hub-signature-256";
+    const SECRET: &str = "s3cr3t-shared-with-github";
+
+    /// Build the signature a correctly-configured sender would send, under an
+    /// arbitrary key — including the empty one, which is the whole point of
+    /// `empty_secret_does_not_authenticate_an_empty_key_signature`.
+    fn sha256_signature(key: &[u8], body: &[u8]) -> String {
+        let mut mac =
+            Hmac::<sha2::Sha256>::new_from_slice(key).expect("hmac accepts any key length");
+        mac.update(body);
+        format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    fn sha1_signature(key: &[u8], body: &[u8]) -> String {
+        let mut mac = Hmac::<sha1::Sha1>::new_from_slice(key).expect("hmac accepts any key length");
+        mac.update(body);
+        format!("sha1={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    /// The handler builds this map from the request's `HeaderMap`, whose names
+    /// are already lower-case, which is why the lookup lower-cases the
+    /// configured header name.
+    fn headers(pairs: &[(&str, &str)]) -> serde_json::Map<String, serde_json::Value> {
+        pairs
+            .iter()
+            .map(|(k, v)| {
+                (
+                    (*k).to_string(),
+                    serde_json::Value::String((*v).to_string()),
+                )
+            })
+            .collect()
+    }
+
+    fn classify(
+        mode: &str,
+        secret: Option<&str>,
+        header: Option<&str>,
+        presented: &[(&str, &str)],
+    ) -> SignatureVerdict {
+        classify_signature(mode, secret, header, &headers(presented), BODY)
+    }
+
+    // ── The two states that used to be one ──────────────────────────────────
+
+    #[test]
+    fn no_verification_configured_attests_nothing() {
+        let v = classify("none", None, None, &[]);
+        assert_eq!(v, SignatureVerdict::NotConfigured);
+        assert_eq!(
+            v.recorded(),
+            None,
+            "an endpoint that never claimed to verify records no attestation"
+        );
+        assert_eq!(v.rejection(), None);
+    }
+
+    #[test]
+    fn a_verifying_mode_with_no_secret_is_rejected_not_waved_through() {
+        // The shape a raw API call could store: mode set, secret absent. It used
+        // to reach `None` — indistinguishable from "not configured" — and pass.
+        let v = classify(
+            "hmac_sha256",
+            None,
+            Some(HEADER),
+            &[(HEADER, "sha256=deadbeef")],
+        );
+        assert_eq!(v, SignatureVerdict::Unverifiable);
+        assert_eq!(v.recorded(), Some(false));
+        assert!(
+            v.rejection().is_some(),
+            "an endpoint that cannot verify must not accept"
+        );
+    }
+
+    #[test]
+    fn a_verifying_mode_with_no_header_is_rejected() {
+        let v = classify("hmac_sha256", Some(SECRET), None, &[]);
+        assert_eq!(v, SignatureVerdict::Unverifiable);
+    }
+
+    // ── The empty key: the shape the form used to post ──────────────────────
+
+    #[test]
+    fn empty_secret_does_not_authenticate_an_empty_key_signature() {
+        // The form posted "" for a field left blank, so an endpoint could be
+        // stored with `verify_secret = Some("")` and a real header name. HMAC
+        // accepts a zero-length key, so the arm matched and anyone who guessed
+        // the secret was empty could produce a signature that verified — and be
+        // RECORDED as authentic before being relayed. That is worse than the
+        // null-secret pass, because it writes a true attestation.
+        let forged = sha256_signature(b"", BODY);
+        let v = classify("hmac_sha256", Some(""), Some(HEADER), &[(HEADER, &forged)]);
+        assert_ne!(
+            v,
+            SignatureVerdict::Valid,
+            "an empty secret must never attest anything"
+        );
+        assert_eq!(v, SignatureVerdict::Unverifiable);
+        assert_eq!(v.recorded(), Some(false));
+    }
+
+    #[test]
+    fn a_whitespace_only_secret_is_absent_too() {
+        let v = classify(
+            "hmac_sha256",
+            Some("   "),
+            Some(HEADER),
+            &[(HEADER, "sha256=00")],
+        );
+        assert_eq!(v, SignatureVerdict::Unverifiable);
+    }
+
+    #[test]
+    fn a_blank_header_name_is_absent_too() {
+        let v = classify("hmac_sha256", Some(SECRET), Some(""), &[]);
+        assert_eq!(v, SignatureVerdict::Unverifiable);
+    }
+
+    // ── Verification still works, which is what makes the above meaningful ──
+
+    #[test]
+    fn a_correctly_signed_sha256_delivery_is_valid() {
+        let sig = sha256_signature(SECRET.as_bytes(), BODY);
+        let v = classify("hmac_sha256", Some(SECRET), Some(HEADER), &[(HEADER, &sig)]);
+        assert_eq!(v, SignatureVerdict::Valid);
+        assert_eq!(v.recorded(), Some(true));
+        assert_eq!(v.rejection(), None);
+    }
+
+    #[test]
+    fn a_correctly_signed_sha1_delivery_is_valid() {
+        let sig = sha1_signature(SECRET.as_bytes(), BODY);
+        let v = classify(
+            "hmac_sha1",
+            Some(SECRET),
+            Some("x-hub-signature"),
+            &[("x-hub-signature", &sig)],
+        );
+        assert_eq!(v, SignatureVerdict::Valid);
+    }
+
+    #[test]
+    fn a_signature_under_the_wrong_key_is_invalid_not_unverifiable() {
+        // Both are rejections, but they are different facts and the operator is
+        // told different sentences: one endpoint is misconfigured, the other is
+        // being signed badly.
+        let sig = sha256_signature(b"someone-elses-secret", BODY);
+        let v = classify("hmac_sha256", Some(SECRET), Some(HEADER), &[(HEADER, &sig)]);
+        assert_eq!(v, SignatureVerdict::Invalid);
+        assert_eq!(v.recorded(), Some(false));
+        assert_eq!(v.rejection(), Some("Invalid webhook signature"));
+    }
+
+    #[test]
+    fn a_missing_signature_header_on_a_configured_endpoint_is_invalid() {
+        let v = classify(
+            "hmac_sha256",
+            Some(SECRET),
+            Some(HEADER),
+            &[("content-type", "application/json")],
+        );
+        assert_eq!(v, SignatureVerdict::Invalid);
+    }
+
+    #[test]
+    fn a_signature_that_is_not_hex_is_invalid_rather_than_a_panic() {
+        let v = classify(
+            "hmac_sha256",
+            Some(SECRET),
+            Some(HEADER),
+            &[(HEADER, "sha256=not-hex-at-all")],
+        );
+        assert_eq!(v, SignatureVerdict::Invalid);
+    }
+
+    #[test]
+    fn the_algorithm_prefix_is_optional() {
+        let with_prefix = sha256_signature(SECRET.as_bytes(), BODY);
+        let bare = with_prefix.trim_start_matches("sha256=").to_string();
+        assert_eq!(
+            classify(
+                "hmac_sha256",
+                Some(SECRET),
+                Some(HEADER),
+                &[(HEADER, &bare)]
+            ),
+            SignatureVerdict::Valid
+        );
+    }
+
+    #[test]
+    fn the_configured_header_name_is_matched_case_insensitively() {
+        let sig = sha256_signature(SECRET.as_bytes(), BODY);
+        let v = classify(
+            "hmac_sha256",
+            Some(SECRET),
+            Some("X-Hub-Signature-256"),
+            &[(HEADER, &sig)],
+        );
+        assert_eq!(v, SignatureVerdict::Valid);
+    }
+
+    #[test]
+    fn a_body_that_differs_by_one_byte_does_not_verify() {
+        let sig = sha256_signature(SECRET.as_bytes(), BODY);
+        let tampered = classify_signature(
+            "hmac_sha256",
+            Some(SECRET),
+            Some(HEADER),
+            &headers(&[(HEADER, &sig)]),
+            br#"{"action":"opened","number":8}"#,
+        );
+        assert_eq!(tampered, SignatureVerdict::Invalid);
+    }
+
+    // ── Fail-closed on anything this build does not understand ──────────────
+
+    #[test]
+    fn a_mode_this_build_cannot_compute_is_rejected() {
+        // Reachable by a hand-edited row, or by running an older binary against a
+        // database a newer one wrote. The safe-looking default here would be to
+        // treat it as "no verification".
+        let v = classify(
+            "hmac_sha512",
+            Some(SECRET),
+            Some(HEADER),
+            &[(HEADER, "sha512=00")],
+        );
+        assert_eq!(v, SignatureVerdict::Unverifiable);
+        assert_eq!(v.recorded(), Some(false));
+    }
+
+    // ── The mapping itself, so a new variant cannot be added unclassified ───
+
+    #[test]
+    fn only_an_endpoint_that_asked_for_nothing_records_no_attestation() {
+        for v in [
+            SignatureVerdict::NotConfigured,
+            SignatureVerdict::Valid,
+            SignatureVerdict::Invalid,
+            SignatureVerdict::Unverifiable,
+        ] {
+            let recorded = v.recorded();
+            let rejected = v.rejection().is_some();
+            match v {
+                SignatureVerdict::NotConfigured => assert_eq!((recorded, rejected), (None, false)),
+                SignatureVerdict::Valid => assert_eq!((recorded, rejected), (Some(true), false)),
+                // Every rejection is recorded FALSE, which is the writer the
+                // column never had: the 401 used to return above the INSERT.
+                SignatureVerdict::Invalid | SignatureVerdict::Unverifiable => {
+                    assert_eq!((recorded, rejected), (Some(false), true))
+                }
+            }
+        }
+    }
 }

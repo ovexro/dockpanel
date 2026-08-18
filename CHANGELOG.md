@@ -4,6 +4,77 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.127.0]
+
+### Fixed — the webhook gateway's signature verification told the operator four things that were not true
+
+An endpoint could be stored asking for HMAC verification it had no secret to
+perform. Both verification arms were shaped
+
+```rust
+if let (Some(secret), Some(header_name)) = (&endpoint.verify_secret, &endpoint.verify_header) { … } else { None }
+```
+
+and the rejection below them fired only on `Some(false)`, so `None` — *no secret*
+— passed. The delivery was then relayed to every enabled route. The endpoint list
+showed the mode it had been given, so the screen read as verified while nothing
+was being verified.
+
+**The blank secret was worse than the absent one.** The create form posted `""`
+for a field left empty, and HMAC accepts a zero-length key. An endpoint stored
+with a blank secret and a real header name therefore verified signatures *against
+the empty key*: anyone who guessed that could compute one, be recorded
+`signature_valid = true` — a positive attestation of authenticity — and be
+forwarded downstream as genuine.
+
+Verification is now graded by one function, `classify_signature`, which
+distinguishes *not asked to verify* from *asked to verify and unable to*. Blank
+counts as absent on both the write and the read path, a mode this build cannot
+compute is a rejection rather than a pass, and only an endpoint that never
+claimed to verify anything records no attestation. Creating an endpoint with a
+verification mode now requires both the secret and the header, because there is
+no update route — the settings cannot be repaired later, only recreated.
+
+### Fixed — a rejected delivery left no trace, so the panel could not show one
+
+The rejection returned **above** the delivery `INSERT`. `signature_valid` could
+therefore only ever hold `TRUE` or `NULL`: the `FALSE` state had no writer in any
+commit. The delivery list's red *Invalid* badge could never render, and the
+guide's promise that "failed verifications are logged" was false. An endpoint
+whose secret was blank rejected every legitimate webhook and recorded nothing at
+all — the operator saw `Received: 0` and no explanation anywhere.
+
+Deliveries are now recorded before the request is accepted or refused, and the
+`Received` counter covers the same population the list shows. The trade-off is
+stated rather than hidden: a caller who knows the endpoint token can now cause a
+row to be written without knowing the secret. That was already true of an
+endpoint verifying nothing, the rows fall under the same retention sweep as any
+other delivery, and nothing is forwarded.
+
+### Fixed — the shared secret was sent to the browser
+
+`WebhookEndpoint` is returned to the client directly and nothing suppressed
+`verify_secret`, so listing the Webhook Gateway screen shipped every endpoint's
+HMAC secret to the browser. The SPA never displayed it, which is why it went
+unnoticed — it was on the wire, not on the page. Six other route modules already
+suppress a stored credential this way. The field is now suppressed, and the list
+reports only whether a secret is present.
+
+That presence answer is also what the screen needed: an endpoint stored in the
+unverifiable state before this release cannot be edited, so the list marks it
+*no secret — rejecting* and the guide says to delete and recreate it.
+
+### Tests
+
+New `webhook-verification-pin-e2e.sh` — 38 assertions, **26 red at v2.126.0**.
+§C compares line positions rather than text, because the missing `FALSE` writer
+was a purely positional defect: every line involved was correct on its own and
+the rejection simply stood above the `INSERT`. 16 new unit tests grade the
+verdict function directly, including a signature computed under the empty key
+that must not authenticate. 8 mutations planted, 8 killed, subjects byte-identical.
+
+Unit tests 582 → 598. Regression assertions 2437 → 2475 across 75 suites.
+
 ## [2.126.0]
 
 ### Fixed — a hardening check that reported "pass" because its own fix had written the word it was looking for

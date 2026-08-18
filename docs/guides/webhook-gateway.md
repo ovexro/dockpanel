@@ -17,10 +17,15 @@ The Webhook Gateway lets you receive, inspect, route, and replay incoming webhoo
 2. Click **New Endpoint**
 3. Configure:
    - **Name**: Descriptive label (e.g., "GitHub Deploys")
-   - **HMAC Secret**: Optional shared secret for signature verification
-   - **HMAC Header**: The header containing the signature (e.g., `X-Hub-Signature-256`)
-   - **HMAC Algorithm**: SHA-256, SHA-1, etc.
+   - **HMAC Algorithm**: None, SHA-256 or SHA-1. Verification as a whole is optional.
+   - **HMAC Secret**: The shared secret. Required once you pick an algorithm.
+   - **HMAC Header**: The header containing the signature (e.g., `X-Hub-Signature-256`). Required once you pick an algorithm.
 4. Click **Create**
+
+An endpoint's verification settings cannot be edited afterwards — to change them,
+delete the endpoint and create it again. That is why choosing an algorithm and
+leaving the secret or the header empty is refused at creation rather than
+accepted and repaired later.
 
 You get a unique URL like `https://panel.example.com/hook/abc123`. Give this URL to the external service as their webhook destination.
 
@@ -84,6 +89,14 @@ When HMAC verification is configured:
 3. Marks the delivery as **verified** or **failed**
 
 Failed verifications are logged but not forwarded (unless you explicitly replay them).
+
+An endpoint that names an algorithm but holds no usable secret verifies nothing,
+so every delivery to it is **rejected**, logged as failed, and not forwarded. The
+endpoint list marks such an endpoint *no secret — rejecting*. Endpoints created
+before v2.127.0 could reach that state; delete and recreate one to repair it.
+
+The shared secret is never sent back to the browser. The endpoint list reports
+only whether a secret is present.
 
 ### Provider-Specific Setup
 
