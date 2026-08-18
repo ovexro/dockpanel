@@ -214,6 +214,125 @@ else
   fi
 fi
 
+# ── §E one wp-cli invocation ────────────────────────────────────────────────
+# s372. `services/wordpress.rs` owns the wp-cli invocation: it installs the
+# binary at a known path, passes `--allow-root` (the agent runs as root and
+# wp-cli REFUSES outright without it) and decides the plugin/theme skip policy.
+# `services/wp_vulnerability.rs` hand-rolled a second one and got both halves
+# wrong — it shelled out to `php` against a phar under the agent's private tmp,
+# which nothing in this tree writes and `PrivateTmp=yes` puts out of reach, and
+# its one non-phar arm omitted `--allow-root`. So every wp-cli call in the
+# vulnerability scanner failed, the plugin-list branch was an `if success` with
+# no `else`, and a scan that had never read a plugin was recorded as
+# `total_vulns: 0` — a clean bill of health for a site nothing had looked at.
+#
+# Membership is derived from the crate, not from a list: a new invocation joins
+# this census by EXISTING (#274), and E2 asserts checked == total so a site that
+# skips the flag cannot hide behind the ones that carry it (#565).
+echo
+echo "§E  one wp-cli invocation"
+
+WP_VULN=panel/agent/src/services/wp_vulnerability.rs
+[ -f "$WP_VULN" ] || { echo "  FATAL: $WP_VULN missing — wrong tree?"; exit 1; }
+
+# E0 — the census, printed as its own positive control (#480).
+WPCLI_FILES=""
+while read -r f; do
+  [ -n "$f" ] || continue
+  WPCLI_FILES="${WPCLI_FILES}${f}"$'\n'
+done < <(grep -rlE 'safe_command(_sync|_unsandboxed)?\((WP_CLI|"wp")\)' panel/agent/src --include='*.rs' 2>/dev/null | sort)
+
+WPCLI_N=$(grep -c . <<< "$WPCLI_FILES" || true)
+if [ "${WPCLI_N:-0}" -lt 1 ]; then
+  bad "E0 found no wp-cli invocation anywhere in the agent — the enumeration is broken, §E is measuring nothing"
+else
+  ok "E0 enumerated ${WPCLI_N} file(s) invoking wp-cli: $(tr '\n' ' ' <<< "$WPCLI_FILES" | sed 's/ $//')"
+fi
+
+# E1 — only the owning module may invoke it.
+WP_STRAY=$(grep -v "^${WP_SVC}$" <<< "$WPCLI_FILES" | grep -c . || true)
+if [ "${WP_STRAY:-0}" -eq 0 ]; then
+  ok "E1 services/wordpress.rs is the only module invoking wp-cli"
+else
+  while read -r f; do
+    [ -n "$f" ] || continue
+    bad "E1 $f invokes wp-cli directly instead of through services/wordpress.rs — a second copy is how the last one drifted onto a binary that does not exist"
+  done < <(grep -v "^${WP_SVC}$" <<< "$WPCLI_FILES")
+fi
+
+# E2 — EVERY invocation carries --allow-root, asserted in both directions.
+# Each call site is bounded by the code's own punctuation — from the
+# `safe_command(...)` to that statement's `.output()` — never a fixed -A n (#172).
+WP_TOTAL=0; WP_ROOTED=0
+while read -r stmt; do
+  [ -n "$stmt" ] || continue
+  WP_TOTAL=$((WP_TOTAL+1))
+  case "$stmt" in *'--allow-root'*) WP_ROOTED=$((WP_ROOTED+1));; esac
+done < <(code "$WP_SVC" | perl -0777 -ne 'while (/safe_command(?:_sync|_unsandboxed)?\((?:WP_CLI|"wp")\)(.*?)\.output\(\)/gs) { my $s=$1; $s =~ s/\s+/ /g; print "$s\n" }')
+
+if [ "$WP_TOTAL" -eq 0 ]; then
+  bad "E2 extracted no wp-cli call statements from services/wordpress.rs — this arm measures nothing"
+elif [ "$WP_ROOTED" -eq "$WP_TOTAL" ]; then
+  ok "E2 all $WP_TOTAL wp-cli call site(s) pass --allow-root (the agent runs as root; wp-cli refuses without it)"
+else
+  bad "E2 only $WP_ROOTED of $WP_TOTAL wp-cli call sites pass --allow-root — the ones that do not fail outright as root, exactly as the vulnerability scanner's did"
+fi
+
+# E3 — nothing anywhere runs a phar through the php interpreter. Anchored on the
+# INVOCATION, not on the filename, so `ensure_cli`'s download URL is not a hit.
+PHAR_HITS=$(for f in $(grep -rl 'safe_command' panel/agent/src --include='*.rs'); do
+  code "$f" | perl -0777 -ne 'while (/safe_command(?:_sync|_unsandboxed)?\("php"\)(.*?)\.output\(\)/gs) { print "HIT\n" if $1 =~ /\.phar/ }'
+done | grep -c . || true)
+if [ "${PHAR_HITS:-0}" -eq 0 ]; then
+  ok "E3 no agent code runs a .phar through the php interpreter"
+else
+  bad "E3 ${PHAR_HITS} php invocation(s) name a .phar — the agent's tmp is private, so a phar staged there is unreachable and the call can only fail"
+fi
+
+# E4 — the arm that would have caught the original defect: the scanner takes its
+# plugin list from the shared entry point and PROPAGATES the failure.
+SCAN=$(fnbody "$(code "$WP_VULN")" "scan_site")
+if [ -z "$SCAN" ]; then
+  bad "E4 could not extract scan_site — this arm measures nothing"
+elif ! has "$SCAN" 'wp_at_root'; then
+  bad "E4 scan_site no longer goes through the shared wp-cli entry point — it has its own invocation again"
+elif has "$SCAN" 'status\.success\(\)'; then
+  bad "E4 scan_site branches on an exit status again — the shape whose missing else recorded an unrun scan as total_vulns: 0"
+else
+  ok "E4 scan_site lists plugins through the shared entry point and propagates a failure instead of reporting zero"
+fi
+
+# E5 — wp-cli's `update` field is a STATUS; the version lives in `update_version`.
+if [ -z "$SCAN" ]; then
+  bad "E5 skipped — no scan_site"
+elif has "$SCAN" 'update_version'; then
+  ok "E5 the reported latest_version comes from update_version, not from the update status word"
+else
+  bad "E5 scan_site reports a version taken from the update STATUS again — 'available' is not a version, and the outdated test inverts"
+fi
+
+# E6 — the repaired failure has to REACH the operator. `error.rs` passes an
+# agent's sentence through on a 4xx and replaces anything else with
+# "Operation failed. Reference: <uuid>" (#556). `scan_site` could not fail
+# before, so this route's error arm was dead code; teaching it to fail armed a
+# collapse that had never been observed (#506). The count is printed, not
+# asserted, because the other routes in that file are a pre-existing carry —
+# but it is printed so the size stays visible on every run.
+WP_ROUTES=panel/agent/src/routes/wordpress.rs
+if [ ! -f "$WP_ROUTES" ]; then
+  bad "E6 $WP_ROUTES missing — this arm measures nothing"
+else
+  SCAN_ARM=$(fnbody "$(code "$WP_ROUTES")" "vuln_scan")
+  COLLAPSING=$(awk '/^async fn |^pub async fn /{fn=$0; sub(/^.*fn /,"",fn); sub(/\(.*/,"",fn)} /StatusCode::INTERNAL_SERVER_ERROR/{print fn}' "$WP_ROUTES" | sort -u | grep -c . || true)
+  if [ -z "$SCAN_ARM" ]; then
+    bad "E6 could not extract vuln_scan — this arm measures nothing"
+  elif has "$SCAN_ARM" 'INTERNAL_SERVER_ERROR'; then
+    bad "E6 vuln_scan returns a 5xx again — the panel replaces it with 'Operation failed. Reference: <uuid>', so a scan that could not run is opaque instead of merely wrong"
+  else
+    ok "E6 a scan that cannot run reports its reason as a 4xx, so the sentence survives the panel boundary (${COLLAPSING} other route(s) in that file still collapse — pre-existing carry)"
+  fi
+fi
+
 # ── §D context ──────────────────────────────────────────────────────────────
 echo
 echo "§D  context (green at both tags)"

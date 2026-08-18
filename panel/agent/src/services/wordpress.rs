@@ -56,12 +56,35 @@ async fn wp_with_plugins(domain: &str, args: &[&str]) -> Result<String, String> 
 }
 
 async fn wp_inner(domain: &str, args: &[&str], skip_plugins: bool) -> Result<String, String> {
-    ensure_cli().await?;
     let path = site_path(domain)?;
+    wp_at_root(&path, args, skip_plugins).await
+}
+
+/// Run a wp-cli command against an EXPLICIT filesystem root.
+///
+/// `wp_inner` derives the root from the domain and always lands on `public/`;
+/// the vulnerability scanner resolves its own root because a WordPress install
+/// is not always under `public/`. It therefore needs this same invocation with
+/// a different path — and hand-rolling a second one is exactly what went wrong:
+/// that copy shelled out to `php` against a phar under the agent's private
+/// tmp — a file nothing in this tree ever writes, and which `PrivateTmp=yes`
+/// puts out of reach of anyone who might place one there — and it
+/// omitted `--allow-root`, which the agent needs because it runs as root and
+/// wp-cli refuses outright without it. Both arms failed, and the scan reported
+/// a clean site.
+///
+/// So: every wp-cli invocation in this crate goes through here. One place
+/// decides the binary, `ensure_cli`, `--allow-root` and the skip policy.
+pub(crate) async fn wp_at_root(
+    root: &str,
+    args: &[&str],
+    skip_plugins: bool,
+) -> Result<String, String> {
+    ensure_cli().await?;
     let mut cmd = safe_command(WP_CLI);
     cmd.args(args)
         .arg("--allow-root")
-        .arg(format!("--path={path}"));
+        .arg(format!("--path={root}"));
     if skip_plugins {
         cmd.arg("--skip-plugins").arg("--skip-themes");
     }

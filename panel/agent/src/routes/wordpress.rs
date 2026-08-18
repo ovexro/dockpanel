@@ -261,8 +261,14 @@ async fn vuln_scan(
         .await
         .map(|result| Json(serde_json::to_value(result).unwrap_or_default()))
         .map_err(|e| {
+            // 422, like every other route in this file, and for the reason the
+            // panel enforces: `error.rs` passes an agent's sentence through on a
+            // 4xx and replaces anything else with "Operation failed. Reference:
+            // <uuid>". This arm was unreachable until `scan_site` learned to
+            // fail instead of reporting zero vulnerabilities, so the collapse it
+            // would have caused had never been observed.
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 Json(serde_json::json!({"error": e})),
             )
         })

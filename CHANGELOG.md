@@ -4,6 +4,94 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.125.0]
+
+### Security — h2 unbounded empty DATA frames (RUSTSEC-2026-0258)
+
+`h2` 0.4.15 → 0.4.16 in the agent and the API. The advisory was published on
+2026-08-17, after v2.124.0 shipped, so it is new rather than missed; `cargo audit`
+is what surfaced it, as it is for every Rust advisory — Dependabot does not carry
+them.
+
+### Fixed — the WordPress vulnerability scan reported a clean site it had never read
+
+The WordPress Toolkit's scanner asks wp-cli for the site's plugin list, then
+checks each plugin against the known-vulnerable set. It could never get that
+list.
+
+Its primary call ran `wp plugin list` **without `--allow-root`**. The agent runs
+as root, and wp-cli refuses outright in that case — *"YIKES! It looks like
+you're running this as root"* — so the call failed on every install. The
+fallback then shelled out to `php` against a phar staged under the agent's tmp,
+a file nothing in this tree has ever written, and which `PrivateTmp=yes` puts
+out of reach of anyone who might try to place one there. Both arms failed.
+
+The result was read by an `if output.status.success()` with no `else`, and the
+function returned `Ok` regardless — `total_vulns: 0`, `critical_count: 0`,
+`high_count: 0`. So every scan of every site reported no vulnerabilities, and
+the panel recorded and rendered that zero as a result. A site with a known
+exploited plugin scored exactly the same as a clean one.
+
+The same dead phar was the *only* invocation behind four of the six one-click
+hardening fixes — disabling the file editor, turning off `WP_DEBUG`, forcing SSL
+on wp-admin, and enabling core auto-updates. Each returned "Failed to set X"
+with no reason, the toolkit re-ran the check, and the same four stayed failing.
+Pressing "Fix issues" again did the same thing. Only the two fixes that do not
+use wp-cli — the `wp-config.php` permission change and the uploads `.htaccess` —
+have ever worked. `docs/guides/wordpress.md` advertises 7 checks with 6
+auto-fixable; that sentence is true for the first time with this release.
+
+Two further defects in the same scan, both of which would have survived fixing
+the invocation alone:
+
+- The "outdated" test was inverted. wp-cli's `update` field is a **status** —
+  one of `none`, `available`, `unavailable`, or `version higher than expected` —
+  and the code read `update != "none" && update != "available"`, which is true
+  for exactly the two states in which no update can be applied and false for the
+  one in which it can. It then reported that status word as the plugin's
+  `latest_version`, so the UI would have offered "update to unavailable". The
+  version has always been in `update_version`, a field nothing in the tree read.
+- A scan whose wp-cli call fails now says so instead of returning zeros.
+
+The root cause was a second, hand-rolled wp-cli invocation. `services/wordpress.rs`
+owns this: it installs the binary, passes `--allow-root`, and decides the
+plugin/theme skip policy. `services/wp_vulnerability.rs` wrote its own and got
+both halves wrong. That module now calls the same entry point, which was
+extracted so it can take an explicit root — the scanner resolves its own,
+because a WordPress install is not always under `public/`.
+
+The scan runs with `--skip-plugins --skip-themes`: a vulnerability scanner must
+not execute the code it is scanning, on a site that may already be compromised,
+in a process running as root.
+
+Repairing the scan armed a dormant collapse. `scan_site` could not fail before,
+so this route's error arm had never executed — and it returned a 5xx, which the
+panel replaces with "Operation failed. Reference: <uuid>". A scan that could not
+run would have been opaque instead of merely wrong. It now returns 422 like the
+other routes in the same file, so wp-cli's own sentence reaches the operator:
+*"wp-cli could not list plugins for example.com: Error establishing a database
+connection."* Eight routes in that file still collapse their agent's sentence
+this way; that is a pre-existing carry, and §E prints the count on every run
+rather than leaving it in a note somewhere.
+
+`sibling-parity-pin-e2e.sh` gains §E, seven arms that derive the population of
+wp-cli invocations from the crate rather than from a list: one owning module,
+every call site carrying `--allow-root`, no phar run through the interpreter,
+the scanner propagating its failure, and the version taken from `update_version`.
+Against the previous release it reports the defect itself — two modules
+invoking wp-cli, five phar invocations, and a scanner branching on an exit
+status it never checked the other side of.
+
+Driven on a throwaway server against a real WordPress install carrying two
+plugins from the scanner's own vulnerable set, with the agent binary as the only
+variable: v2.124.0 reported `total_vulns: 0` for a site running a critical
+auth-bypass plugin and failed four of four hardening fixes; v2.125.0 reported
+2 vulnerabilities, 1 critical, with the correct available versions, and applied
+all four — confirmed by reading the constants back out of `wp-config.php`.
+Stopping the database made the scan answer 422 with the reason; restarting it
+made the same call succeed again, which is the control that separates a fix from
+a refusal.
+
 ## [2.124.0]
 
 ### Fixed — a deleted branch orphaned a running preview, and the panel reported success
