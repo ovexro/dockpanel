@@ -80,7 +80,24 @@ produces, and only that constant's own check is allowed to turn red. Unit tests
 constant the hardening path manages must be graded on the value bound to its own
 name, with the population derived from `apply_hardening` rather than listed — and
 §E9, that no working fix is stranded behind a status word the UI does not accept.
-Both arms go red against v2.125.1.
+Both arms go red against v2.125.1, and three planted reversions were each killed
+with the subjects restored byte-identical.
+
+⚠ Six of those tests initially passed only as root. They build a real site tree
+and run `check_security` against it end to end, which is what makes them worth
+having — but they built it under `/var/www`, which only root may write, so they
+passed on a box where the agent runs as root and failed in CI, which does not.
+No shipped binary was affected; the fault was entirely in the harness.
+`services::backups` had already solved this, defining `webroot_root()` under
+`#[cfg(not(test))]` and again under `#[cfg(test)]` beneath the system temp
+directory. `wp_vulnerability` now does the same, and the three functions in it
+that each derived `/var/www/{domain}` independently share one helper.
+
+A source pin for that class was written and then rejected rather than shipped:
+every shape that is clean at HEAD fails to catch the actual defect, because the
+path literal and the call that used it sat on different lines, and every shape
+that does catch it is red against between five and twenty-two pre-existing
+siblings. An arm carrying that many carve-outs is how a suite stops being read.
 
 ## [2.125.1]
 
