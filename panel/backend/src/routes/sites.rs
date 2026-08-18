@@ -476,7 +476,11 @@ pub async fn create(
 
     // Auto-allocate port for node/python runtimes
     let effective_proxy_port = if (runtime == "node" || runtime == "python") && body.proxy_port.is_none() {
-        // Find first available port in 4000-4999 range
+        // Find the first free port in the 5000-5999 range, on THIS server. The
+        // uniqueness index behind it is `idx_sites_proxy_port_server`, scoped the
+        // same way; while it was global, this first-fit picked 5000 on every
+        // server whose own set was empty and the INSERT below rejected it as a
+        // duplicate domain.
         let row: Option<(i32,)> = sqlx::query_as(
             "SELECT s.port FROM generate_series(5000, 5999) AS s(port) \
              WHERE s.port NOT IN (SELECT proxy_port FROM sites WHERE proxy_port IS NOT NULL AND server_id = $1) \
@@ -507,7 +511,15 @@ pub async fn create(
     .await
     .map_err(|e| {
         let msg = e.to_string();
-        if msg.contains("duplicate key") || msg.contains("unique") {
+        // Two unique indexes can reject this INSERT and they mean opposite things
+        // to the operator. Collapsing both into "Domain already exists" sent
+        // whoever hit the port one to go and look at DNS.
+        if msg.contains("idx_sites_proxy_port_server") {
+            err(
+                StatusCode::CONFLICT,
+                "That proxy port is already in use on this server",
+            )
+        } else if msg.contains("duplicate key") || msg.contains("unique") {
             err(StatusCode::CONFLICT, "Domain already exists")
         } else {
             err(StatusCode::INTERNAL_SERVER_ERROR, &msg)

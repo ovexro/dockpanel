@@ -4,6 +4,58 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.128.0]
+
+### Fixed — a port allocator and the unique index behind it disagreed about what a port is unique within
+
+`20260319000000_multi_server.sql` un-globalised five columns under the header
+*"domain should be unique per server, not globally"*. One of them was
+`git_deploys.host_port`, which became a unique index on `(host_port, server_id)`
+and has agreed with its allocator ever since. The **next** migration, one day
+later, re-introduced the global shape on two neighbouring columns whose
+allocators were already server-scoped.
+
+Both allocators pick the first free port from a set scoped to one server, so on
+any install with more than one server the second server's set is empty, it picks
+the bottom of the range, and the INSERT collides with a row belonging to the
+first server. It is not a race. It repeats on every attempt, because the losing
+server never records anything that would make its own set grow.
+
+**Git previews built a container nothing could ever reap.** The rejected insert
+was logged at `warn` and stepped over, and the deploy task ran anyway — so the
+container, its published port, its vhost and its Let's Encrypt certificate were
+created with **no database row**. Every consumer of a preview is row-driven (the
+previews list, Delete Preview, the TTL and stuck sweeps, the parent delete), and
+nothing on the box reconciles running containers against rows, while Docker's own
+`unless-stopped` policy carried the orphan across crashes and reboots. The same
+function already refused, forty lines higher, to overwrite a preview row for
+exactly this reason. A failed write is now a refusal: nothing is built that
+cannot be found again. The reason returned to the pusher is a fixed sentence —
+it is echoed into an unauthenticated webhook response and into GitHub's delivery
+log, so the database error goes to the operator's journal instead.
+
+**Node and python sites could not be created on any server but the first.** The
+same collision on `sites.proxy_port`, inside a transaction whose error arm mapped
+every `duplicate key` to `CONFLICT "Domain already exists"` — so a port-allocator
+failure was reported as a taken domain, which sends the operator to look at DNS.
+Port collisions now say so. The allocator's own comment claimed a range of
+`4000-4999` while the query walked `5000-5999`; it now names the range it walks.
+
+`git_previews` gains the `server_id` its allocator already scopes by, backfilled
+from its git deploy — a unique index cannot reach through the JOIN the sweeps
+use. `sites` already had one.
+
+### Added
+
+- `port-scope-pin-e2e.sh` — 30 assertions, 16 red at v2.127.0. It **derives** the
+  population from the migrations rather than listing it: every unique index over
+  a port column that survives the DROPs, checked against the scope of the
+  allocator that feeds it. The invariant is not "a port index must name
+  `server_id`" — `databases.port` is globally unique *and* globally allocated,
+  which is correct, because that table has no server to scope by. A port index on
+  a table the arm has not been taught about fails on purpose, which is the step
+  that was skipped in 2026-03.
+
 ## [2.127.0]
 
 ### Fixed — the webhook gateway's signature verification told the operator four things that were not true

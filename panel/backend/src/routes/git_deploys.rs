@@ -2987,12 +2987,19 @@ async fn record_failed_history(db: &sqlx::PgPool, git_deploy_id: Uuid, commit_ha
 
 /// Handle preview deployment for non-configured branches.
 ///
-/// Returns the reason the push was NOT taken up, when it was not. Three things
+/// Returns the reason the push was NOT taken up, when it was not. Four things
 /// abandon a preview BEFORE the build task is spawned, and the webhook answered
-/// `Preview deploy triggered` for all three — a claim about work that never
+/// `Preview deploy triggered` for all of them — a claim about work that never
 /// started, delivered to the one place a pusher would look for it. Past the spawn
 /// the answer is honest: a clone or build failure after that point is recorded on
 /// the row as `status = 'failed'` and shown in the previews list.
+///
+/// The fourth was added last and is the reason that last sentence is true at all.
+/// A failed `git_previews` upsert used to be logged and stepped over, and every
+/// status write below is `WHERE git_deploy_id = $1 AND branch = $2` — so with no
+/// row they all match zero rows and return `Ok`, and a preview that built, bound
+/// a port, took a vhost and obtained a certificate was recorded nowhere and
+/// reported as running. Nothing on the box reaps a preview that has no row.
 async fn handle_preview_deploy(
     state: &AppState,
     agent: &AgentHandle,
@@ -3121,16 +3128,32 @@ async fn handle_preview_deploy(
         }
     }
 
-    // Upsert preview record
+    // Upsert preview record.
+    //
+    // This is a refusal, not a warning, and the difference is the whole reason
+    // the doc comment above can promise an honest answer. The row is the only
+    // record that the container, the port, the vhost and the certificate created
+    // below exist: every consumer reads `git_previews` (the previews list, Delete
+    // Preview, both cleanup sweeps, the parent delete) and nothing reconciles
+    // running containers against rows. Deploying past a failed write is how a
+    // preview becomes unreapable — the same state :3081 already refuses to
+    // create, for the same reason, forty lines up.
     if let Err(e) = sqlx::query(
-        "INSERT INTO git_previews (git_deploy_id, branch, container_name, host_port, domain, status) \
-         VALUES ($1, $2, $3, $4, $5, 'deploying') \
-         ON CONFLICT (git_deploy_id, branch) DO UPDATE SET status = 'deploying', container_name = $3, host_port = $4, updated_at = NOW()"
+        "INSERT INTO git_previews (git_deploy_id, server_id, branch, container_name, host_port, domain, status) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'deploying') \
+         ON CONFLICT (git_deploy_id, branch) DO UPDATE SET status = 'deploying', server_id = $2, container_name = $4, host_port = $5, updated_at = NOW()"
     )
-    .bind(config.id).bind(branch).bind(&container_name).bind(port).bind(&preview_domain)
+    .bind(config.id).bind(config.server_id).bind(branch).bind(&container_name).bind(port).bind(&preview_domain)
     .execute(&state.db).await
     {
-        tracing::warn!("Failed to upsert git preview record: {e}");
+        // The returned reason is echoed verbatim into the webhook's HTTP body at
+        // :1684 and from there into GitHub's delivery log, and that door has no
+        // auth extractor — so it carries no database detail. The detail goes to
+        // the operator's journal instead.
+        tracing::warn!("Failed to upsert git preview record for branch '{branch}': {e}");
+        return Err(
+            "the preview could not be recorded, so it was not deployed — retry the push".to_string(),
+        );
     }
 
     // Spawn deploy task

@@ -520,8 +520,9 @@ else
   skip "F6/F7 — main.rs not extractable"
 fi
 
-# F8/F9 — preview teardown. git_previews carries no server of its own, but the
-# sweep already JOINs git_deploys, whose server_id is NOT NULL.
+# F8/F9 — preview teardown. git_previews carries its own server_id since
+# 20260818000000, but the sweep still reads the deploy's copy through the JOIN —
+# that is the one the teardown's authority derives from, and this arm pins it.
 if [ -n "$PREV_S" ]; then
   if [ "$(count "$PREV_S" "d\.server_id")" -ge 2 ]; then
     ok "F8 both preview sweeps carry the git deploy's server_id through the JOIN"

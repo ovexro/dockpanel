@@ -28,13 +28,19 @@ async fn cleanup_expired_previews(db: &PgPool, agents: &AgentRegistry) -> Result
     // Find expired previews: where updated_at + ttl_hours has passed
     // Join with git_deploys to get preview_ttl_hours
     //
-    // `d.server_id` comes along for the ride. `git_previews` carries no server
-    // of its own, but a preview belongs to exactly one git deploy and that row's
-    // `server_id` is NOT NULL — so the JOIN this query already performs is
-    // enough to name the host, and no migration is needed. Without it the sweep
-    // read every server's previews and tore down containers on whichever box the
+    // `d.server_id` comes along for the ride. A preview belongs to exactly one
+    // git deploy and that row's `server_id` is NOT NULL, so the JOIN this query
+    // already performs is enough to name the host. Without it the sweep read
+    // every server's previews and tore down containers on whichever box the
     // panel runs on: a container name that exists on both hosts is destroyed on
     // the wrong one, and the row is then deleted as if the teardown had worked.
+    //
+    // `git_previews` now also carries its own `server_id`
+    // (20260818000000_port_uniqueness_server_scope), because a unique index
+    // cannot reach through a JOIN and the host_port index had to be scoped. The
+    // two are written together and `git_deploys.server_id` is immutable, so they
+    // cannot disagree; this query keeps reading the deploy's copy, which is the
+    // one the teardown's authority derives from.
     let expired: Vec<(uuid::Uuid, String, String, Option<String>, i32, uuid::Uuid)> = sqlx::query_as(
         "SELECT p.id, p.container_name, p.branch, p.domain, p.host_port, d.server_id \
          FROM git_previews p \
