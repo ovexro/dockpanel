@@ -114,6 +114,15 @@ pub struct CreateRouteRequest {
     pub retry_delay_secs: Option<i32>,
 }
 
+/// The one field either toggle accepts. Deliberately not a partial-update body:
+/// an endpoint's verification settings are fixed at creation on purpose
+/// (see `create_endpoint`), and a struct that could carry them would make this
+/// door look like the place to change them.
+#[derive(serde::Deserialize)]
+pub struct SetEnabledRequest {
+    pub enabled: bool,
+}
+
 #[derive(serde::Deserialize)]
 pub struct PaginationQuery {
     pub limit: Option<i64>,
@@ -222,7 +231,48 @@ pub async fn delete_endpoint(
         return Err(err(StatusCode::NOT_FOUND, "Endpoint not found"));
     }
 
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "webhook_endpoint.delete",
+        Some("webhook"), Some(&id.to_string()), None, None,
+    ).await;
+
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// PUT /api/webhook-gateway/endpoints/{id} — Open or close the public door.
+///
+/// `enabled` is what the inbound receiver reads before it will look at a request
+/// at all, and until this handler existed nothing in the product could write it:
+/// the column was born TRUE and stayed TRUE for the life of the row. Shutting a
+/// public door therefore meant deleting the endpoint — which cascades away every
+/// delivery and every route attached to it, so the only way to stop traffic was
+/// to destroy the record of the traffic that had already arrived. Closing a door
+/// and discarding its history are different operations and an operator has to be
+/// able to do the first without the second.
+pub async fn set_endpoint_enabled(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<SetEnabledRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = sqlx::query(
+        "UPDATE webhook_endpoints SET enabled = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3"
+    )
+    .bind(req.enabled).bind(id).bind(claims.sub)
+    .execute(&state.db).await
+    .map_err(|e| internal_error("set endpoint enabled", e))?;
+
+    if result.rows_affected() == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "Endpoint not found"));
+    }
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        if req.enabled { "webhook_endpoint.enable" } else { "webhook_endpoint.disable" },
+        Some("webhook"), Some(&id.to_string()), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true, "enabled": req.enabled })))
 }
 
 // ── Deliveries (Inspector) ──────────────────────────────────────────────────
@@ -255,7 +305,7 @@ pub async fn list_deliveries(
     Ok(Json(deliveries))
 }
 
-/// POST /api/webhook-gateway/deliveries/{delivery_id}/replay — Replay a delivery to all routes.
+/// POST /api/webhook-gateway/deliveries/{delivery_id}/replay — Replay a delivery to its matching routes.
 pub async fn replay_delivery(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
@@ -271,7 +321,6 @@ pub async fn replay_delivery(
     .map_err(|e| internal_error("replay delivery", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Delivery not found"))?;
 
-    // Forward to all enabled routes
     let routes: Vec<WebhookRoute> = sqlx::query_as(
         "SELECT * FROM webhook_routes WHERE endpoint_id = $1 AND enabled = TRUE"
     )
@@ -281,15 +330,35 @@ pub async fn replay_delivery(
 
     let body = delivery.body.unwrap_or_default();
     let db = state.db.clone();
-    let forwarded = routes.len();
+    let mut forwarded = 0usize;
 
+    // A replay is the same delivery arriving a second time, so it obeys the same
+    // routing decision. This loop used to hand the body to every enabled route
+    // whatever its filter said, while the inbound path skipped the ones that did
+    // not match — so replaying sent the payload to destinations the operator had
+    // deliberately excluded, each with that route's stored headers attached and
+    // its retry budget behind it. The guide has always described replay as going
+    // to the matching routes; only the code disagreed.
     for route in routes {
+        if !route_admits(&route, &body) {
+            continue;
+        }
+        forwarded += 1;
         let body_clone = body.clone();
         let db_clone = db.clone();
         tokio::spawn(async move {
             forward_to_route(&db_clone, &route, &body_clone, delivery_id).await;
         });
     }
+
+    // Replaying re-sends an externally-supplied body to third parties under the
+    // panel's own credentials. Until now it was the one forwarding action in this
+    // module that left no trace at all.
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "webhook_delivery.replay",
+        Some("webhook"), Some(&delivery_id.to_string()),
+        Some(&format!("{} route(s)", forwarded)), None,
+    ).await;
 
     Ok(Json(serde_json::json!({ "ok": true, "replayed_to": forwarded })))
 }
@@ -383,6 +452,41 @@ pub async fn delete_route(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// PUT /api/webhook-gateway/routes/{route_id} — Stop or resume forwarding.
+///
+/// The outbound half of the same severance. A route is an arbitrary external
+/// destination with the operator's own headers attached and a retry budget, and
+/// three queries gate on its `enabled` column — but nothing could write it, so
+/// stopping data leaving the box for a third party meant deleting the route and
+/// its counters with it. Ownership is enforced through the parent endpoint, the
+/// same shape `delete_route` uses.
+pub async fn set_route_enabled(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+    Path(route_id): Path<Uuid>,
+    Json(req): Json<SetEnabledRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = sqlx::query(
+        "UPDATE webhook_routes r SET enabled = $1 FROM webhook_endpoints e \
+         WHERE r.id = $2 AND r.endpoint_id = e.id AND e.user_id = $3"
+    )
+    .bind(req.enabled).bind(route_id).bind(claims.sub)
+    .execute(&state.db).await
+    .map_err(|e| internal_error("set route enabled", e))?;
+
+    if result.rows_affected() == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "Route not found"));
+    }
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email,
+        if req.enabled { "webhook_route.enable" } else { "webhook_route.disable" },
+        Some("webhook"), Some(&route_id.to_string()), None, None,
+    ).await;
+
+    Ok(Json(serde_json::json!({ "ok": true, "enabled": req.enabled })))
+}
+
 // ── Public Inbound Webhook Receiver ─────────────────────────────────────────
 
 /// POST /api/webhooks/gateway/{token} — Receive an inbound webhook (public, no auth).
@@ -472,20 +576,17 @@ pub async fn receive_webhook(
     .fetch_all(&state.db).await
     .unwrap_or_default();
 
-    let forwarded = routes.len();
+    // Counted as the loop spawns, not as the query returns: a route the filter
+    // excludes is not a route this delivery was sent to, and answering with the
+    // number of enabled routes reported work that never happened.
+    let mut forwarded = 0usize;
     let db = state.db.clone();
 
     for route in routes {
-        // Check filter
-        if let (Some(path), Some(value)) = (&route.filter_path, &route.filter_value) {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body_str) {
-                let actual = parsed.pointer(path).and_then(|v| v.as_str()).unwrap_or("");
-                if actual != value.as_str() {
-                    continue; // Skip this route — filter doesn't match
-                }
-            }
+        if !route_admits(&route, &body_str) {
+            continue;
         }
-
+        forwarded += 1;
         let body_clone = body_str.clone();
         let db_clone = db.clone();
         tokio::spawn(async move {
@@ -636,6 +737,26 @@ fn verify_hmac_sha1(secret: &str, body: &[u8], signature_header: &str) -> bool {
     };
     mac.update(body);
     mac.verify_slice(&expected).is_ok()
+}
+
+/// Whether a route's filter admits this body.
+///
+/// One definition, called from both the inbound path and the replay path. It
+/// lived inline in the inbound loop and had no counterpart in replay, which is
+/// how the two came to disagree about where a delivery goes.
+///
+/// A route with no filter takes everything, and a body that will not parse as
+/// JSON is admitted rather than dropped — the inbound behaviour this preserves.
+/// The filter selects destinations; it is not a security control, and nothing
+/// here should be read as one.
+fn route_admits(route: &WebhookRoute, body: &str) -> bool {
+    let (Some(path), Some(value)) = (&route.filter_path, &route.filter_value) else {
+        return true;
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) else {
+        return true;
+    };
+    parsed.pointer(path).and_then(|v| v.as_str()).unwrap_or("") == value.as_str()
 }
 
 static HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();

@@ -1361,10 +1361,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/backup-orchestrator/storage-history", get(backup_orchestrator::storage_history))
         // Webhook Gateway
         .route("/api/webhook-gateway/endpoints", get(webhook_gateway::list_endpoints).post(webhook_gateway::create_endpoint))
-        .route("/api/webhook-gateway/endpoints/{id}", delete(webhook_gateway::delete_endpoint))
+        .route("/api/webhook-gateway/endpoints/{id}", put(webhook_gateway::set_endpoint_enabled).delete(webhook_gateway::delete_endpoint))
         .route("/api/webhook-gateway/endpoints/{id}/deliveries", get(webhook_gateway::list_deliveries))
         .route("/api/webhook-gateway/endpoints/{id}/routes", get(webhook_gateway::list_routes).post(webhook_gateway::create_route))
-        .route("/api/webhook-gateway/routes/{route_id}", delete(webhook_gateway::delete_route))
+        .route("/api/webhook-gateway/routes/{route_id}", put(webhook_gateway::set_route_enabled).delete(webhook_gateway::delete_route))
         .route("/api/webhook-gateway/deliveries/{delivery_id}/replay", post(webhook_gateway::replay_delivery))
         // IaC / Terraform provider
         .route("/api/iac/tokens", get(iac::list_tokens).post(iac::create_token))
@@ -1393,6 +1393,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/secrets/vaults/{vault_id}/import", post(secrets::import_vault))
         // Incident Management
         .route("/api/incidents", get(incidents::list).post(incidents::create))
+        // Static segment, so matchit prefers it over `{id}` whatever the order here.
+        .route("/api/incidents/summary", get(incidents::summary))
         .route("/api/incidents/{id}", get(incidents::get_one).put(incidents::update).delete(incidents::remove))
         .route("/api/incidents/{id}/updates", get(incidents::list_updates).post(incidents::post_update))
         // Status Page Management

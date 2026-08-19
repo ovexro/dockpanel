@@ -148,7 +148,7 @@ export default function AtlasLayout() {
                         {firingCount}
                       </span>
                     )}
-                    {item.to === "/incidents" && incidentCount > 0 && (
+                    {item.to === "/monitoring" && incidentCount > 0 && (
                       <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-warn-500 text-dark-900 rounded-full">
                         {incidentCount}
                       </span>
@@ -424,7 +424,7 @@ export default function AtlasLayout() {
                             {firingCount}
                           </span>
                         )}
-                        {item.to === "/incidents" && incidentCount > 0 && (
+                        {item.to === "/monitoring" && incidentCount > 0 && (
                           <span className="ml-auto px-1.5 py-0.5 text-[10px] font-bold bg-warn-500 text-dark-900 rounded-full">
                             {incidentCount}
                           </span>

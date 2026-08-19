@@ -1,6 +1,6 @@
 # API Reference
 
-DockPanel exposes 821 REST endpoints (533 backend + 288 agent) across 50+ categories — the figure derived from the two routers in `FEATURES.md` §Verified Metrics, which owns it. The tables below document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
+DockPanel exposes 823 REST endpoints (535 backend + 288 agent) across 50+ categories — the figure derived from the two routers in `FEATURES.md` §Verified Metrics, which owns it. The tables below document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
 
 ## Authentication
 
@@ -746,6 +746,7 @@ leaves the stored value unchanged — there is no way to clear one through this 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/incidents` | List incidents |
+| GET | `/api/incidents/summary` | Counts by status, plus `open` — every status except `resolved` and `postmortem` |
 | POST | `/api/incidents` | Create incident |
 | GET | `/api/incidents/{id}` | Get incident |
 | PUT | `/api/incidents/{id}` | Update incident |
@@ -794,13 +795,16 @@ leaves the stored value unchanged — there is no way to clear one through this 
 
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | `/api/webhooks/gateway/{token}` | **Public inbound receiver.** The only unauthenticated route here — the token in the path is the credential |
 | GET | `/api/webhook-gateway/endpoints` | List endpoints |
 | POST | `/api/webhook-gateway/endpoints` | Create endpoint |
-| DELETE | `/api/webhook-gateway/endpoints/{id}` | Delete endpoint |
+| PUT | `/api/webhook-gateway/endpoints/{id}` | Pause or resume an endpoint — body `{"enabled": bool}` |
+| DELETE | `/api/webhook-gateway/endpoints/{id}` | Delete endpoint, and every delivery and route recorded against it |
 | GET | `/api/webhook-gateway/endpoints/{id}/deliveries` | List deliveries |
-| POST | `/api/webhook-gateway/endpoints/{id}/replay/{did}` | Replay delivery |
+| POST | `/api/webhook-gateway/deliveries/{delivery_id}/replay` | Replay a delivery to its matching routes |
 | GET | `/api/webhook-gateway/endpoints/{id}/routes` | List routes |
 | POST | `/api/webhook-gateway/endpoints/{id}/routes` | Create route |
+| PUT | `/api/webhook-gateway/routes/{route_id}` | Pause or resume a route — body `{"enabled": bool}` |
 | DELETE | `/api/webhook-gateway/routes/{id}` | Delete route |
 
 ---

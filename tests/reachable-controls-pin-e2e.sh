@@ -203,6 +203,73 @@ ge "F3 the PITR control discloses that nothing is archived" \
    "$($G -c 'nothing is being archived' "$DBUI")" "1"
 
 echo
+echo "── G. A route literal compared against the nav registry still resolves ─"
+
+# The open-incident badge rendered nothing for five months. Seven arms across
+# four layouts were keyed on `item.to === "/incidents"` while the nav row that
+# would have produced that value had been deleted by a consolidation commit that
+# touched neither the arms nor the poll feeding them. Every part was live — the
+# markup shipped, the count was fetched every sixty seconds — and the comparison
+# could never be true. Nothing failed; the badge simply never appeared.
+#
+# The registry has THREE readers, not one. Besides the layouts, `navFlagsFor`
+# (navItems.ts) resolves an arbitrary path against the same rows for the command
+# palette and for the dashboard's recommendation targets. An arm watching only
+# the layouts is satisfied by the two readers it cannot see, so the population is
+# DERIVED from all three — and the offenders are named in ONE assertion, because
+# one per member would make this suite's published count a function of the tree.
+
+NAVDATA=panel/frontend/src/data/navItems.ts
+PALETTE=panel/frontend/src/components/CommandPalette.tsx
+DASH=panel/frontend/src/pages/Dashboard.tsx
+for f in "$NAVDATA" "$PALETTE" "$DASH"; do
+  [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
+done
+
+# The authority: every route the registry actually offers.
+NAV=$($G -oE 'to: *"[^"]+"' "$NAVDATA" | sed -E 's/.*"(.*)"/\1/' | sort -u)
+NAV_N=$(printf '%s\n' "$NAV" | $G -c . || true)
+
+# Reader 1 — the layouts' literal comparisons.
+LIT_LAYOUT=$($G -rhoE 'item\.to === "[^"]+"' panel/frontend/src/components | sed -E 's/.*"(.*)"/\1/')
+# Reader 2 — the command palette. Its own comment tracks this invariant by hand:
+# "A command whose path has no nav row (none today) is treated as unrestricted".
+LIT_PALETTE=$($G -ohE 'path: *"/[^"]*"' "$PALETTE" | sed -E 's/.*"(.*)"/\1/')
+# Reader 3 — the dashboard's recommendation targets. Bounded on the declaration's
+# own closing brace, never a fixed -A window, which would bleed into the next one.
+LIT_DASH=$(awk '/const REC_ACTION_ROUTES/{f=1} f{print} f && /^};/{exit}' "$DASH" \
+           | $G -oE '"/[^"]*"' | tr -d '"')
+
+# navFlagsFor drops the query string before it looks a row up, so this must too.
+LITS=$(printf '%s\n%s\n%s\n' "$LIT_LAYOUT" "$LIT_PALETTE" "$LIT_DASH" \
+       | sed -E 's/\?.*$//' | $G -v '^$' | sort -u)
+LITS_N=$(printf '%s\n' "$LITS" | $G -c . || true)
+
+ge "G0 the nav registry parses as a registry" "$NAV_N" "20"
+ge "G0b all three readers were extracted" "$LITS_N" "25"
+
+OFFENDERS=""
+for l in $LITS; do
+  printf '%s\n' "$NAV" | $G -qxF -- "$l" || OFFENDERS="$OFFENDERS $l"
+done
+if [ -z "$OFFENDERS" ]; then
+  ok "G1 every route literal resolved against the registry ($LITS_N checked over 3 readers)"
+else
+  bad "G1 every route literal resolved against the registry" \
+      "no nav row for:$OFFENDERS — markup or a menu entry gated on these can never fire"
+fi
+
+# G1-control: the matcher must be able to answer NO, or G1 is green by
+# construction. /incidents is the honest negative — the row this section exists
+# for, deleted from the registry and still redirected by the router.
+if printf '%s\n' "$NAV" | $G -qxF -- "/incidents"; then
+  bad "G1-control the matcher can answer NO" "/incidents resolved — the negative control is not negative"
+else
+  ok "G1-control the matcher can answer NO for a path with no nav row"
+fi
+
+echo
+
 if [ "$FAIL" -eq 0 ]; then
   printf '\033[32mPASS %d  FAIL %d\033[0m\n' "$PASS" "$FAIL"
 else

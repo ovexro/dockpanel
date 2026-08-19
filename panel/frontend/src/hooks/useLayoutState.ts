@@ -113,8 +113,15 @@ export function useLayoutState(): LayoutState {
       api.get<{ firing: number }>("/alerts/summary")
         .then((s) => setFiringCount(s.firing))
         .catch(() => {});
-      api.get<{ id: string; status: string }[]>("/incidents?status=investigating&limit=100")
-        .then((incs) => setIncidentCount(Array.isArray(incs) ? incs.length : 0))
+      // Asks the panel's own question rather than a narrower one of its own.
+      // This used to fetch `?status=investigating&limit=100` and take the array
+      // length: `investigating` is one of three open statuses, so an incident
+      // dropped out of this count the moment anyone moved it to `identified` —
+      // which is the first thing the incident screen offers — while the
+      // dashboard went on counting it. The length was also capped at the page
+      // size it asked for.
+      api.get<{ open: number }>("/incidents/summary")
+        .then((s) => setIncidentCount(s.open ?? 0))
         .catch(() => {});
       api.get<{ count: number }>("/notifications/unread-count")
         .then((d) => setNotifCount(d.count))

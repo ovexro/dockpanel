@@ -92,8 +92,14 @@ else
   bad "B1 no verification arm collapses a missing secret into the not-configured value" \
       "found $OLD_ARM — a missing secret is indistinguishable from no verification"
 fi
-eq "B1-control the same if-let shape is still used elsewhere in the file" \
-   "$($G -cE 'if let \(Some\(path\), Some\(value\)\)' "$GW")" "1"
+# The control used to point at the inbound loop's own `if let (Some(path),
+# Some(value))`, which moved into `route_admits` and became a let-else when the
+# two forwarding paths were made to share one filter decision. Repointed at the
+# minimal pair instead: B1's subject line itself, which now refuses via let-else.
+# It differs from B1's forbidden pattern by the `if ` prefix ALONE, so it matches
+# in both worlds — which is exactly what a control has to do.
+eq "B1-control the same tuple destructure is still greppable in this file" \
+   "$($G -cE 'let \(Some\(secret\), Some\(header_name\)\)' "$GW")" "1"
 
 # B2/B3: the two mappings that decide whether an unverifiable delivery is
 # recorded as attested and whether it is accepted. Pinned separately because a
@@ -249,6 +255,81 @@ HANDLERS=$($G -c '^pub async fn ' "$GW")
   || bad "G2-control" "only $HANDLERS handlers found — G2 would compare nothing"
 eq "G2 every handler except the public inbound door is admin-gated" \
    "$($G -c 'AdminUser(claims): AdminUser' "$GW")" "$((HANDLERS - 1))"
+
+echo "── H. The controls exist, and a replay is the same delivery ────────────"
+
+# Two severed toggles and a divergent replay, all in this one module.
+#
+# `webhook_endpoints.enabled` gates the public inbound door and
+# `webhook_routes.enabled` gates every outbound forward — and nothing in the
+# product could write either. Both columns were born TRUE and stayed TRUE for the
+# life of the row, so shutting a public door meant DELETING the endpoint, which
+# cascades away every delivery and every route recorded against it. The only way
+# to stop traffic was to destroy the record of the traffic that had arrived.
+#
+# And replay forwarded to every enabled route regardless of its filter, while the
+# inbound path skipped the ones that did not match — so replaying sent the payload
+# to destinations the operator had deliberately excluded.
+
+# H0: the two handler declarations anchor the positional arm below. They are the
+# anchors precisely because no plant against the filter or the toggles touches
+# them — an anchor that the defect can delete makes its dependent arms go MISSING
+# rather than RED, which reads as caught and is not.
+REPLAY_FN=$($G -n '^pub async fn replay_delivery' "$GW" | head -1 | cut -d: -f1)
+RECV_FN=$($G -n '^pub async fn receive_webhook' "$GW" | head -1 | cut -d: -f1)
+if [ -n "$REPLAY_FN" ] && [ -n "$RECV_FN" ] && [ "$REPLAY_FN" -lt "$RECV_FN" ]; then
+  ok "H0 both forwarding handlers found — replay at :$REPLAY_FN, inbound at :$RECV_FN"
+else
+  bad "H0 both forwarding handlers found" "replay='$REPLAY_FN' inbound='$RECV_FN' — H1 would compare nothing"
+fi
+
+# H1: the filter decision is taken on BOTH paths. Positional, not a count: one
+# call site inside replay and one below the inbound handler. A count of two is
+# satisfied by two calls in the same function.
+# Keyed on the CALL shape `route_admits(&`, never the bare name: the helper's own
+# DEFINITION sits in the Helpers section below both handlers, so an arm counting
+# the bare name after the inbound handler is satisfied by the definition alone and
+# can never fail for that path. It did not, until a plant that severed the inbound
+# filter came back green.
+eq "H0b the filter decision has exactly one definition" \
+   "$($G -c '^fn route_admits(' "$GW")" "1"
+if [ -n "$REPLAY_FN" ] && [ -n "$RECV_FN" ]; then
+  IN_REPLAY=$($G -n 'route_admits(&' "$GW" | awk -F: -v a="$REPLAY_FN" -v b="$RECV_FN" '$1>a && $1<b' | wc -l)
+  IN_RECV=$($G -n 'route_admits(&' "$GW" | awk -F: -v b="$RECV_FN" '$1>b' | wc -l)
+  if [ "$IN_REPLAY" -ge 1 ] && [ "$IN_RECV" -ge 1 ]; then
+    ok "H1 replay and the inbound door take the same routing decision"
+  else
+    bad "H1 replay and the inbound door take the same routing decision" \
+        "filter calls: replay=$IN_REPLAY inbound=$IN_RECV — a replay would reach routes the delivery never did"
+  fi
+fi
+
+# H2: the two gates have writers, one per table. Keyed on the table so a second
+# writer of one column cannot stand in for the missing writer of the other.
+eq "H2a the inbound door can be closed without deleting its history" \
+   "$($G -c 'UPDATE webhook_endpoints SET enabled' "$GW")" "1"
+eq "H2b forwarding to one destination can be stopped without deleting the route" \
+   "$($G -c 'UPDATE webhook_routes r SET enabled' "$GW")" "1"
+
+# H3: and the operator can see and reach both. The columns were declared on the
+# SPA's types and read by nothing at all, which is how they stayed severed while
+# the screen looked complete.
+eq "H3 the endpoint's state is rendered and toggleable" \
+   "$($G -c 'toggleEndpoint(ep)' "$UI")" "1"
+eq "H3b the route's state is rendered and toggleable" \
+   "$($G -c 'toggleRoute(r)' "$UI")" "1"
+
+# H4: replaying a delivery the gateway REFUSED stays possible — the guide
+# documents it and the usual cause is a sender misconfigured at the far end —
+# but it is no longer one click beside a red Invalid badge.
+eq "H4 replaying a refused delivery asks first" \
+   "$($G -c 'd.signature_valid === false &&' "$UI")" "1"
+
+# H5: and it leaves a trace. Replay sends an externally-supplied body onward
+# under the panel's own credentials and was the one forwarding action here that
+# recorded nothing.
+eq "H5 a replay is written to the activity log" \
+   "$($G -c 'webhook_delivery.replay' "$GW")" "1"
 
 echo
 echo "PASS $PASS / FAIL $FAIL"

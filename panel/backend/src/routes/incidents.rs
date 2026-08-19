@@ -79,6 +79,12 @@ pub struct PostUpdateRequest {
 const VALID_STATUSES: &[&str] = &["investigating", "identified", "monitoring", "resolved", "postmortem"];
 const VALID_SEVERITIES: &[&str] = &["minor", "major", "critical", "maintenance"];
 
+/// The two statuses that close an incident. Everything else in `VALID_STATUSES`
+/// is open, which is the definition `dashboard.rs`, `deploy.rs` and
+/// `git_deploys.rs` already spell as `status NOT IN ('resolved', 'postmortem')`.
+/// Named here so a count of open incidents cannot quietly mean a third thing.
+const CLOSED_STATUSES: &[&str] = &["resolved", "postmortem"];
+
 // ── Incident CRUD ───────────────────────────────────────────────────────────
 
 /// GET /api/incidents — List incidents.
@@ -105,6 +111,41 @@ pub async fn list(
     .map_err(|e| internal_error("list incidents", e))?;
 
     Ok(Json(incidents))
+}
+
+/// GET /api/incidents/summary — How many incidents are open, and in what state.
+///
+/// The sidebar badge used to derive this itself by fetching `?status=investigating`
+/// and taking the array length. That asked a narrower question than the panel's
+/// own: `investigating` is one of THREE open statuses, and the first thing the
+/// incident screen offers is to move a new incident to `identified` — at which
+/// point it left the badge while the dashboard went on counting it. A count that
+/// disagrees with the page underneath it is worse than no count, so there is now
+/// one place that answers it.
+pub async fn summary(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let counts: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT status, COUNT(*) FROM managed_incidents WHERE user_id = $1 GROUP BY status",
+    )
+    .bind(claims.sub)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| internal_error("incident summary", e))?;
+
+    let by_status: serde_json::Map<String, serde_json::Value> = counts
+        .iter()
+        .map(|(s, c)| (s.clone(), serde_json::json!(c)))
+        .collect();
+
+    let open: i64 = counts
+        .iter()
+        .filter(|(s, _)| !CLOSED_STATUSES.contains(&s.as_str()))
+        .map(|(_, c)| *c)
+        .sum();
+
+    Ok(Json(serde_json::json!({ "open": open, "by_status": by_status })))
 }
 
 /// POST /api/incidents — Create an incident.

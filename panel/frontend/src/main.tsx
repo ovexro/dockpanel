@@ -168,7 +168,10 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/users" element={<Users />} />
               <Route path="/container-policies" element={<ContainerPolicies />} />
               <Route path="/backup-orchestrator" element={<BackupOrchestrator />} />
-              <Route path="/incidents" element={<Navigate to="/monitoring" replace />} />
+              {/* Incidents live in Monitoring's Status Page tab, so land there
+                  rather than on the default Monitors tab. `resolveTab` clamps a
+                  non-admin back to Monitors, so this is safe for both roles. */}
+              <Route path="/incidents" element={<Navigate to="/monitoring?tab=statuspage" replace />} />
               <Route path="/secrets" element={<SecretsManager />} />
               <Route path="/integrations" element={<Integrations />} />
               <Route path="/webhooks" element={<Navigate to="/integrations" replace />} />

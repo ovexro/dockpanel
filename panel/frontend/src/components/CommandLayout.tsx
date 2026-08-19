@@ -195,7 +195,7 @@ export default function CommandLayout() {
                           {state.firingCount}
                         </span>
                       )}
-                      {item.to === "/incidents" && state.incidentCount > 0 && (
+                      {item.to === "/monitoring" && state.incidentCount > 0 && (
                         <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center">
                           {state.incidentCount}
                         </span>
@@ -233,13 +233,22 @@ export default function CommandLayout() {
                         <>
                           <Icon name={item.iconName} />
                           <span>{item.label}</span>
-                          {item.to === "/monitoring" && state.firingCount > 0 ? (
-                            <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center">
-                              {state.firingCount}
-                            </span>
-                          ) : item.to === "/incidents" && state.incidentCount > 0 ? (
-                            <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center">
-                              {state.incidentCount}
+                          {/* Both counts belong to this one row now, so they are
+                              rendered together rather than as alternatives — a
+                              chain would have shown the alerts and silently
+                              swallowed the incidents whenever both were live. */}
+                          {item.to === "/monitoring" && (state.firingCount > 0 || state.incidentCount > 0) ? (
+                            <span className="ml-auto flex items-center gap-1">
+                              {state.firingCount > 0 && (
+                                <span className="px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center">
+                                  {state.firingCount}
+                                </span>
+                              )}
+                              {state.incidentCount > 0 && (
+                                <span className="px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center">
+                                  {state.incidentCount}
+                                </span>
+                              )}
                             </span>
                           ) : isActive ? (
                             <span className="ml-auto blinking-cursor text-xs">_</span>

@@ -4,6 +4,81 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.129.0]
+
+### Fixed — three controls the panel rendered, described, or gated on, that nothing could reach
+
+**A public inbound door with no way to shut it.** `webhook_endpoints.enabled` is
+what the gateway reads before it will look at an incoming request at all, and
+`webhook_routes.enabled` gates every outbound forward. Nothing in the product
+wrote either column. Both were born `TRUE` and stayed `TRUE` for the life of the
+row: the SPA declared them on its types and read them nowhere, the CLI has no
+webhook surface, and the only `UPDATE` statements against those tables increment
+delivery counters. So the only way to stop a webhook endpoint receiving, or a
+route forwarding, was **Delete** — and `webhook_deliveries` and `webhook_routes`
+both cascade from the endpoint, so shutting the door destroyed the record of
+everything that had already come through it. Closing a door and discarding its
+history are different operations. Both tables now carry a **Status** column and a
+**Pause** / **Resume** control, served by two ownership-scoped handlers.
+
+**A replay went somewhere the delivery never did.** The inbound path evaluates
+each route's `filter_path` / `filter_value` and skips the routes that do not
+match. `replay_delivery` evaluated nothing — it forwarded to every enabled route,
+so replaying sent the payload to destinations the operator had deliberately
+excluded, each with that route's stored headers attached and its retry budget
+behind it. The guide has always said a replay goes to the *matching* routes; only
+the code disagreed. Both paths now take the same decision through one function,
+and both report the number of routes they actually forwarded to instead of the
+number of routes that existed. Replaying a delivery the gateway *refused* remains
+possible — it is a documented capability, and the usual cause is a sender
+configured with the wrong secret — but it now asks for confirmation instead of
+firing on a click beside a red **Invalid** badge, and it is written to the
+activity log, which no replay ever was.
+
+**A badge that had rendered nothing since March.** Seven arms across four layouts
+drew the open-incident count when a nav item's route was `/incidents`. The
+navigation consolidation of 2026-03-24 deleted that row and redirected the route,
+touching neither the arms nor the sixty-second poll feeding them, so the
+comparison could never again be true — while four unattended services went on
+minting incidents for whoever owned the failing resource. On the machine this
+release was built on, nine incidents had been sitting open, invisible, since
+April. The arms now key on the row that exists, and `/incidents` lands on the tab
+that actually holds incidents rather than the default one.
+
+The count itself was also narrower than the panel's own definition of an open
+incident: the poll asked for `investigating`, one of three open statuses, so an
+incident left the badge the moment anyone moved it to `identified` — the first
+thing the incident screen offers — while the dashboard went on counting it. There
+is now a single endpoint that answers the question, and the badge asks it.
+
+### Fixed — published figures and instructions that were wrong
+
+- The guide gave the endpoint URL as `/hook/abc123`. That path exists nowhere in
+  the product; an operator following the guide handed their sender a 404. It now
+  gives the real one, and says the URL is itself the secret.
+- The API reference documented a replay route that does not exist, omitted the
+  public receiver entirely, and published `821 REST endpoints (533 backend)`
+  against a register reading 822/534 — while stating in the same sentence that it
+  took the figure from that register.
+- The incidents guide still told operators to click a sidebar row deleted in
+  March.
+
+### Changed — the mechanism behind the last of those
+
+`docs/api-reference.md` could drift because it was not in the surface map that
+`docs-claims-pin-e2e.sh` checks the register against, so no arm could see it. It
+is in the map now. This is the second recurrence of that shape; the first left two
+agent metrics wrong on the docs site for 146 days.
+
+### Added — regression pins
+
+- `reachable-controls-pin-e2e.sh` §G derives every route literal compared against
+  the nav registry — from all **three** readers, not just the layouts — and
+  asserts each one resolves. A layouts-only arm was written first and stayed green
+  when a retired route was planted in either of the other two.
+- `webhook-verification-pin-e2e.sh` §H pins both toggles, the shared routing
+  decision on both forwarding paths, the replay confirmation and its audit entry.
+
 ## [2.128.0]
 
 ### Fixed — a port allocator and the unique index behind it disagreed about what a port is unique within

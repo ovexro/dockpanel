@@ -31,7 +31,7 @@ investigating --> identified --> monitoring --> resolved --> postmortem
 
 ### From the Panel
 
-1. Go to **Incidents** in the sidebar
+1. Go to **Monitoring** in the sidebar, then the **Status Page** tab
 2. Click **Create Incident**
 3. Fill in:
    - **Title**: Short description (e.g., "API response times elevated")

@@ -195,7 +195,7 @@ export default function GlassLayout() {
                           {firingCount}
                         </span>
                       )}
-                      {item.to === "/incidents" && incidentCount > 0 && (
+                      {item.to === "/monitoring" && incidentCount > 0 && (
                         <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center shrink-0">
                           {incidentCount}
                         </span>
@@ -249,7 +249,7 @@ export default function GlassLayout() {
                               {firingCount}
                             </span>
                           )}
-                          {item.to === "/incidents" && incidentCount > 0 && (
+                          {item.to === "/monitoring" && incidentCount > 0 && (
                             <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center shrink-0">
                               {incidentCount}
                             </span>

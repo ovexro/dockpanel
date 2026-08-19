@@ -565,7 +565,7 @@ declare -A SURFACES=(
   ["Agent binary"]="docs/guides/multi-server.md"
   ["Agent RAM (RSS)"]="docs/guides/multi-server.md"
   ["App templates"]="README.md"
-  ["HTTP routes"]="README.md"
+  ["HTTP routes"]="README.md docs/api-reference.md"
   ["Regression-pin assertions"]="README.md docs/testing.md"
   ["Supervised background services"]="README.md"
 )
