@@ -210,7 +210,9 @@ returned (v2.82.0):
   certificates. The dashboard tile had been reporting exactly these all along and
   linking to a page that answered "Admin access required".
 - **Monitoring → Maintenance.** A client can schedule a maintenance window, which
-  silences its own alerts while it works on its own site.
+  silences its own standing alerts while it works on its own site. One-off
+  failure reports — a failed backup or cron — still come through; the monitoring
+  guide lists which are held and which are not.
 
 Still administrator-only, and correctly so: containers, DNS, CDN, the server
 shell, and everything under the Admin group. Mail is now partly a client's — the

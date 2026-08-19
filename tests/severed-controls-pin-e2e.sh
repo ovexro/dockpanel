@@ -146,6 +146,53 @@ eq "D1 the FEATURES.md table has one row per supervised service" "$TABLE_ROWS" "
 eq "D2 the heading states the same number" \
    "$($G -c "^## Background Services ($SUPERVISED supervised)$" FEATURES.md)" "1"
 
+echo "── E. The SITE restore is armed too (s378) ────────────────────────────"
+
+# A5 above pins "a restore overwrites a live database or volume… these two must
+# not be one press" for the orchestrator's two controls. The site restore is the
+# widest of the family — `docs/guides/backups.md` says it drops and recreates
+# every database's tables over the live one, with no automatic safety net — and
+# it was the only one of the seven that fired on a single click. Its own row
+# already armed the strictly smaller Delete, six lines below it.
+SITE=panel/frontend/src/pages/Backups.tsx
+
+eq "E1 the site restore arms a two-step state" \
+   "$($G -c 'setRestoreTarget(backup\.id)' "$SITE")" "1"
+eq "E1b the armed branch exists" \
+   "$($G -c 'restoreTarget === backup\.id' "$SITE")" "1"
+eq "E1c Delete keeps its own armed state, not the restore's" \
+   "$($G -c 'setDeleteTarget(backup\.id)' "$SITE")" "1"
+
+# E2: the ordering is the claim. One call to the destructive handler, and it
+# must sit BELOW the armed branch — a `handleRestore` still reachable from the
+# unarmed button is the defect with a confirm bolted beside it. Both anchors
+# asserted before they are compared (lesson #582).
+ARMED_LINE=$($G -n 'restoreTarget === backup\.id' "$SITE" | head -1 | cut -d: -f1)
+FIRE_LINE=$($G -n 'handleRestore(backup\.id)' "$SITE" | head -1 | cut -d: -f1)
+FIRE_N=$($G -c 'handleRestore(backup\.id)' "$SITE")
+if [ -n "$ARMED_LINE" ] && [ -n "$FIRE_LINE" ] && [ "$FIRE_N" = "1" ] && [ "$FIRE_LINE" -gt "$ARMED_LINE" ]; then
+  ok "E2 the only call to the restore handler is inside the armed branch (armed $ARMED_LINE < fire $FIRE_LINE)"
+else
+  bad "E2 the only call to the restore handler is inside the armed branch" \
+      "armed '$ARMED_LINE', fire '$FIRE_LINE', $FIRE_N call(s)"
+fi
+
+# E3: the armed state DISCLOSES, and does it without the reassuring branch.
+# `backupContents().title` keys on `databases_expected` — what the site had when
+# the backup RAN — while the backend decides on a live count, so a site that
+# gained a database since would read "no database was attached" over exactly the
+# case the restore then reports as an error.
+eq "E3 the armed state renders the disclosure" \
+   "$($G -c 'restoreWarning(backup)' "$SITE")" "1"
+WARN_BODY=$(awk '/^function restoreWarning/,/^}/' "$SITE")
+if [ -n "$WARN_BODY" ]; then
+  ok "E3-control the disclosure helper was extracted and is non-empty"
+  eq "E3b it states an archive fact, never the backup-time reassurance" \
+     "$(printf '%s' "$WARN_BODY" | $G -c '\.title')" "0"
+else
+  bad "E3-control the disclosure helper was extracted and is non-empty" "empty"
+fi
+
 echo
 echo "PASS $PASS  FAIL $FAIL"
 [ "$FAIL" -eq 0 ]

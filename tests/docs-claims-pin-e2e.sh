@@ -394,7 +394,7 @@ echo "── 6. Every published figure is quoted from the measurement register �
 REGISTER=FEATURES.md
 MEAS=website/client/src/measurements.ts
 
-declare -A REG REG_SRC
+declare -A REG REG_SRC REG_UNIT
 reg_rows=0
 while IFS='|' read -r _ metric value source _; do
   metric=$(sed -e 's/^ *//' -e 's/ *$//' -e 's/\*\*//g' <<<"$metric")
@@ -405,6 +405,14 @@ while IFS='|' read -r _ metric value source _; do
   [ -z "$metric" ] || [ -z "$num" ] && continue
   REG["$metric"]="$num"
   REG_SRC["$metric"]="$source"
+  # The unit comes from the register's own value cell, so §6c can demand it
+  # without a second hand-maintained structure to fall out of step. A bare
+  # number is a weak predicate: README publishes "14 categories" twice, which
+  # would satisfy a presence check for the 14 MB API footprint on its own.
+  case "$value" in
+    *MB*) REG_UNIT["$metric"]="MB" ;;
+    *)    REG_UNIT["$metric"]="" ;;
+  esac
   reg_rows=$((reg_rows+1))
 done < <(awk '/^## Verified Metrics/ {inside=1; next} inside && /^## / {exit} inside && /^\|/ {print}' "$REGISTER")
 
@@ -556,14 +564,11 @@ fi
 
 declare -A SURFACES=(
   ["Panel services RAM (agent + API)"]="README.md COMPARISON.md docs/getting-started.md website/client/index.html"
-  ["Full-stack RAM (with bundled PostgreSQL)"]="COMPARISON.md docs/getting-started.md"
   ["Panel binaries, all three"]="README.md COMPARISON.md website/client/index.html"
   # s354: the two agent metrics had NO row here at all, so `docs/guides` — the
   # only surface that publishes them — could not have been checked even if it had
   # been listed. It published ~20MB/~30MB against a register reading 21/~35 for
   # 146 days, live on docs.dockpanel.dev, and no arm could see it.
-  ["Agent binary"]="docs/guides/multi-server.md"
-  ["Agent RAM (RSS)"]="docs/guides/multi-server.md"
   # s377: `App templates` was mapped to README alone while THREE more surfaces
   # publish it. Same shape as the s354 agent-metric gap and the s376
   # api-reference gap — the third recurrence of "the map is a hand list, and
@@ -578,10 +583,44 @@ declare -A SURFACES=(
   # because they were mapped. That is the whole mechanism.
   ["API binary"]="README.md"
   ["CLI binary"]="README.md"
+  # s378: the s377 repair of README.md:245 mapped that line's API and CLI
+  # binaries and stopped there, while the SAME LINE also publishes the agent
+  # binary, both RAM figures and the full-stack total. Four of the five gaps
+  # below were on the one line the previous fix had open in front of it — the
+  # class reproduced one column over. `API RAM (RSS)` had no row at all, and the
+  # two s354 rows below covered one of their three publishers each.
+  ["Agent binary"]="README.md docs/guides/multi-server.md"
+  ["Agent RAM (RSS)"]="README.md COMPARISON.md docs/guides/multi-server.md"
+  ["API RAM (RSS)"]="README.md COMPARISON.md"
+  ["Full-stack RAM (with bundled PostgreSQL)"]="README.md COMPARISON.md docs/getting-started.md"
   ["HTTP routes"]="README.md docs/api-reference.md"
   ["Regression-pin assertions"]="README.md docs/testing.md"
   ["Supervised background services"]="README.md"
 )
+
+# Metrics the register is the ONLY publisher of. Declared rather than absent:
+# an unlisted metric used to be silently skipped by the loop below, which is
+# how four of the rows above went unguarded. Being register-only is a decision,
+# and this is where it is recorded.
+declare -A REGISTER_ONLY=(
+  ["Frontend pages"]="derived and published nowhere but the register"
+  ["DB migrations"]="derived and published nowhere but the register"
+)
+
+# The map must be TOTAL over the register. §6a three sections up already rejects
+# a register row marked `derived` that has no derivation, and says why: adding a
+# metric would otherwise quietly create the blind spot this suite exists to
+# prevent. §6c stated the same rule and did not enforce it — an unmapped metric
+# was silently skipped, which is exactly how the s354, s376, s377 and s378 gaps
+# each survived. A new metric now has to be placed on one side or the other.
+for metric in "${!REG[@]}"; do
+  if [ -n "${SURFACES[$metric]+x}" ] && [ -n "${REGISTER_ONLY[$metric]+x}" ]; then
+    bad "'$metric' is both mapped to surfaces and declared register-only — one of the two is wrong"
+  elif [ -z "${SURFACES[$metric]+x}" ] && [ -z "${REGISTER_ONLY[$metric]+x}" ]; then
+    bad "the register publishes '$metric' but §6c neither maps it to a surface nor declares it register-only — no arm can see it drift"
+  fi
+done
+ok "every one of the $reg_rows register metrics is either mapped to its surfaces or declared register-only"
 
 surface_checks=0
 for metric in "${!SURFACES[@]}"; do
@@ -590,16 +629,25 @@ for metric in "${!SURFACES[@]}"; do
     bad "the register has no '$metric' row, but surfaces are mapped to it — the map and the register disagree"
     continue
   fi
+  # A bare number is a presence check a coincidence can satisfy: README carries
+  # "148 templates across 14 categories" twice, which would green the 14 MB API
+  # footprint on README no matter what :245 said. Where the register states a
+  # unit, demand it.
+  if [ -n "${REG_UNIT[$metric]}" ]; then
+    pat="(^|[^0-9.])${want} ?${REG_UNIT[$metric]}"
+  else
+    pat="(^|[^0-9.])${want}([^0-9.]|\$)"
+  fi
   for f in ${SURFACES[$metric]}; do
     if [ ! -f "$f" ]; then
       bad "$f is mapped as publishing '$metric' but does not exist"
       continue
     fi
     surface_checks=$((surface_checks+1))
-    if grep -qE "(^|[^0-9.])${want}([^0-9.]|\$)" "$f"; then
-      ok "$f carries the register's $metric ($want)"
+    if grep -qE "$pat" "$f"; then
+      ok "$f carries the register's $metric ($want${REG_UNIT[$metric]})"
     else
-      bad "$f publishes '$metric' but does not contain the register's value $want — it is quoting an older measurement"
+      bad "$f publishes '$metric' but does not contain the register's value $want${REG_UNIT[$metric]} — it is quoting an older measurement"
     fi
   done
 done

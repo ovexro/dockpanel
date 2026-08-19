@@ -1,4 +1,5 @@
 use sqlx::PgPool;
+use std::collections::HashSet;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -25,9 +26,14 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
             _ = interval.tick() => {
                 tick_count += 1;
 
-                check_resource_thresholds(&pool).await;
-                check_server_offline(&pool).await;
-                check_ssl_expiry(&pool).await;
+                // Whose alerts are silenced right now. Loaded ONCE per tick and
+                // handed to every check, the way `uptime.rs` does it — the
+                // alternative is one query per server per alert type.
+                let maint = maintenance_users(&pool).await;
+
+                check_resource_thresholds(&pool, &maint).await;
+                check_server_offline(&pool, &maint).await;
+                check_ssl_expiry(&pool, &maint).await;
 
                 // The agent-driven checks run once PER ONLINE SERVER. Until
                 // v2.58.0 all three asked the panel's own agent and labelled the
@@ -40,6 +46,12 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
                 let fleet = agents.online_fleet().await;
 
                 for member in &fleet {
+                    // One skip covers all three: every alert these raise is
+                    // addressed to `member.user_id` and nobody else.
+                    if maint.contains(&member.user_id) {
+                        continue;
+                    }
+
                     check_gpu_thresholds(&pool, member).await;
 
                     // Service health every 2 minutes (every other tick)
@@ -71,6 +83,42 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
             }
         }
     }
+}
+
+// ─── Maintenance Windows ────────────────────────────────────────────────
+
+/// Users with an open maintenance window at this instant.
+///
+/// The panel offers a button labelled *Silence Alerts*. Until this existed the
+/// only service that honoured it was `uptime.rs`, which owns 5 of the 19 alert
+/// types; the engine in this file owns the other 14 and had never read the
+/// table. So the alerts a planned maintenance is certain to cause — `offline`,
+/// `service_down`, `container_down` — were precisely the ones that still paged.
+///
+/// ⚠ The set is applied at each check's SOURCE, never at the fire. That is not
+/// a style preference. `check_server_offline` selects the servers that have no
+/// firing row and then writes one; `check_threshold` and the SSL ladder stamp
+/// `alert_state` beside their fire. Suppressing at the fire would leave those
+/// stamps claiming the operator was paged while nothing was sent, and the
+/// condition would never page again — the permanent silence that
+/// `fire_alert_with_retry`'s own contract exists to prevent. Skipping the row
+/// before any of that runs means the condition is still true on the first tick
+/// after the window closes, and pages then.
+///
+/// The five types raised elsewhere (`backup_failure`, `backup_verification_failed`,
+/// `cron_failure`, `security`, `ssl_renewal_failure`) are deliberately NOT
+/// suppressed: they report one-shot events rather than a standing condition, so
+/// nothing re-evaluates them afterwards and suppressing one would lose it.
+async fn maintenance_users(pool: &PgPool) -> HashSet<Uuid> {
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT DISTINCT user_id FROM maintenance_windows \
+         WHERE starts_at <= NOW() AND ends_at >= NOW()",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .collect()
 }
 
 // ─── Alert Fire with Retry ──────────────────────────────────────────────
@@ -191,7 +239,7 @@ struct ServerMetrics {
     disk_usage_pct: Option<f32>,
 }
 
-async fn check_resource_thresholds(pool: &PgPool) {
+async fn check_resource_thresholds(pool: &PgPool, maint: &HashSet<Uuid>) {
     let servers: Vec<ServerMetrics> = match sqlx::query_as(
         "SELECT id, user_id, name, cpu_usage, mem_used_mb, ram_mb, disk_usage_pct \
          FROM servers WHERE status = 'online'",
@@ -207,6 +255,10 @@ async fn check_resource_thresholds(pool: &PgPool) {
     };
 
     for server in &servers {
+        if maint.contains(&server.user_id) {
+            continue;
+        }
+
         let (cpu_thresh, cpu_dur, mem_thresh, mem_dur, disk_thresh, cooldown, _) =
             notifications::get_thresholds(pool, server.user_id, Some(server.id)).await;
 
@@ -853,7 +905,7 @@ async fn check_gpu_metric(
 
 // ─── Server Offline ─────────────────────────────────────────────────────
 
-async fn check_server_offline(pool: &PgPool) {
+async fn check_server_offline(pool: &PgPool, maint: &HashSet<Uuid>) {
     // Find servers that just went offline (status = offline, no firing alert state yet)
     let offline: Vec<(Uuid, Uuid, String)> = match sqlx::query_as(
         "SELECT s.id, s.user_id, s.name FROM servers s \
@@ -871,6 +923,13 @@ async fn check_server_offline(pool: &PgPool) {
     };
 
     for (server_id, user_id, name) in &offline {
+        // Before the firing row is written, not after: this loop's own query
+        // excludes anything already firing, so a row stamped without a page
+        // would never page again.
+        if maint.contains(user_id) {
+            continue;
+        }
+
         // Create firing state — PostgreSQL serializes concurrent ON CONFLICT upserts
         let _ = sqlx::query(
             "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, fired_at, last_notified_at) \
@@ -1019,7 +1078,7 @@ fn ssl_decision(
     SslAction::Fire { warn_day, severity }
 }
 
-async fn check_ssl_expiry(pool: &PgPool) {
+async fn check_ssl_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
     let sites: Vec<(Uuid, Uuid, String, chrono::DateTime<chrono::Utc>)> = match sqlx::query_as(
         "SELECT s.id, s.user_id, s.domain, s.ssl_expiry \
          FROM sites s WHERE s.ssl_enabled = TRUE AND s.ssl_expiry IS NOT NULL",
@@ -1034,6 +1093,10 @@ async fn check_ssl_expiry(pool: &PgPool) {
     let now = chrono::Utc::now();
 
     for (site_id, user_id, domain, ssl_expiry) in &sites {
+        if maint.contains(user_id) {
+            continue;
+        }
+
         let remaining = *ssl_expiry - now;
         // Expiry is decided on the SIGNED duration, not on num_days(), which
         // truncates toward zero: a certificate that lapsed anything under 24

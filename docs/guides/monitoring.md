@@ -47,7 +47,11 @@ Check history is kept for 24 hours and then purged automatically.
 
 ### Maintenance Windows
 
-When a maintenance window is active for a user, their monitors are skipped. No checks run and no alerts fire during the window. Schedule maintenance from the panel to suppress false alarms during planned downtime.
+When a maintenance window is active for a user, their uptime monitors are skipped and the alert engine stops paging them. CPU, memory, disk, disk forecast, memory leak, server offline, service health, SSL expiry, GPU and container alerts are all held for the duration.
+
+Nothing is lost by holding them. Each describes a standing condition that is re-evaluated every 60 seconds, so anything still true when the window closes fires on the next check. The window is applied before any alert state is recorded, precisely so that a held alert is deferred rather than marked as already sent.
+
+Alerts that report a **one-off event** are deliberately not suppressed, because nothing would raise them again afterwards: backup failure, backup verification failure, cron failure, security findings and SSL renewal failures still arrive during a window.
 
 ### Heartbeat Monitors (Dead Man's Switch)
 
@@ -60,7 +64,7 @@ No authentication is required for heartbeat pings.
 
 ## Alert Rules
 
-Alert rules define thresholds for server-level conditions. Configure them under **Alerts** > **Rules**.
+Alert rules define thresholds for server-level conditions. Configure them under **Settings** > **Alert Channels**.
 
 ### Available Alert Types
 
@@ -87,7 +91,7 @@ You can mute specific alert types from external notifications (Slack, Discord, e
 
 ## Notification Channels
 
-Configure where alerts are sent under **Alerts** > **Rules**.
+Configure where alerts are sent under **Settings** > **Alert Channels**.
 
 | Channel | Configuration |
 |---------|---------------|

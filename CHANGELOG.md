@@ -4,6 +4,90 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.131.0]
+
+### Fixed — a button labelled "Silence Alerts" that silenced five of nineteen alert types
+
+**The maintenance window suppressed the wrong half of the alerting.** The panel
+offers a *Silence Alerts* button, the Maintenance page said "Alerts are
+suppressed during maintenance windows", and the monitoring guide said "no alerts
+fire during the window". Exactly one service honoured any of it: `uptime.rs`,
+which skips its own monitor checks for the duration. The alert engine — which
+raises fourteen of the nineteen types that reach the alert-enable gate — had
+never read the `maintenance_windows` table at all.
+
+So the alerts a planned maintenance is *certain* to cause were precisely the ones
+that still paged: server offline, service down, container down, plus every
+resource threshold, the disk-full forecast, the memory-leak trend, the GPU checks
+and SSL expiry. They also reached escalation policies, so a scheduled window
+could page an on-call rotation for the work it had been told about. The feature
+had been edited three times — a delete-result check, a foreign-key action, the
+client-role gate — without anyone checking that it suppressed anything.
+
+The engine now loads the open-window set once per tick and skips a silenced
+owner **at the source of each check, before any alert state is written**. That
+placement is the fix, not an implementation detail: `check_server_offline`
+selects the servers that have no firing row and then writes one, so a guard at
+the moment of firing would have left the row claiming the operator had been
+paged while nothing was sent — and the server would never have paged again. By
+skipping earlier, a held alert is deferred rather than lost: every one of the
+fourteen describes a standing condition re-evaluated every sixty seconds, so
+anything still true when the window closes fires on the next tick.
+
+**Alerts that report a one-off event are deliberately still delivered** —
+backup failure, backup verification failure, cron failure, security findings and
+SSL renewal failures. Nothing would raise those again afterwards, so suppressing
+one would lose it rather than defer it. The guide and the Maintenance page now
+say which are held and which are not, instead of promising both and doing
+neither.
+
+### Fixed — the site restore was the only destructive control in the product that fired on one click
+
+`docs/guides/backups.md` documents restoring a site as a four-step procedure
+whose fourth step is "Confirm the restore". There was no confirm. Of the seven
+restore- and rollback-class controls in the panel, six were armed behind a
+two-step press and this one — the widest of them, which replaces the site's
+files and drops and recreates every database's tables over the live one, with no
+automatic safety net — went on the first click. Its own table row already armed
+the strictly smaller **Delete**, six lines below it.
+
+The restore now arms the same inline two-step used by the backup orchestrator,
+and the armed state states what the archive holds and that anything not in it is
+left as it is. The backend already built that disclosure, but emitted it into the
+progress stream *after* the job was spawned, so the operator read it with no way
+to stop. The wording deliberately does not reuse the table's own reassurance
+text: that keys on the databases the site had **when the backup ran**, while the
+restore decides on a live count, so a site that gained a database since would
+have been told "no database was attached" over exactly the case the restore then
+reports as an error.
+
+### Fixed — alert rules documented under a tab that does not exist
+
+The monitoring guide twice told operators to configure alert rules and
+notification channels under **Alerts › Rules**. The Alerts page has four tabs and
+none of them is Rules; both live under **Settings › Alert Channels**. Both
+references now name the real location. This one was live on the published
+documentation site, not just in the repository.
+
+### Fixed — four published measurements no guard could see drift
+
+The measurement register's surface map is what stops a published number going
+stale, and it was a hand-maintained list with no check that it covered the
+register. Four metrics fell through: the API's memory footprint had no entry at
+all, and the agent binary, the agent's memory footprint and the full-stack total
+were each mapped to some but not all of the surfaces that publish them. Four of
+the five gaps were on the single README line the previous release had repaired —
+that fix mapped two figures on the line and left its four neighbours unguarded.
+
+The map is now **total over the register**: a metric must be mapped to its
+surfaces or explicitly declared as published nowhere else, and anything else
+fails, exactly as the neighbouring check already does for derived metrics. The
+match also demands the unit the register states, because a bare number is a test
+a coincidence can pass — README carries "14 categories" twice, which would have
+satisfied a check for the 14 MB API footprint no matter what the line said.
+
+
+
 ## [2.130.0]
 
 ### Fixed — the credential promise the project publishes, and the registries that could not tell it was broken

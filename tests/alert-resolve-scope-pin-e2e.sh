@@ -318,5 +318,102 @@ else
 fi
 
 echo
+echo "── s378 §F: a maintenance window silences the engine, not just the monitors ──"
+
+# The panel offers a button labelled *Silence Alerts*, and the guide said "no
+# alerts fire during the window". `uptime.rs` honoured it; this engine — which
+# owns 14 of the 19 alert types — had never read the table, so `offline`,
+# `service_down` and `container_down`, the three a planned maintenance is
+# CERTAIN to cause, were exactly the ones that still paged.
+#
+# The arms below pin WHERE the check happens, not merely THAT it happens. That
+# distinction is the whole fix: `check_server_offline` selects the servers with
+# no firing row and then writes one, so a guard at the FIRE would leave the row
+# claiming the operator was paged while nothing was sent, and the condition
+# would never page again. §F5 is the arm that forbids that regression.
+
+if EG=$(subj "$ENGINE"); then
+  RUNBODY=$(fnbody "$EG" run)
+
+  # F1 — loaded ONCE per tick, like uptime.rs does it, not per server per type.
+  NLOAD=$(grep -c 'maintenance_users(&pool)' <<< "$RUNBODY")
+  if [ "$NLOAD" -eq 1 ]; then
+    ok "F1 the tick loads the open-window set exactly once"
+  else
+    bad "F1 the tick loads the open-window set exactly once — found $NLOAD"
+  fi
+
+  # F2/F3 — DERIVED, not listed. Every top-level check the tick calls with the
+  # pool must both TAKE the set and USE it. Taking it and not using it is the
+  # half-edit a signature-only arm cannot see (lesson #600).
+  GUARDED=""; UNGUARDED=""
+  for fn in check_resource_thresholds check_server_offline check_ssl_expiry; do
+    B=$(fnbody "$EG" "$fn")
+    if grep -q 'maint\.contains(' <<< "$B"; then GUARDED="$GUARDED $fn"; else UNGUARDED="$UNGUARDED $fn"; fi
+  done
+  NTAKE=$(grep -c 'maint: &HashSet<Uuid>' <<< "$EG")
+  if [ "$NTAKE" -eq 3 ]; then
+    ok "F2 all three pool-driven checks take the open-window set"
+  else
+    bad "F2 all three pool-driven checks take the open-window set — found $NTAKE"
+  fi
+  if [ -z "$UNGUARDED" ]; then
+    ok "F3 each of them SKIPS on it:$GUARDED"
+  else
+    bad "F3 each of them SKIPS on it — takes the set but never reads it:$UNGUARDED"
+  fi
+
+  # F4 — the fleet loop guards BEFORE the first per-member check, not after.
+  # Ordering asserted by line number with both anchors present (lesson #582);
+  # a guard below the call is a guard that has already paged.
+  GLINE=$(grep -n 'maint\.contains(&member\.user_id)' <<< "$RUNBODY" | head -1 | cut -d: -f1)
+  CLINE=$(grep -n 'check_gpu_thresholds(' <<< "$RUNBODY" | head -1 | cut -d: -f1)
+  if [ -n "$GLINE" ] && [ -n "$CLINE" ] && [ "$GLINE" -lt "$CLINE" ]; then
+    ok "F4 the fleet loop skips a silenced owner before any per-member check (guard $GLINE < call $CLINE)"
+  else
+    bad "F4 the fleet loop skips a silenced owner before any per-member check (guard '$GLINE', call '$CLINE')"
+  fi
+
+  # F5 — ABSENCE arm with a positive control. The suppression must NOT migrate
+  # into the fire funnel: every caller that stamps `alert_state` does so beside
+  # its fire, so a funnel-level skip converts a deferral into permanent silence.
+  FWR=$(fnbody "$EG" fire_alert_with_retry)
+  if grep -q 'try_fire_alert(' <<< "$FWR"; then
+    ok "F5-control the fire funnel was extracted and is non-empty"
+    if grep -q 'maint' <<< "$FWR"; then
+      bad "F5 the window is NOT consulted at the fire — it is, and every stamp beside a fire then claims a page that never went out"
+    else
+      ok "F5 the window is not consulted at the fire, so a held alert is deferred and not marked sent"
+    fi
+  else
+    bad "F5-control the fire funnel was extracted and is non-empty"
+  fi
+else
+  for a in F1 F2 F3 F4 F5; do bad "$a $ENGINE is readable"; done
+fi
+
+# F6 — the one-shot producers are deliberately NOT suppressed, because nothing
+# re-raises them afterwards. Derived over the whole services tree rather than
+# asserted against a list, so a new suppression site anywhere shows up here.
+#
+# ⚠ NOT `git grep`: this suite must run from a `git worktree` or an unpacked
+# archive, where it enumerates nothing and the arm goes red on correct code.
+# The enumeration is asserted non-empty first, so "found none" can never be
+# mistaken for either a pass or a real absence.
+SVCDIR=panel/backend/src/services
+ALLSVC=$(/usr/bin/grep -rlE 'fn ' "$SVCDIR" 2>/dev/null | wc -l)
+SUPPRESSORS=$(/usr/bin/grep -rl 'maintenance_windows' "$SVCDIR" 2>/dev/null | sort | paste -sd' ')
+if [ "$ALLSVC" -lt 10 ]; then
+  bad "F6-control the services tree enumerated $ALLSVC files — the scan found nothing to measure"
+else
+  ok "F6-control the services tree enumerated $ALLSVC files"
+  if [ "$SUPPRESSORS" = "$SVCDIR/alert_engine.rs $SVCDIR/uptime.rs" ]; then
+    ok "F6 exactly the two standing-condition services suppress: $SUPPRESSORS"
+  else
+    bad "F6 exactly the two standing-condition services suppress — found: ${SUPPRESSORS:-none}"
+  fi
+fi
+
+echo
 printf 'alert-resolve-scope: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
