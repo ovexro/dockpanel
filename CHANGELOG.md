@@ -4,6 +4,84 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.130.0]
+
+### Fixed — the credential promise the project publishes, and the registries that could not tell it was broken
+
+**Three stored credentials were not encrypted at rest, while two surfaces said
+every one of them was.** `SECURITY.md` and `README.md` both state, without
+qualification, that all stored credentials are encrypted with AES-256-GCM.
+`cdn_zones.api_key`, `git_deploys.github_token` and `servers.agent_token` were
+written in cleartext — the last one named in exactly those terms by
+`auto_healer`'s own comment about what a panel database dump carries off the
+box. The claim was false on the project's front page, and nothing in the tree
+compared the sentence with the columns, so it could not be found by any test.
+
+All three now encrypt at every writer and decrypt at a single choke point, the
+shape `helpers::cf_headers` already used for the Cloudflare token: every Bunny
+caller funnels through `cdn::bunny_headers`, all seven GitHub-token readers
+funnel through `set_github_status` (and the token never leaves the backend), and
+the one place that dials a remote agent decrypts in `AgentRegistry::for_server`.
+Reads use the legacy-tolerant variant, so **an existing install keeps working
+with no migration and an already-enrolled fleet keeps dialling** — a strict
+decrypt here would have stranded every server enrolled before this release, and
+that is pinned so it cannot be "tidied" later. Inbound agent authentication is
+unchanged: it verifies `agent_token_hash`, which this release does not touch.
+
+**The git-deploy token is also masked on the two handlers that still returned
+it.** `create` and `update` answered with `RETURNING *`, so a freshly written
+token went back over the wire in full while `list` and `get_one` masked theirs.
+All four row-returning handlers now mask, and the writer-side helper **refuses
+the mask sentinel**: every handler now returns `●●●●●●●●`, so a client that
+submits the form it was served would otherwise have overwritten a working token
+with eight circles — or, worse, stored the circles encrypted, where they would
+look like a legitimate credential to every later read. v2.48.3 shipped that
+class of bug once already.
+
+**The anti-drift registry could be satisfied without doing its job.** The
+re-encryption sweep asserts that every module writing a credential is named in
+`COVERED_MODULES` — but naming it was enough. The column still had to be added
+to `SIMPLE_SUBJECTS` by hand, and nothing checked that, so a module could be
+declared covered while its credential was skipped by every re-key for ever. That
+is the failure the file's own header warns about, reproduced inside the mechanism
+meant to prevent it. Modules now declare **which subject** re-keys them, and a
+test rejects a subject the sweep does not actually visit.
+
+Its census was also scoped to `src/routes`, so a credential written by a service
+was invisible — and this release created the first one. The walk now derives its
+population from the crate root and descends, because a scope that is a literal
+list can always be shortened silently: an earlier cut of this very fix asserted
+its two directory names against the set built from those same two names, which is
+a tautology, and a mutation walked straight through it. `POST /api/settings/reencrypt-credentials`
+now reports the swept columns alongside the covered modules.
+
+### Fixed — published numbers that had drifted from what they describe
+
+- `README.md` published the API binary at **~22MB** against a register reading
+  23 MB and a published asset of 23.2 MB. The commit that re-measured the sizes
+  moved the README masthead and missed the README body — a second quoting site in
+  a file it had already opened — and no arm could see it, because
+  `docs-claims-pin-e2e.sh`'s surface map had **no row for `API binary`** while both
+  of its line-mates had one. The map now covers it, plus `CLI binary` and the
+  three further surfaces that publish the template count; the superseded figure is
+  pinned so it cannot come back.
+- `FEATURES.md` cited `services/credential_crypto.rs` for the row describing the
+  project's own credential encryption. **That file has never existed**; the real
+  one is `services/secrets_crypto.rs`. Every source citation in that table is now
+  checked to resolve — all 51 of them — because the whole column was unverified.
+- `docs/testing.md` said two advisories were ignored narrowly; `audit.toml`
+  ignores one. Its unit-test line is re-derived to 599 (374 backend, 225 agent).
+
+### Testing
+
+New `credentials-at-rest-pin-e2e.sh` (35 assertions) pins both ends — each
+writer, each decrypting choke point, the mask population derived from the
+handlers that return a row, and the published sentence against the registry —
+so the promise cannot return without the columns, nor the columns regress
+without the promise going red. 77 suites, **2553 assertions**. 20 mutations
+planted, 20 killed by the arm written for them; two of the instruments were
+wrong first, and both were caught by their own plants.
+
 ## [2.129.0]
 
 ### Fixed — three controls the panel rendered, described, or gated on, that nothing could reach

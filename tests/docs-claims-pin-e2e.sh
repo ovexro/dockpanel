@@ -564,7 +564,20 @@ declare -A SURFACES=(
   # 146 days, live on docs.dockpanel.dev, and no arm could see it.
   ["Agent binary"]="docs/guides/multi-server.md"
   ["Agent RAM (RSS)"]="docs/guides/multi-server.md"
-  ["App templates"]="README.md"
+  # s377: `App templates` was mapped to README alone while THREE more surfaces
+  # publish it. Same shape as the s354 agent-metric gap and the s376
+  # api-reference gap — the third recurrence of "the map is a hand list, and
+  # what is missing from it is exactly what drifts".
+  ["App templates"]="README.md FEATURES.md docs/api-reference.md docs/cli-reference.md"
+  # s377: `API binary` and `CLI binary` had NO row at all, while README.md:245
+  # publishes both on the same line as `Agent binary`, which DID have one. So
+  # `a37e43c` re-measured the register from the published v2.103.0 assets, moved
+  # the README masthead, and left the README body quoting 22 MB against a
+  # register reading 23 — for seven days, invisible, because the only arm that
+  # could have seen it had no row for that metric. Its two line-mates moved
+  # because they were mapped. That is the whole mechanism.
+  ["API binary"]="README.md"
+  ["CLI binary"]="README.md"
   ["HTTP routes"]="README.md docs/api-reference.md"
   ["Regression-pin assertions"]="README.md docs/testing.md"
   ["Supervised background services"]="README.md"
@@ -623,6 +636,7 @@ declare -A SUPERSEDED=(
   ["~20MB, ~30MB RAM"]="the agent's size and footprint, published on docs.dockpanel.dev for 146 days against a register reading 21 MB / ~35 MB"
   ["22 MB on disk"]="binaries on disk in the site's meta tags; the register totals 46 MB, and the tags matched no register row in either figure"
   ["~52 MB of memory"]="the panel's footprint in the site's meta tags; the two services measure ~49 MB"
+  ["API (~22MB)"]="the API binary in README's own 'Under the hood' line; the published asset is 23.2 MB and the register says 23"
 )
 
 # s354 added the last two. `index.html` was the sharpest gap in this list: it is
@@ -735,6 +749,39 @@ if grep -qE '^\|[^|]*[Oo]pen source[^|]*\|[[:space:]]*MIT' COMPARISON.md; then
   bad "COMPARISON.md still tells readers DockPanel is MIT"
 else
   ok "COMPARISON.md does not claim MIT for DockPanel"
+fi
+
+# --- 9. FEATURES.md's Source columns must name files that exist ------------
+#
+# The register's numbers are checked in six ways above. Its SOURCE columns —
+# the "where does this live" citation on every feature row — were checked in
+# none, and that is not hypothetical: `**Credential Encryption**` cited
+# `services/credential_crypto.rs`, a file that has never existed in this tree
+# (the real one is `services/secrets_crypto.rs`). A reader chasing the one row
+# that names the project's encryption implementation was sent to nothing.
+#
+# The population is DERIVED from the tables rather than listed, and the offenders
+# are reported in ONE assertion naming them, so the arm cannot pass by measuring
+# an empty set and cannot flood the log with one line per row.
+FEAT_PATHS=$(awk '/^\|/ {print}' FEATURES.md \
+  | grep -oE '`[a-z_]+(/[a-z_.]+)+\.(rs|tsx|ts)`' \
+  | tr -d '`' | sort -u)
+feat_total=0; feat_missing=""
+for rel in $FEAT_PATHS; do
+  feat_total=$((feat_total+1))
+  # The columns are relative to different crates (backend, agent, frontend), so
+  # the path is resolved by SUFFIX anywhere under panel/ rather than by guessing
+  # which column a token came from.
+  if [ -z "$(find panel -path "*/$rel" -print -quit 2>/dev/null)" ]; then
+    feat_missing="$feat_missing $rel"
+  fi
+done
+if [ "$feat_total" -lt 30 ]; then
+  bad "extracted only $feat_total source citations from FEATURES.md — the table shape changed and this arm proves nothing"
+elif [ -n "$feat_missing" ]; then
+  bad "FEATURES.md cites source file(s) that do not exist:$feat_missing"
+else
+  ok "all $feat_total source citations in FEATURES.md resolve to real files"
 fi
 
 echo

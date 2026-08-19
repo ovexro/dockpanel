@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.129.0 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.130.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -52,7 +52,7 @@
 | **Image Vulnerability Scanning** | Per-app CVE scanning with grype (self-contained install into `/var/lib/dockpanel/scanners/`), severity badge per app row, scheduled background rescans, soft deploy gate at critical/high/medium threshold, applied at every door that runs an image (template deploy, change-image, compose, stacks). Defaults off. | `routes/image_scans.rs`, `services/image_scanner.rs` | `services/image_scanner.rs`, `routes/image_scan.rs` | `Apps.tsx` (badge + drawer), `Settings.tsx` (ImageScanSettings) |
 | **Signed Releases + SBOM** | Every binary and SPDX 2.3 SBOM is signed in CI with cosign keyless via Sigstore (no long-lived key, recorded in Rekor transparency log). cargo-sbom emits per-crate SBOMs. Verification snippet in SECURITY.md. | — | — | — (release artifacts) |
 | **Per-Image SBOM Generation** | On-demand SPDX 2.3 JSON SBOM for any deployed app's image (syft, self-contained install). One-click "Download SBOM" button in each app's scan drawer. Persisted in `image_sbom` (JSONB). Defaults off. | `routes/sboms.rs` | `services/sbom_scanner.rs`, `routes/sbom.rs` | `Apps.tsx` (drawer button), `Settings.tsx` (SbomSettings) |
-| **Credential Encryption** | All stored credentials encrypted at rest with AES-256-GCM | `services/credential_crypto.rs` | — | — |
+| **Credential Encryption** | All stored credentials encrypted at rest with AES-256-GCM; the re-key sweep derives its writer census from the crate | `services/secrets_crypto.rs`, `services/credential_reencrypt.rs` | — | — |
 | **Content Security Policy** | CSP headers on frontend nginx config | — | — | `nginx.conf` |
 | **Safe Command Execution** | `env_clear()` on all child processes to prevent environment hijacking | — | `safe_command.rs` | — |
 
@@ -234,7 +234,7 @@ honest:
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
 | App templates | 148 | derived | every commit |
 | HTTP routes | 823 (535 backend + 288 agent) | derived | every commit |
-| Regression-pin assertions | 2518 (76 suites) | derived | every commit |
+| Regression-pin assertions | 2553 (77 suites) | derived | every commit |
 | Frontend pages | 53 | derived | every commit |
 | DB migrations | 113 | derived | every commit |
 | Supervised background services | 15 | derived | every commit |

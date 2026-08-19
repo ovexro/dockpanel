@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.129.0.** The version stamp, the template count and every
+> **Reflects v2.130.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -372,7 +372,7 @@ found things from coming back.
 
 **On every commit** (`ci.yml`, `codeql.yml`):
 
-- **598 unit tests** across the crates — 373 in the backend, 225 in the agent.
+- **599 unit tests** across the crates — 374 in the backend, 225 in the agent.
   (The CLI crate carries none of its own today.) Re-derive rather than trust
   this line: `for c in agent backend cli; do (cd panel/$c && cargo test
   --release); done` and sum the `test result:` lines. Nothing recomputes this
@@ -388,7 +388,7 @@ found things from coming back.
   that three unit tests are `#[ignore]`d and therefore excluded from the count
   above: they need a Docker daemon and are described under the drills.
 - **`cargo audit` on all three crates, enforcing.** A real advisory fails the
-  build. Two accepted, upstream-blocked items are ignored narrowly, in a
+  build. One accepted, upstream-blocked item is ignored narrowly, in a
   committed config, with the reason written down.
 - **A frontend audit gate** that fails on anything high or critical and waives
   only advisories listed with a written reason — because one unwaivable advisory
@@ -402,7 +402,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Seventy-six suites, **2518 assertions**, all green at the current commit:
+survivable. Seventy-seven suites, **2553 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -415,6 +415,7 @@ survivable. Seventy-six suites, **2518 assertions**, all green at the current co
 | `rpm-install-pin-e2e.sh` | 71 |
 | `mail-rpm-pin-e2e.sh` | 22 |
 | `cpu-metric-pin-e2e.sh` | 17 |
+| `credentials-at-rest-pin-e2e.sh` | 35 |
 | `sandbox-paths-pin-e2e.sh` | 94 |
 | `webmail-spam-pin-e2e.sh` | 18 |
 | `registration-gates-pin-e2e.sh` | 14 |

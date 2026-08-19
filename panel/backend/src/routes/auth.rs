@@ -141,6 +141,7 @@ pub async fn setup(
         let local_id = crate::services::agent::ensure_local_server(
             &state.db,
             &state.config.agent_token,
+            &state.config.jwt_secret,
         )
         .await;
         if !local_id.is_nil() {

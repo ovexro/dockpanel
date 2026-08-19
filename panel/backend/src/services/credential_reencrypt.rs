@@ -39,23 +39,72 @@ const SIMPLE_SUBJECTS: &[(&str, &str, &str)] = &[
     ("dns_zones", "id", "cf_api_token"),
     ("users", "id", "totp_secret"),
     ("whmcs_config", "id", "api_secret_encrypted"),
+    ("cdn_zones", "id", "api_key"),
+    ("git_deploys", "id", "github_token"),
+    ("servers", "id", "agent_token"),
 ];
 
-/// Route modules known to write an encrypted credential. Enforced against the
-/// tree by `every_credential_writer_is_covered` below — that test failing IS
-/// the anti-drift mechanism, the same shape as the generated-guidance test.
-pub const COVERED_MODULES: &[&str] = &[
-    "settings",
-    "databases",
-    "whmcs",
-    "system",
-    "sites",
-    "migration",
-    "mail",
-    "dns",
-    "backup_destinations",
-    "auth",
+/// Subjects the sweep visits through a hand-written arm rather than
+/// [`SIMPLE_SUBJECTS`], because their ciphertext is not one row-one column.
+///
+/// `subject_tokens_match_the_sweep` asserts each of these is really passed to a
+/// `SubjectReport::new(..)` in this file, so the list cannot drift away from the
+/// arms it claims to describe.
+const SPECIAL_SUBJECTS: &[&str] = &[
+    "settings.value",
+    "backup_destinations.config",
+    "secrets.encrypted_value",
 ];
+
+/// Modules known to write an encrypted credential, each paired with **the
+/// subject that re-keys it**.
+///
+/// ⚠ The pairing is the point, and it was added after the registry proved it
+/// could be satisfied without doing its job. It was previously a bare list of
+/// module names checked by `every_credential_writer_is_covered`, so a new
+/// encrypting module could be made to pass by adding its NAME here — while the
+/// column it wrote was never added to `SIMPLE_SUBJECTS` and so was silently
+/// skipped by every re-key for ever. That is the exact failure this file's own
+/// header warns about ("a registry that merely lists what someone remembered is
+/// a changelog"), reproduced inside the mechanism meant to prevent it. Naming
+/// the subject makes the two halves one edit: `subject_tokens_match_the_sweep`
+/// rejects a subject the sweep does not actually visit.
+pub const COVERED_MODULES: &[(&str, &str)] = &[
+    ("settings", "settings.value"),
+    ("databases", "databases.db_password_enc"),
+    ("whmcs", "whmcs_config.api_secret_encrypted"),
+    ("system", "settings.value"),
+    ("sites", "databases.db_password_enc"),
+    ("migration", "databases.db_password_enc"),
+    ("mail", "mail_domains.dkim_private_key"),
+    ("dns", "dns_zones.cf_api_token"),
+    ("backup_destinations", "backup_destinations.config"),
+    ("auth", "users.totp_secret"),
+    ("cdn", "cdn_zones.api_key"),
+    ("git_deploys", "git_deploys.github_token"),
+    ("servers", "servers.agent_token"),
+    ("agent", "servers.agent_token"),
+];
+
+/// The module names alone, for the operator-facing settings endpoint.
+pub fn covered_module_names() -> Vec<&'static str> {
+    COVERED_MODULES.iter().map(|(m, _)| *m).collect()
+}
+
+/// Every subject this sweep re-keys, as `table.column`.
+///
+/// Reported beside the module list so the endpoint answers "did it touch my X?"
+/// about COLUMNS and not only about modules — the module half alone was what
+/// let a module be declared covered while its column was skipped. Deriving both
+/// halves from the same two constants is also what keeps `SPECIAL_SUBJECTS`
+/// honest: it is production data, so it cannot rot behind a `cfg(test)`.
+pub fn swept_subjects() -> Vec<String> {
+    SIMPLE_SUBJECTS
+        .iter()
+        .map(|(table, _, col)| format!("{table}.{col}"))
+        .chain(SPECIAL_SUBJECTS.iter().map(|s| s.to_string()))
+        .collect()
+}
 
 /// `settings` rows whose `value` is ciphertext. Mirrors the predicate the two
 /// writers in `routes::settings` apply (`SENSITIVE_KEYS` plus the
@@ -356,32 +405,77 @@ mod tests {
     /// same output without a floor.
     #[test]
     fn every_credential_writer_is_covered() {
-        let routes = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/routes");
+        // BOTH trees. An earlier cut walked only `src/routes`, so a service
+        // that encrypted a credential joined the install completely unseen —
+        // and this diff created the first one (`services::agent` encrypts
+        // `servers.agent_token` when it registers the local server). A
+        // discovery scoped to one directory is a list of the places someone
+        // remembered to look, which is the same defect one level up.
+        //
+        // `secrets_crypto` is the primitive and `credential_reencrypt` is this
+        // sweep; both necessarily name the function and neither stores a
+        // credential of its own, so they are excluded BY NAME and the floors
+        // below keep that exclusion from quietly emptying the census.
+        // The doors are DERIVED, not listed. An earlier cut walked
+        // `["src/routes", "src/services"]` and asserted that both names
+        // appeared in what it had walked — which is a tautology, because the
+        // walked set IS that list. A mutation shortening it to routes-only
+        // passed: no service was scanned, so no service writer was discovered,
+        // so nothing was "missing". A census whose scope is a literal can
+        // always be narrowed silently; one that walks the whole crate cannot.
+        //
+        // `secrets_crypto` is the primitive and `credential_reencrypt` is this
+        // sweep; both necessarily name the function and neither stores a
+        // credential of its own, so they are excluded BY NAME — and the floor
+        // below keeps that exclusion from quietly emptying the census.
+        const MACHINERY: &[&str] = &["secrets_crypto", "credential_reencrypt"];
+        let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut writers: Vec<String> = Vec::new();
+        let mut scanned = 0usize;
+        let mut stack = vec![src_root.clone()];
 
-        for entry in std::fs::read_dir(&routes).expect("routes dir is readable") {
-            let path = entry.expect("dir entry").path();
-            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-                continue;
-            }
-            let body = std::fs::read_to_string(&path).expect("route file is readable");
-            // `decrypt_credential(` cannot match `encrypt_credential(` — different
-            // letters — but `reencrypt_credential(` contains it verbatim, so it is
-            // removed before the test rather than reasoned around.
-            let body = body.replace("reencrypt_credential(", "");
-            if body.contains("encrypt_credential(") {
-                let stem = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .expect("route file has a name")
-                    .to_string();
-                if stem != "mod" {
-                    writers.push(stem);
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir)
+                .unwrap_or_else(|e| panic!("{} is readable: {e}", dir.display()))
+            {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                scanned += 1;
+                let body = std::fs::read_to_string(&path).expect("source file is readable");
+                // `decrypt_credential(` cannot match `encrypt_credential(` — different
+                // letters — but `reencrypt_credential(` contains it verbatim, so it is
+                // removed before the test rather than reasoned around.
+                let body = body.replace("reencrypt_credential(", "");
+                if body.contains("encrypt_credential(") {
+                    let stem = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .expect("source file has a name")
+                        .to_string();
+                    if stem != "mod" && !MACHINERY.contains(&stem.as_str()) {
+                        writers.push(stem);
+                    }
                 }
             }
         }
         writers.sort();
         writers.dedup();
+
+        // Positive control for the WALK itself, separate from the floor on its
+        // RESULT below: a moved layout or a traversal that stops descending
+        // yields few files, and "no writers found" would then read as a covered
+        // tree rather than as an instrument that examined nothing.
+        assert!(
+            scanned >= 90,
+            "the walk examined only {scanned} source file(s) under src/ — the crate layout moved \
+             or the traversal stopped descending, so this census proves nothing about the tree"
+        );
 
         // Floor: the tree is known to hold at least this many writers. A
         // discovery that collapses is a broken instrument, not a clean tree.
@@ -394,7 +488,7 @@ mod tests {
 
         let missing: Vec<&String> = writers
             .iter()
-            .filter(|m| !COVERED_MODULES.contains(&m.as_str()))
+            .filter(|m| !COVERED_MODULES.iter().any(|(name, _)| name == m))
             .collect();
 
         assert!(
@@ -409,12 +503,58 @@ mod tests {
     /// a stale entry makes the census above pass vacuously for that module.
     #[test]
     fn covered_modules_all_still_exist() {
-        let routes = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/routes");
-        for module in COVERED_MODULES {
-            let path = routes.join(format!("{module}.rs"));
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for (module, _) in COVERED_MODULES {
+            let in_routes = root.join(format!("src/routes/{module}.rs"));
+            let in_services = root.join(format!("src/services/{module}.rs"));
             assert!(
-                path.exists(),
-                "COVERED_MODULES names `{module}`, but src/routes/{module}.rs does not exist"
+                in_routes.exists() || in_services.exists(),
+                "COVERED_MODULES names `{module}`, but neither src/routes/{module}.rs nor \
+                 src/services/{module}.rs exists"
+            );
+        }
+    }
+
+    /// Every subject a module is paired with must be one the sweep really visits.
+    ///
+    /// This is the arm that makes the pairing load-bearing rather than
+    /// decorative. Adding `("cdn", "cdn_zones.api_key")` without also adding
+    /// `("cdn_zones", "id", "api_key")` to SIMPLE_SUBJECTS fails HERE — which is
+    /// the whole reason the pairing exists, because the old bare-name registry
+    /// went green on exactly that half-edit and the column was then skipped by
+    /// every re-key.
+    #[test]
+    fn subject_tokens_match_the_sweep() {
+        let swept = swept_subjects();
+
+        for (module, subject) in COVERED_MODULES {
+            assert!(
+                swept.iter().any(|s| s == subject),
+                "COVERED_MODULES pairs `{module}` with subject `{subject}`, which the sweep never \
+                 visits — add it to SIMPLE_SUBJECTS (or give it an arm and list it in \
+                 SPECIAL_SUBJECTS). Swept subjects are: {swept:?}"
+            );
+        }
+
+        // And the special arms must exist. Read from THIS file's source rather
+        // than from the constant, so the list cannot drift away from the
+        // `SubjectReport::new(..)` calls it claims to name — the two are
+        // separate declarations, so this can actually fail.
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src/services/credential_reencrypt.rs"),
+        )
+        .expect("this file is readable");
+        let arms = src.matches("SubjectReport::new(").count();
+        assert!(
+            arms >= 4,
+            "found {arms} SubjectReport::new call(s) — the sweep's arms moved and this check is \
+             measuring an empty set"
+        );
+        for subject in SPECIAL_SUBJECTS {
+            assert!(
+                src.contains(&format!("SubjectReport::new(\"{subject}\")")),
+                "SPECIAL_SUBJECTS names `{subject}` but no arm in this file reports it"
             );
         }
     }

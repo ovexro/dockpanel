@@ -69,7 +69,7 @@ DockPanel is designed with defense in depth. Key security properties include:
 - **Unix socket communication** — The agent communicates via a Unix domain socket and is not exposed to the network.
 - **JWT authentication** — All API endpoints require valid JWT tokens for access.
 - **Argon2 password hashing** — User passwords are hashed using Argon2, a memory-hard algorithm resistant to brute-force and GPU-based attacks.
-- **Credential encryption at rest** — All stored credentials (DB passwords, SMTP, S3/SFTP, OAuth, TOTP, DKIM) are encrypted with AES-256-GCM using dedicated key derivation.
+- **Credential encryption at rest** — All stored credentials (DB passwords, SMTP, S3/SFTP, OAuth, TOTP, DKIM, CDN provider keys, GitHub deploy tokens, and the agent tokens the panel dials its fleet with) are encrypted with AES-256-GCM using dedicated key derivation.
 - **Content Security Policy** — CSP headers are set on the frontend nginx configuration to mitigate XSS and data injection attacks.
 - **Safe command execution** — All child processes are spawned with `env_clear()` to prevent LD_PRELOAD, PATH hijacking, and other environment-based attacks.
 - **Rate limiting** — All authentication endpoints are rate-limited to prevent brute-force attacks.

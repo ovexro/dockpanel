@@ -481,7 +481,13 @@ pub async fn create(
         None => body.domain.clone(),
     };
 
-    let deploy: GitDeploy = sqlx::query_as(
+    // Encrypted at rest; `set_github_status` decrypts. `encrypt_stored_token`
+    // also refuses the mask sentinel, so a client that echoes back the
+    // ●●●●●●●● it was shown cannot overwrite a real token with it.
+    let github_token_enc =
+        encrypt_stored_token(body.github_token.as_deref(), &state.config.jwt_secret)?;
+
+    let mut deploy: GitDeploy = sqlx::query_as(
         "INSERT INTO git_deploys (user_id, server_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron, deploy_protected, preview_ttl_hours) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23) \
          RETURNING *",
@@ -505,7 +511,7 @@ pub async fn create(
     .bind(&body.post_deploy_cmd)
     .bind(&build_args)
     .bind(build_context)
-    .bind(&body.github_token)
+    .bind(&github_token_enc)
     .bind(&body.deploy_cron)
     .bind(deploy_protected)
     .bind(preview_ttl)
@@ -538,6 +544,7 @@ pub async fn create(
         .execute(&state.db).await;
     }
 
+    mask_github_token(&mut deploy);
     Ok((StatusCode::CREATED, Json(deploy)))
 }
 
@@ -652,7 +659,10 @@ pub async fn update(
     let env_vars = body.env_vars.as_ref().map(|e| serde_json::to_value(e).unwrap_or_default());
     let build_args = body.build_args.as_ref().map(|e| serde_json::to_value(e).unwrap_or_default());
 
-    let deploy: GitDeploy = sqlx::query_as(
+    let github_token_enc =
+        encrypt_stored_token(body.github_token.as_deref(), &state.config.jwt_secret)?;
+
+    let mut deploy: GitDeploy = sqlx::query_as(
         "UPDATE git_deploys SET \
          repo_url = COALESCE($1, repo_url), \
          branch = COALESCE($2, branch), \
@@ -690,7 +700,7 @@ pub async fn update(
     .bind(body.post_deploy_cmd.as_deref())
     .bind(build_args)
     .bind(body.build_context.as_deref())
-    .bind(body.github_token.as_deref())
+    .bind(github_token_enc.as_deref())
     .bind(body.deploy_cron.as_deref())
     .bind(body.deploy_protected)
     .bind(body.preview_ttl_hours)
@@ -753,6 +763,7 @@ pub async fn update(
         }
     }
 
+    mask_github_token(&mut deploy);
     Ok(Json(deploy))
 }
 
@@ -2518,10 +2529,39 @@ async fn compose_deploy_refusal(
     None
 }
 
+/// The eight filled circles `mask_github_token` substitutes for a stored token.
+/// Named once so the mask and the guard against re-storing it cannot drift apart.
+const GITHUB_TOKEN_MASK: &str = "\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}";
+
+/// Encrypt a submitted GitHub token for storage.
+///
+/// `None` is passed through so `update`'s `COALESCE` keeps whatever is stored —
+/// that is how the SPA leaves an unchanged token alone. The mask sentinel is
+/// ALSO mapped to `None`: every handler now returns the masked row, so a client
+/// that submits the form it was served sends the mask back, and storing it would
+/// replace a working token with eight circles. Encrypting it would be worse
+/// still — the value would look like a legitimate credential to every later
+/// read. v2.48.3 shipped this class of bug once (an Edit button that re-encrypted
+/// an already-encrypted destination password); it is closed here by construction
+/// rather than by the caller remembering.
+fn encrypt_stored_token(
+    submitted: Option<&str>,
+    jwt_secret: &str,
+) -> Result<Option<String>, ApiError> {
+    match submitted {
+        None => Ok(None),
+        Some(t) if t.is_empty() || t == GITHUB_TOKEN_MASK => Ok(None),
+        Some(t) => Ok(Some(
+            crate::services::secrets_crypto::encrypt_credential(t, jwt_secret)
+                .map_err(|e| internal_error("encrypt github token", e))?,
+        )),
+    }
+}
+
 fn mask_github_token(deploy: &mut GitDeploy) {
     if let Some(ref t) = deploy.github_token {
         if !t.is_empty() {
-            deploy.github_token = Some("\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}".to_string());
+            deploy.github_token = Some(GITHUB_TOKEN_MASK.to_string());
         }
     }
 }
@@ -2546,6 +2586,16 @@ fn deploy_url(domain: &str, ssl_email: Option<&str>) -> String {
 /// through `deploy_url` and none can reintroduce a hardcoded scheme in the link
 /// third parties see on the commit.
 async fn set_github_status(token: &str, repo_url: &str, sha: &str, state: &str, target_url: Option<String>) {
+    // `git_deploys.github_token` is encrypted at rest by `create` and `update`.
+    // Every one of the seven read sites in this module funnels here — either
+    // directly or through a spawned task that clones the value first — and the
+    // token never leaves the backend (the agent tree has zero references to it),
+    // so this is the single place that has to open it, the same shape as
+    // `helpers::cf_headers` and `cdn::bunny_headers`. The legacy fallback
+    // returns a pre-encryption plaintext token unchanged, so existing rows keep
+    // reporting commit status without a migration.
+    let token = crate::services::secrets_crypto::decrypt_credential_from_env(token);
+    let token = token.as_str();
     let (owner, repo) = match parse_github_repo(repo_url) {
         Some(r) => r,
         None => return, // Not a GitHub URL

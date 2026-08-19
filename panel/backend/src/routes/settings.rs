@@ -1169,6 +1169,7 @@ pub async fn reencrypt_credentials(
         "subjects": reports,
         // Which surfaces this sweep claims to cover, so the answer to "did it
         // touch my X?" is in the response rather than in someone's memory.
-        "covered_modules": crate::services::credential_reencrypt::COVERED_MODULES,
+        "covered_modules": crate::services::credential_reencrypt::covered_module_names(),
+        "swept_subjects": crate::services::credential_reencrypt::swept_subjects(),
     })))
 }

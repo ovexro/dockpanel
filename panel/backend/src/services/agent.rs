@@ -1155,15 +1155,22 @@ pub struct AgentRegistry {
     remote_cache: Arc<RwLock<HashMap<Uuid, RemoteAgentClient>>>,
     /// Database pool for looking up server details.
     db: sqlx::PgPool,
+    /// Key `servers.agent_token` is encrypted under. Held here because
+    /// `for_server` is the single site that opens a stored dial-out token, and
+    /// a struct field is a dependency the compiler checks — an env read inside
+    /// the method would be a second source of truth for that key, silently
+    /// returning ciphertext-as-token if it were ever unset.
+    jwt_secret: String,
 }
 
 impl AgentRegistry {
-    pub fn new(local: AgentClient, db: sqlx::PgPool) -> Self {
+    pub fn new(local: AgentClient, db: sqlx::PgPool, jwt_secret: String) -> Self {
         Self {
             local,
             local_server_id: Arc::new(RwLock::new(None)),
             remote_cache: Arc::new(RwLock::new(HashMap::new())),
             db,
+            jwt_secret,
         }
     }
 
@@ -1228,6 +1235,17 @@ impl AgentRegistry {
             // an edge case.
             Some((_, _, _, true)) => Ok(AgentHandle::Local(self.local.clone())),
             Some((Some(url), token, fingerprint, false)) if !url.is_empty() => {
+                // The ONLY consumer of the stored dial-out token. `servers.agent_token`
+                // is encrypted at rest by every writer (`routes::servers::create_server`,
+                // `rotate_token`, and `ensure_local_server`); decrypt here — the single
+                // choke point every remote agent call funnels through — so no read site
+                // can forget to. `decrypt_credential_or_legacy` returns a pre-encryption
+                // plaintext token unchanged, so an existing fleet keeps dialling without
+                // a migration and without a re-enrolment.
+                let token = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+                    &token,
+                    &self.jwt_secret,
+                );
                 let client = RemoteAgentClient::new_with_pin(url, token, fingerprint);
                 self.remote_cache.write().await.insert(server_id, client.clone());
                 Ok(AgentHandle::Remote(client))
@@ -1312,7 +1330,29 @@ pub struct FleetMember {
 }
 
 /// Ensure the local server row exists in the DB. Returns the local server UUID.
-pub async fn ensure_local_server(db: &sqlx::PgPool, agent_token: &str) -> Uuid {
+///
+/// `jwt_secret` is threaded in rather than read from the environment because it
+/// is the key `servers.agent_token` is encrypted under, and both callers already
+/// hold it. An env read here would be an untestable second source of truth for
+/// the one value that decides whether the column can be opened again.
+pub async fn ensure_local_server(db: &sqlx::PgPool, agent_token: &str, jwt_secret: &str) -> Uuid {
+    // Encrypted at rest like every other stored credential. The local row's
+    // plaintext is never dialled — `AgentPool::for_server` short-circuits
+    // `is_local` to the Unix-socket handle before it looks at the token — so
+    // this row is write-only in practice; it is encrypted anyway so that "no
+    // plaintext credential lives in this column" is true of every row, which is
+    // what a sweep, a dump and the published promise can each rely on.
+    let agent_token_enc = match crate::services::secrets_crypto::encrypt_credential(
+        agent_token,
+        jwt_secret,
+    ) {
+        Ok(enc) => enc,
+        Err(e) => {
+            tracing::error!(error = %e, "could not encrypt the local agent token; storing it unencrypted");
+            agent_token.to_string()
+        }
+    };
+
     // Check if a local server already exists
     let existing: Option<(Uuid,)> =
         sqlx::query_as("SELECT id FROM servers WHERE is_local = true LIMIT 1")
@@ -1324,7 +1364,7 @@ pub async fn ensure_local_server(db: &sqlx::PgPool, agent_token: &str) -> Uuid {
         // Update token + hash if changed
         let token_hash = crate::helpers::hash_agent_token(agent_token);
         let _ = sqlx::query("UPDATE servers SET agent_token = $1, agent_token_hash = $2, status = 'online' WHERE id = $3")
-            .bind(agent_token)
+            .bind(&agent_token_enc)
             .bind(&token_hash)
             .bind(id)
             .execute(db)
@@ -1355,7 +1395,7 @@ pub async fn ensure_local_server(db: &sqlx::PgPool, agent_token: &str) -> Uuid {
          RETURNING id",
     )
     .bind(user_id)
-    .bind(agent_token)
+    .bind(&agent_token_enc)
     .bind(&token_hash)
     .fetch_one(db)
     .await

@@ -111,6 +111,19 @@ pub async fn create(
 
     let agent_token_hash = crate::helpers::hash_agent_token(&agent_token);
 
+    // The plaintext column is kept because the panel DIALS remote agents with
+    // it (the hash only authenticates them inbound), so it is an outbound
+    // credential like any other and belongs under the at-rest promise. It is
+    // decrypted at the single site that consumes it,
+    // `services::agent::AgentPool::for_server`. `auto_healer` names the
+    // exposure this closes: a panel DB dump carried it in cleartext.
+    // The response below still returns the PLAINTEXT local variable — the
+    // operator needs it for the install one-liner, and that is the only time
+    // it is ever shown.
+    let agent_token_enc =
+        crate::services::secrets_crypto::encrypt_credential(&agent_token, &state.config.jwt_secret)
+            .map_err(|e| internal_error("encrypt agent token", e))?;
+
     let server: Server = sqlx::query_as(
         "INSERT INTO servers (user_id, name, ip_address, agent_token, agent_token_hash, agent_url, status, is_local) \
          VALUES ($1, $2, $3, $4, $5, $6, 'pending', false) RETURNING *",
@@ -118,7 +131,7 @@ pub async fn create(
     .bind(claims.sub)
     .bind(name)
     .bind(if ip.is_empty() { None } else { Some(&ip) })
-    .bind(&agent_token)
+    .bind(&agent_token_enc)
     .bind(&agent_token_hash)
     .bind(if agent_url.is_empty() { None } else { Some(&agent_url) })
     .fetch_one(&state.db)
@@ -438,12 +451,18 @@ pub async fn rotate_token(
         .and_then(|v| v.as_str())
         .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "Agent did not return new token"))?;
 
-    // Update database with new hash (and plaintext for remote agent communication)
+    // Update database with the new hash, and the new dial-out token encrypted
+    // at rest (see `create_server`; `AgentPool::for_server` decrypts).
     let new_hash = crate::helpers::hash_agent_token(new_token);
+    let new_token_enc = crate::services::secrets_crypto::encrypt_credential(
+        new_token,
+        &state.config.jwt_secret,
+    )
+    .map_err(|e| internal_error("encrypt rotated agent token", e))?;
     sqlx::query(
         "UPDATE servers SET agent_token = $1, agent_token_hash = $2 WHERE id = $3",
     )
-    .bind(new_token)
+    .bind(&new_token_enc)
     .bind(&new_hash)
     .bind(id)
     .execute(&state.db)

@@ -30,7 +30,8 @@ It governs two stores:
 
 - stored credentials — database passwords, SMTP passwords, DKIM private keys,
   Cloudflare API tokens, TOTP secrets, backup-destination secrets, the WHMCS API
-  secret
+  secret, BunnyCDN provider keys, GitHub deploy tokens, and the per-server agent
+  tokens the panel dials its fleet with
 - the Secrets Manager vault, including the CMS admin password site creation
   writes there and any value marked for injection into a site's environment
 

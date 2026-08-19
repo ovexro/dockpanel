@@ -199,10 +199,11 @@ async fn main() {
 
     // Create agent client (local) and agent registry (multi-server)
     let agent = AgentClient::new(config.agent_socket.clone(), config.agent_token.clone());
-    let agents = AgentRegistry::new(agent.clone(), db.clone());
+    let agents = AgentRegistry::new(agent.clone(), db.clone(), config.jwt_secret.clone());
 
     // Ensure local server exists in DB and register its ID in the registry
-    let local_server_id = services::agent::ensure_local_server(&db, &config.agent_token).await;
+    let local_server_id =
+        services::agent::ensure_local_server(&db, &config.agent_token, &config.jwt_secret).await;
     if !local_server_id.is_nil() {
         agents.set_local_server_id(local_server_id).await;
         tracing::info!("Local server ID: {local_server_id}");

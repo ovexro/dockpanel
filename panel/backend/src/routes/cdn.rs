@@ -103,6 +103,14 @@ fn bunny_client(_api_key: &str) -> reqwest::Client {
 }
 
 fn bunny_headers(api_key: &str) -> reqwest::header::HeaderMap {
+    // The stored BunnyCDN key is encrypted at rest (see `create_zone`). Decrypt
+    // here — the single choke point every Bunny caller funnels through — so no
+    // read site can forget to, exactly as `helpers::cf_headers` does for the
+    // Cloudflare half. The legacy fallback returns any pre-encryption plaintext
+    // value (and a freshly-entered key during validation) unchanged, so the
+    // round trip is transparent and no migration is needed.
+    let api_key = crate::services::secrets_crypto::decrypt_credential_from_env(api_key);
+    let api_key = api_key.as_str();
     let mut headers = reqwest::header::HeaderMap::new();
     if let Ok(val) = api_key.parse() {
         headers.insert("AccessKey", val);
@@ -165,6 +173,17 @@ pub async fn create_zone(
         }
     }
 
+    // Encrypt before it reaches the row. `SECURITY.md` and `README.md` both
+    // promise every stored credential is AES-256-GCM at rest; this column was
+    // one of three that were not. Reads go through `bunny_headers` /
+    // `helpers::cf_headers`, which both decrypt, and both tolerate a legacy
+    // plaintext value — so existing rows keep working and there is no migration.
+    let api_key_enc = crate::services::secrets_crypto::encrypt_credential(
+        body.api_key.trim(),
+        &state.config.jwt_secret,
+    )
+    .map_err(|e| internal_error("encrypt cdn api key", e))?;
+
     let zone: CdnZone = sqlx::query_as(
         "INSERT INTO cdn_zones (user_id, domain, provider, api_key, pull_zone_id, origin_url, cdn_hostname) \
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
@@ -172,7 +191,7 @@ pub async fn create_zone(
     .bind(claims.sub)
     .bind(body.domain.trim())
     .bind(provider)
-    .bind(body.api_key.trim())
+    .bind(&api_key_enc)
     .bind(body.pull_zone_id.as_deref())
     .bind(body.origin_url.as_deref())
     .bind(body.cdn_hostname.as_deref())
