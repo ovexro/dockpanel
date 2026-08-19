@@ -36,15 +36,13 @@ Notifications are delivered in real-time via SSE (Server-Sent Events). The panel
 
 ### Notification Preferences
 
-Configure which notifications you receive:
+The in-panel notification feed has no per-type preferences -- every notification
+the panel raises appears in it.
 
-1. Go to **Settings** > **Notifications**
-2. Toggle notification types on/off:
-   - Monitor alerts
-   - Backup notifications
-   - Deploy notifications
-   - Security alerts
-   - System alerts
+What *is* configurable is which alert types are sent to your **external**
+channels (email, Slack, Discord, PagerDuty): see
+**Settings** > **Alert Channels** > *Suppress External Notifications*.
+Suppressing a type there still records it in the panel feed.
 
 ## API Reference
 

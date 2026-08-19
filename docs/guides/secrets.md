@@ -7,7 +7,7 @@ The Secrets Manager provides encrypted storage for sensitive configuration value
 - **Vault**: A named collection of secrets (e.g., `production`, `staging`)
 - **Secret**: A key-value pair stored encrypted (e.g., `DATABASE_URL=postgres://...`)
 - **Version history**: Every update creates a new version; previous versions are retained
-- **Injection**: Push secrets directly into a container's `.env` file
+- **Injection**: Write a vault's auto-inject secrets into a site's environment
 
 ## Create a Vault
 
@@ -18,11 +18,8 @@ The Secrets Manager provides encrypted storage for sensitive configuration value
 3. Enter a name (e.g., `production`)
 4. Click **Create**
 
-### From the CLI
-
-```bash
-dockpanel secrets vault create production
-```
+> **Note:** vaults and secrets are managed from the panel or the HTTP API.
+> The `dockpanel` CLI has no `secrets` subcommand.
 
 ## Add Secrets
 
@@ -35,11 +32,13 @@ dockpanel secrets vault create production
 
 The value is encrypted immediately and never stored in plaintext.
 
-### From the CLI
+### From the API
 
 ```bash
-dockpanel secrets set production DATABASE_URL "postgres://user:pass@host/db"
-dockpanel secrets set production REDIS_URL "redis://localhost:6379"
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"key":"DATABASE_URL","value":"postgres://user:pass@host/db","auto_inject":true}' \
+  https://panel.example.com/api/secrets/vaults/{vault_id}/secrets
 ```
 
 ## View and Update Secrets
@@ -52,39 +51,36 @@ dockpanel secrets set production REDIS_URL "redis://localhost:6379"
 
 1. Open a secret
 2. Click **History**
-3. View all previous versions with timestamps
-4. Optionally roll back to a previous version
+3. View the change log: version number, who changed it, the kind of change, and when
 
-## Inject Secrets into Containers
+History is an audit trail, not a recovery feature. Previous **values** are not
+returned by the API, and there is no roll-back endpoint -- to restore an old
+value you must know it and set it again.
 
-Push all secrets from a vault directly into a running container's environment.
+## Inject Secrets into a Site
 
-### From the Panel
+Write a vault's auto-inject secrets into a **site's** environment.
 
-1. Open a vault
-2. Click **Inject**
-3. Select the target container
-4. Click **Inject**
-
-DockPanel writes the secrets to the container's `.env` file and restarts it.
-
-### From the CLI
-
-```bash
-dockpanel secrets inject production --container my-app
 ```
+POST /api/secrets/vaults/{vault_id}/inject/{site_id}
+```
+
+What it does, precisely:
+
+- Only secrets flagged **auto-inject** are written. If a vault has none, the call
+  returns `400 No auto-inject secrets in this vault`.
+- The target is a **site**, not a container, and the host is resolved from the
+  site's own row -- not from the caller's selection.
+- The values are written to that site's nginx environment. Nothing is restarted;
+  the new values apply the next time the site's processes are started.
 
 ## Pull Secrets (CI/CD)
 
 Use the pull endpoint in your CI/CD pipeline to fetch secrets at deploy time:
 
 ```bash
-# Using the CLI
-dockpanel secrets pull production --format env > .env
-
-# Using curl
 curl -H "Authorization: Bearer $TOKEN" \
-  https://panel.example.com/api/secrets/vaults/{id}/pull \
+  https://panel.example.com/api/secrets/vaults/{vault_id}/pull \
   -o .env
 ```
 
@@ -93,7 +89,9 @@ curl -H "Authorization: Bearer $TOKEN" \
 ### Export a Vault
 
 ```bash
-dockpanel secrets export production > production-secrets.json
+curl -H "Authorization: Bearer $TOKEN" \
+  https://panel.example.com/api/secrets/vaults/{vault_id}/export \
+  -o production-secrets.json
 ```
 
 The exported file contains encrypted values. Store it securely.
@@ -101,18 +99,29 @@ The exported file contains encrypted values. Store it securely.
 ### Import a Vault
 
 ```bash
-dockpanel secrets import staging < production-secrets.json
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary @production-secrets.json \
+  https://panel.example.com/api/secrets/vaults/{vault_id}/import
 ```
 
 ## Auto-Inject
 
-Auto-inject automatically pushes vault secrets to containers when secrets are updated. Configure this per vault:
+Auto-inject marks which secrets take part in an injection. It is a flag on the
+**individual secret**, not a vault-level setting, and it selects no targets of
+its own:
 
 1. Open a vault
-2. Click **Settings**
-3. Enable **Auto-inject**
-4. Select target containers
-5. When any secret in the vault changes, the linked containers are automatically restarted with the new values
+2. Create or edit a secret
+3. Tick **Auto-inject**
+
+Flagged secrets are the ones written by
+`POST /api/secrets/vaults/{vault_id}/inject/{site_id}`, and they are also picked
+up when a site is deployed with a vault attached.
+
+Changing a secret does **not** push it anywhere by itself, and nothing is
+restarted automatically -- re-run the injection, or deploy, for a new value to
+take effect.
 
 ## API Reference
 

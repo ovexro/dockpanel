@@ -118,9 +118,14 @@ Visitors can subscribe to status updates by entering their email on the status p
 
 ### Managing Subscribers
 
-1. Go to **Status Page** > **Subscribers**
-2. View all subscribed emails and their verification status
-3. Subscribers self-manage via the public subscribe/unsubscribe endpoints
+Subscribers self-manage through the public subscribe and unsubscribe endpoints.
+There is **no subscriber screen in the admin panel** -- the list is available
+over the API only:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  https://your-panel/api/status-page/subscribers
+```
 
 ### Unsubscribe
 

@@ -726,16 +726,15 @@ leaves the stored value unchanged — there is no way to clear one through this 
 | GET | `/api/backup-orchestrator/policies` | List policies |
 | PUT | `/api/backup-orchestrator/policies/{id}` | Update policy |
 | DELETE | `/api/backup-orchestrator/policies/{id}` | Delete policy |
-| POST | `/api/backup-orchestrator/db-backups/{db_name}` | Create DB backup |
+| POST | `/api/backup-orchestrator/db-backup` | Create DB backup |
 | GET | `/api/backup-orchestrator/db-backups` | List DB backups |
 | POST | `/api/backup-orchestrator/db-backups/{id}/restore` | Restore DB backup |
 | DELETE | `/api/backup-orchestrator/db-backups/{id}` | Delete DB backup |
-| POST | `/api/backup-orchestrator/vol-backups` | Create volume backup |
-| GET | `/api/backup-orchestrator/vol-backups` | List volume backups |
+| POST | `/api/backup-orchestrator/volume-backup` | Create volume backup |
+| GET | `/api/backup-orchestrator/volume-backups` | List volume backups |
 | POST | `/api/backup-orchestrator/volume-backups/{id}/restore` | Restore volume backup |
-| DELETE | `/api/backup-orchestrator/vol-backups/{id}` | Delete volume backup |
 | GET | `/api/backup-orchestrator/verifications` | List verifications |
-| POST | `/api/backup-orchestrator/verify/{id}` | Verify a backup |
+| POST | `/api/backup-orchestrator/verify` | Verify the most recent backups |
 | POST | `/api/backup-orchestrator/drill` | Trigger end-to-end drill (site/db/volume) — async, returns 202 |
 | GET | `/api/backup-orchestrator/drills` | List drills (paginated `{items, total}`) |
 
@@ -764,11 +763,11 @@ leaves the stored value unchanged — there is no way to clear one through this 
 | PUT | `/api/status-page/config` | Update config |
 | GET | `/api/status-page/components` | List components |
 | POST | `/api/status-page/components` | Create component |
-| PUT | `/api/status-page/components/{id}` | Update component |
 | DELETE | `/api/status-page/components/{id}` | Delete component |
-| POST | `/api/status-page/subscribers` | Subscribe email |
-| DELETE | `/api/status-page/subscribers/{token}` | Unsubscribe |
-| GET | `/status` | Public status page (no auth) |
+| POST | `/api/status-page/subscribe` | Subscribe email (public, no auth) |
+| POST | `/api/status-page/unsubscribe` | Unsubscribe (public, no auth; DELETE also accepted) |
+| GET | `/api/status-page/subscribers` | List subscribers (admin) |
+| GET | `/api/status-page/public` | Public status payload (no auth) |
 
 ---
 
@@ -778,13 +777,14 @@ leaves the stored value unchanged — there is no way to clear one through this 
 |--------|------|-------------|
 | GET | `/api/secrets/vaults` | List vaults |
 | POST | `/api/secrets/vaults` | Create vault |
+| PUT | `/api/secrets/vaults/{id}` | Update vault |
 | DELETE | `/api/secrets/vaults/{id}` | Delete vault |
 | GET | `/api/secrets/vaults/{id}/secrets` | List secrets |
 | POST | `/api/secrets/vaults/{id}/secrets` | Create secret |
 | PUT | `/api/secrets/vaults/{id}/secrets/{sid}` | Update secret |
 | DELETE | `/api/secrets/vaults/{id}/secrets/{sid}` | Delete secret |
 | GET | `/api/secrets/vaults/{id}/secrets/{sid}/versions` | Version history |
-| POST | `/api/secrets/vaults/{id}/inject` | Inject secrets to .env |
+| POST | `/api/secrets/vaults/{id}/inject/{site_id}` | Inject a vault's secrets into a site's env |
 | GET | `/api/secrets/vaults/{id}/pull` | Pull secrets (CLI) |
 | GET | `/api/secrets/vaults/{id}/export` | Export vault |
 | POST | `/api/secrets/vaults/{id}/import` | Import vault |

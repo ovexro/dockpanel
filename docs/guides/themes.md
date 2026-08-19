@@ -6,26 +6,31 @@ DockPanel ships with 6 built-in themes and multiple layout options. Every theme 
 
 | Theme | Description |
 |-------|-------------|
-| **Nexus Dark** | Deep dark background with vibrant accent colors |
-| **Nexus Light** | Clean light background with sharp contrast |
-| **Ocean** | Blue-tinted dark theme inspired by deep sea |
-| **Forest** | Green-tinted dark theme with natural tones |
-| **Sunset** | Warm orange/red dark theme |
-| **Midnight** | Pure black AMOLED-friendly theme |
+| **Terminal** | Hacker aesthetic -- near-black with a green accent |
+| **Midnight** | Deep navy, modern (the default) |
+| **Ember** | Warm & premium -- dark stone with an orange accent |
+| **Clean Dark** | GitHub-dark, rounded |
+| **Arctic** | Teal & light |
+| **Clean Light** | Modern SaaS, blue |
+
+Four are dark (Terminal, Midnight, Ember, Clean Dark) and two are light (Arctic,
+Clean Light).
 
 ## Changing Themes
 
 ### From the Panel
 
-1. Click the theme icon in the top navigation bar
-2. Select a theme from the dropdown
-3. The theme applies immediately -- no page reload needed
+Either:
 
-Your theme preference is saved per user and persists across sessions.
+- Click the theme button in the top navigation bar to cycle through the six in
+  order, or
+- Go to **Settings** > **Appearance** and click a theme in the swatch grid.
 
-### Keyboard Shortcut
+Either way the theme applies immediately -- no page reload needed.
 
-Press `Ctrl+Shift+T` to cycle through themes.
+Your theme choice is stored in the browser (`localStorage`, key `dp-theme`), so
+it follows the browser and the device rather than the account. Signing in from a
+different browser starts again at the default.
 
 ## Layout Options
 
@@ -33,7 +38,7 @@ Press `Ctrl+Shift+T` to cycle through themes.
 |--------|-------------|
 | **Sidebar** | Traditional sidebar navigation on the left |
 | **Compact** | Narrow icon-only sidebar that expands on hover |
-| **Top** | Horizontal navigation bar at the top |
+| **Topbar** | Horizontal navigation bar at the top |
 
 ### Changing Layout
 
@@ -42,15 +47,6 @@ Press `Ctrl+Shift+T` to cycle through themes.
 3. The layout applies immediately
 
 ## Customization
-
-### Card Depth
-
-Cards in the dashboard support adjustable depth (shadow intensity):
-
-- **Flat**: No shadow
-- **Subtle**: Light shadow for minimal depth
-- **Raised**: Standard shadow
-- **Elevated**: Strong shadow for prominent cards
 
 ### Progress Bar Glow
 
