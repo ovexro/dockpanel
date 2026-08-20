@@ -276,6 +276,32 @@ else
 fi
 
 echo
+echo "── 4b. arming does not raise its own intrusion alert ──"
+
+# Planting is a write, so the atime moves and the sweeper reads it as access.
+# Without clearing the stored baseline, arming a host that already had canaries
+# fires one CANARY TRIGGERED per existing file — each a critical audit entry, an
+# admin notification, and a suspicious event feeding the 5-in-10-minutes
+# auto-lockdown. Four pre-existing canaries is four events. (Fixed v2.132.1.)
+CLEARS=$(grep -c 'DELETE FROM settings WHERE key = \$1' "$BACK_SEC")
+if [ "$CLEARS" -ge 1 ]; then
+  ok "canary_arm clears the stored access-time baseline for the paths it plants"
+else
+  bad "canary_arm leaves the old baseline in place — arming an armed host alerts on every existing canary and can trip auto-lockdown"
+fi
+
+# The key is built in two places: the sweeper WRITES it, the arm handler DELETES
+# it. Spelled differently they never meet, and the failure is silent in the
+# alerting direction.
+W=$(grep -c 'canary_atime_{}' "$HEALER")
+D=$(grep -c 'canary_atime_{}' "$BACK_SEC")
+if [ "$W" -ge 1 ] && [ "$D" -ge 1 ]; then
+  ok "the sweeper's baseline key and the arm handler's delete share one format (writer=$W deleter=$D)"
+else
+  bad "baseline key format drifted between writer and deleter (writer=$W deleter=$D) — the DELETE cannot match the row"
+fi
+
+echo
 echo "── 5. the guide states what the tripwire cannot do ──"
 
 CANARY_SECTION=$(python3 - "$GUIDE" <<'PY'

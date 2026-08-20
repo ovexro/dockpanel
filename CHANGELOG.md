@@ -4,6 +4,35 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.132.1]
+
+### Fixed — arming the canaries raised an intrusion alert for the canaries that were already there
+
+The Arm control shipped in 2.132.0 plants each canary with a remove-then-write,
+so the file's access time moves. `security_check_canary_files` compares that
+against the `canary_atime_<path>` baseline it stored earlier and treats any
+increase as access — so on a host that already had canary files, arming raised a
+**CANARY TRIGGERED** alert for every one of them: a critical audit-log entry, a
+🚨 notification to every administrator, and a `record_suspicious_event` that
+feeds auto-lockdown.
+
+The default lockdown threshold is five suspicious events in ten minutes. A host
+hand-armed with the four legacy paths produces **four** on a single press — one
+short of locking every non-admin out of the panel for 24 hours, for pressing the
+button the panel had just told them to press. Caught on the live engine
+immediately after the 2.132.0 deploy, which raised exactly one such alert for
+`/var/www/.dockpanel-canary`, the only pre-existing path in the new plant set.
+
+`canary_arm` now deletes the stored baseline for each path the agent reports it
+created, which puts the sweeper back on its first-run branch: it records the new
+access time and returns without alerting. It cannot mask a real intrusion —
+the only baselines cleared are for files the agent created in that same request.
+
+Two arms added to `canary-arm-pin-e2e.sh`: one requires the clear, and one
+requires the baseline key to be spelled identically by the sweeper that WRITES it
+and the handler that DELETES it, since a drift there fails silently in the
+alerting direction. 2604 → 2606 assertions; 3/3 mutations killed.
+
 ## [2.132.0]
 
 ### Fixed — an intrusion tripwire that was switched on by default and had never watched a single file

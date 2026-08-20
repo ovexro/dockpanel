@@ -566,6 +566,34 @@ pub async fn canary_arm(
     let armed = result.get("armed").and_then(|v| v.as_u64()).unwrap_or(0);
     let total = result.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
 
+    // Drop the stored access-time baseline for every path we just (re)wrote.
+    //
+    // Planting is a write, so the file's atime moves. `security_check_canary_files`
+    // compares against `canary_atime_<path>` and treats any increase as an
+    // intrusion — so arming a host that already had canaries raised a CANARY
+    // TRIGGERED alert per existing file: a critical audit entry, a 🚨 notification
+    // to every admin, and a `record_suspicious_event` that feeds auto-lockdown.
+    // Four pre-existing canaries is four events, one short of the default 5-in-10-
+    // minutes lockdown threshold — the panel would have locked non-admins out for
+    // 24 hours because the operator pressed the button it told them to press.
+    //
+    // Deleting the key puts the checker back on its `stored_atime == 0` first-run
+    // branch, which records the new baseline and returns without alerting. It
+    // cannot hide a real intrusion: the only paths cleared are ones the agent
+    // just reported it created in this request.
+    if let Some(created) = result.get("created").and_then(|v| v.as_array()) {
+        for entry in created {
+            let Some(path) = entry.get("path").and_then(|p| p.as_str()) else {
+                continue;
+            };
+            let key = format!("canary_atime_{}", path.replace('/', "_"));
+            let _ = sqlx::query("DELETE FROM settings WHERE key = $1")
+                .bind(&key)
+                .execute(&state.db)
+                .await;
+        }
+    }
+
     activity::log_activity(
         &state.db,
         claims.sub,
