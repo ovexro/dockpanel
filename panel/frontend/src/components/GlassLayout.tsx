@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Navigate, Outlet, NavLink, Link } from "react-router-dom";
-import { useLayoutState } from "../hooks/useLayoutState";
+import { useLayoutState, badgeCount } from "../hooks/useLayoutState";
 import { useServer } from "../context/ServerContext";
 import { Icon } from "../data/icons";
 import CommandPalette from "./CommandPalette";
@@ -190,14 +190,27 @@ export default function GlassLayout() {
                           {item.label}
                         </span>
                       )}
-                      {item.to === "/monitoring" && firingCount > 0 && (
-                        <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center shrink-0">
-                          {firingCount}
-                        </span>
-                      )}
-                      {item.to === "/monitoring" && incidentCount > 0 && (
-                        <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center shrink-0">
-                          {incidentCount}
+                      {/* One wrapper carries the `ml-auto`: two auto margins in one flex
+                          row split the free space between the pills instead of keeping
+                          them together at the end of it. */}
+                      {item.to === "/monitoring" && (firingCount > 0 || incidentCount > 0) && (
+                        <span className="ml-auto flex items-center gap-1">
+                          {firingCount > 0 && (
+                            <span
+                              title={`${firingCount} firing alert${firingCount === 1 ? "" : "s"}`}
+                              className="px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center shrink-0"
+                            >
+                              {badgeCount(firingCount)}
+                            </span>
+                          )}
+                          {incidentCount > 0 && (
+                            <span
+                              title={`${incidentCount} open incident${incidentCount === 1 ? "" : "s"}`}
+                              className="px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center shrink-0"
+                            >
+                              {badgeCount(incidentCount)}
+                            </span>
+                          )}
                         </span>
                       )}
                     </div>
@@ -244,14 +257,27 @@ export default function GlassLayout() {
                               {item.label}
                             </span>
                           )}
-                          {item.to === "/monitoring" && firingCount > 0 && (
-                            <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center shrink-0">
-                              {firingCount}
-                            </span>
-                          )}
-                          {item.to === "/monitoring" && incidentCount > 0 && (
-                            <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center shrink-0">
-                              {incidentCount}
+                          {/* One wrapper carries the `ml-auto`: two auto margins in one flex
+                              row split the free space between the pills instead of keeping
+                              them together at the end of it. */}
+                          {item.to === "/monitoring" && (firingCount > 0 || incidentCount > 0) && (
+                            <span className="ml-auto flex items-center gap-1">
+                              {firingCount > 0 && (
+                                <span
+                                  title={`${firingCount} firing alert${firingCount === 1 ? "" : "s"}`}
+                                  className="px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center shrink-0"
+                                >
+                                  {badgeCount(firingCount)}
+                                </span>
+                              )}
+                              {incidentCount > 0 && (
+                                <span
+                                  title={`${incidentCount} open incident${incidentCount === 1 ? "" : "s"}`}
+                                  className="px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center shrink-0"
+                                >
+                                  {badgeCount(incidentCount)}
+                                </span>
+                              )}
                             </span>
                           )}
                         </div>
@@ -333,13 +359,13 @@ export default function GlassLayout() {
                   )}
                 </div>
                 <div className="flex items-center gap-1">
-                <Link to="/notifications" className="relative p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded shrink-0" title="Notifications" aria-label="Notifications">
+                <Link to="/notifications" className="relative p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded shrink-0" title={notifCount > 0 ? `${notifCount} unread notification${notifCount === 1 ? "" : "s"}` : "Notifications"} aria-label="Notifications">
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
                   </svg>
                   {notifCount > 0 && (
                     <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-danger-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
-                      {notifCount > 9 ? "9+" : notifCount}
+                      {badgeCount(notifCount)}
                     </span>
                   )}
                 </Link>

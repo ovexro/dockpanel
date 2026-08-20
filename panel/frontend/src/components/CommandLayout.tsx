@@ -1,5 +1,5 @@
 import { Navigate, Outlet, NavLink, Link, useNavigate } from "react-router-dom";
-import { useLayoutState } from "../hooks/useLayoutState";
+import { useLayoutState, badgeCount } from "../hooks/useLayoutState";
 import { useServer } from "../context/ServerContext";
 import { useBranding } from "../context/BrandingContext";
 import { Icon } from "../data/icons";
@@ -190,14 +190,30 @@ export default function CommandLayout() {
                     <>
                       <span className={isActive ? "text-rust-400" : "text-dark-400"}><Icon name={item.iconName} className="w-5 h-5" /></span>
                       <span>{item.label}</span>
-                      {item.to === "/monitoring" && state.firingCount > 0 && (
-                        <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center">
-                          {state.firingCount}
-                        </span>
-                      )}
-                      {item.to === "/monitoring" && state.incidentCount > 0 && (
-                        <span className="ml-auto px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center">
-                          {state.incidentCount}
+                      {/* One wrapper carries the `ml-auto`. Both pills used to
+                          carry it themselves, and two auto margins in one flex
+                          row split the free space between them, so whenever both
+                          counts were live the pair drifted apart into the middle
+                          of the row instead of sitting together at its end. The
+                          flat-nav branch below already had this right. */}
+                      {item.to === "/monitoring" && (state.firingCount > 0 || state.incidentCount > 0) && (
+                        <span className="ml-auto flex items-center gap-1">
+                          {state.firingCount > 0 && (
+                            <span
+                              title={`${state.firingCount} firing alert${state.firingCount === 1 ? "" : "s"}`}
+                              className="px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center"
+                            >
+                              {badgeCount(state.firingCount)}
+                            </span>
+                          )}
+                          {state.incidentCount > 0 && (
+                            <span
+                              title={`${state.incidentCount} open incident${state.incidentCount === 1 ? "" : "s"}`}
+                              className="px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center"
+                            >
+                              {badgeCount(state.incidentCount)}
+                            </span>
+                          )}
                         </span>
                       )}
                     </>
@@ -240,13 +256,19 @@ export default function CommandLayout() {
                           {item.to === "/monitoring" && (state.firingCount > 0 || state.incidentCount > 0) ? (
                             <span className="ml-auto flex items-center gap-1">
                               {state.firingCount > 0 && (
-                                <span className="px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center">
-                                  {state.firingCount}
+                                <span
+                                  title={`${state.firingCount} firing alert${state.firingCount === 1 ? "" : "s"}`}
+                                  className="px-1.5 py-0.5 text-xs font-bold bg-danger-500 text-white rounded-full min-w-[20px] text-center"
+                                >
+                                  {badgeCount(state.firingCount)}
                                 </span>
                               )}
                               {state.incidentCount > 0 && (
-                                <span className="px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center">
-                                  {state.incidentCount}
+                                <span
+                                  title={`${state.incidentCount} open incident${state.incidentCount === 1 ? "" : "s"}`}
+                                  className="px-1.5 py-0.5 text-xs font-bold bg-warn-500 text-dark-900 rounded-full min-w-[20px] text-center"
+                                >
+                                  {badgeCount(state.incidentCount)}
                                 </span>
                               )}
                             </span>
@@ -293,13 +315,13 @@ export default function CommandLayout() {
                 )}
               </div>
               <div className="flex items-center gap-1">
-                <Link to="/notifications" className="relative p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded" title="Notifications" aria-label="Notifications">
+                <Link to="/notifications" className="relative p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded" title={state.notifCount > 0 ? `${state.notifCount} unread notification${state.notifCount === 1 ? "" : "s"}` : "Notifications"} aria-label="Notifications">
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
                   </svg>
                   {state.notifCount > 0 && (
                     <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-danger-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
-                      {state.notifCount > 9 ? "9+" : state.notifCount}
+                      {badgeCount(state.notifCount)}
                     </span>
                   )}
                 </Link>
@@ -358,20 +380,28 @@ export default function CommandLayout() {
 
             {/* Right side */}
             <div className="flex items-center gap-3">
-              <Link to="/notifications" className="relative p-2 rounded-lg transition-colors text-dark-400 hover:text-dark-50 hover:bg-dark-800" title="Notifications" aria-label="Notifications">
+              <Link to="/notifications" className="relative p-2 rounded-lg transition-colors text-dark-400 hover:text-dark-50 hover:bg-dark-800" title={state.notifCount > 0 ? `${state.notifCount} unread notification${state.notifCount === 1 ? "" : "s"}` : "Notifications"} aria-label="Notifications">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
                 </svg>
                 {state.notifCount > 0 && (
                   <span className="absolute top-0.5 right-0.5 w-4 h-4 bg-danger-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
-                    {state.notifCount > 9 ? "9+" : state.notifCount}
+                    {badgeCount(state.notifCount)}
                   </span>
                 )}
               </Link>
+              {/* This pill sat next to the notification bell drawing the SAME
+                  bell glyph over a different number, so the header showed two
+                  identical icons meaning unrelated things. A firing alert is not
+                  a notification; it gets the alert glyph and says what it is. */}
               {state.firingCount > 0 && (
-                <Link to="/monitoring" className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold bg-danger-500/15 text-danger-400 rounded-lg hover:bg-danger-500/25 transition-colors">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" /></svg>
-                  {state.firingCount}
+                <Link
+                  to="/monitoring?tab=alerts"
+                  title={`${state.firingCount} firing alert${state.firingCount === 1 ? "" : "s"}`}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold bg-danger-500/15 text-danger-400 rounded-lg hover:bg-danger-500/25 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" /></svg>
+                  {badgeCount(state.firingCount)} firing
                 </Link>
               )}
               <div className="h-6 w-px hidden sm:block bg-dark-700" />

@@ -380,8 +380,23 @@ pub async fn login(
 
             // Check if this IP is new for this user
             if security_hardening::get_setting_bool(&pool, "security_geo_alert_enabled", true).await {
+                // "Have we seen this address before?" has to be asked of a
+                // record that outlives the answer. It used to count
+                // `user_sessions`, which the retention sweep truncates at 24
+                // hours (`auto_healer.rs`, "expired user sessions (>24h)") — so
+                // every address became new again the day after it was last used
+                // and alerted for ever. On this panel that produced 25 identical
+                // "Login from new IP" notifications from 5 distinct addresses,
+                // 14 of them the loopback of our own deploy script. An alert that
+                // repeats on a condition that has not changed is not an alert.
+                //
+                // `security_audit_log` is the right source: it records every
+                // login with its address and is the one table a DELETE trigger
+                // refuses (`trg_immutable_audit_log`), so it cannot be aged out
+                // from under this check. The `<= 1` still holds because the row
+                // for the login in progress was written a few lines above.
                 let known: Option<(i64,)> = sqlx::query_as(
-                    "SELECT COUNT(*) FROM user_sessions WHERE user_id = (SELECT id FROM users WHERE email = $1) AND ip_address = $2"
+                    "SELECT COUNT(*) FROM security_audit_log WHERE event_type = 'login' AND actor_email = $1 AND actor_ip = $2"
                 )
                 .bind(&email_clone)
                 .bind(&ip_clone)
@@ -390,7 +405,7 @@ pub async fn login(
                 .ok()
                 .flatten();
 
-                let is_new_ip = known.map(|(c,)| c <= 1).unwrap_or(true); // <=1 because we just inserted
+                let is_new_ip = known.map(|(c,)| c <= 1).unwrap_or(true); // <=1 because we just logged it
                 if let Some(ref geo) = geo {
                     if is_new_ip || geo.proxy || geo.hosting {
                         security_hardening::alert_suspicious_ip(
@@ -1045,7 +1060,7 @@ pub async fn reset_password(
     ).await;
 
     // Panel notification
-    notifications::notify_panel(&state.db, Some(user.id), "Password reset", "Your password was reset successfully", "warning", "security", None).await;
+    notifications::notify_panel(&state.db, Some(user.id), "Password reset", "Your password was reset successfully", "warning", "security", Some("/account")).await;
 
     Ok(Json(serde_json::json!({ "ok": true, "message": "Password reset successfully" })))
 }

@@ -278,7 +278,7 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
             &format!("Monitor down: {} ({})", monitor.name, monitor.url),
             Some(cause),
         ).await;
-        send_alerts(pool, monitor, &format!("{} is down: {cause}", monitor.name)).await;
+        send_alerts(pool, monitor, &format!("{} is down: {cause}", monitor.name), "critical").await;
 
         // GAP 3: Auto-create managed incident for status page
         let _ = create_auto_incident(pool, monitor, cause).await;
@@ -304,7 +304,7 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
         notify_status_subscribers(&monitor.name, "resolved", &format!("{} is back online", monitor.name));
 
         tracing::info!("Monitor {} ({}) is back UP", monitor.name, monitor.url);
-        send_alerts(pool, monitor, &format!("{} is back up ({}ms)", monitor.name, response_time)).await;
+        send_alerts(pool, monitor, &format!("{} is back up ({}ms)", monitor.name, response_time), "info").await;
     }
 }
 
@@ -406,7 +406,7 @@ async fn check_heartbeat(monitor: &MonitorRow, pool: &PgPool) {
                 &format!("Heartbeat missed: {} ({})", monitor.name, monitor.url),
                 Some("No heartbeat received within expected interval"),
             ).await;
-            send_alerts(pool, monitor, &format!("{} heartbeat missed — no ping received", monitor.name)).await;
+            send_alerts(pool, monitor, &format!("{} heartbeat missed — no ping received", monitor.name), "critical").await;
         }
     }
 }
@@ -489,7 +489,18 @@ async fn check_http(monitor: &MonitorRow, client: &reqwest::Client) -> (Option<i
     }
 }
 
-async fn send_alerts(pool: &PgPool, monitor: &MonitorRow, message: &str) {
+/// Deliver a monitor state change to the owner's external channels AND to the
+/// panel's own notification centre.
+///
+/// The panel half was missing entirely: this module had zero `notify_panel`
+/// calls, so a monitored site going down reached email, Slack, Discord and
+/// PagerDuty — every destination that lives outside the product — and never the
+/// bell inside it. An operator watching the panel while a site fell over saw
+/// nothing change. The external channels here are per-monitor (`alert_email`,
+/// `alert_slack_url`, `alert_discord_url`), so they are not subject to the
+/// missing-`alert_rules` gate that silences the security alerts; this is a
+/// straightforward omission rather than a fail-closed default.
+async fn send_alerts(pool: &PgPool, monitor: &MonitorRow, message: &str, severity: &str) {
     // Build notification channels from monitor's per-monitor settings
     let email = if monitor.alert_email {
         sqlx::query_scalar::<_, String>("SELECT email FROM users WHERE id = $1")
@@ -531,6 +542,20 @@ async fn send_alerts(pool: &PgPool, monitor: &MonitorRow, message: &str) {
 
     crate::services::notifications::send_notification(pool, &channels, &subject, message, &html)
         .await;
+
+    // Addressed to the monitor's owner rather than broadcast to every admin:
+    // `monitors.user_id` is who asked to be told, and it is the same identity
+    // the external channels above are built from.
+    crate::services::notifications::notify_panel(
+        pool,
+        Some(monitor.user_id),
+        &subject,
+        message,
+        severity,
+        "monitor",
+        Some("/monitoring?tab=monitors"),
+    )
+    .await;
 }
 
 /// GAP 3: Auto-create a managed incident when a monitor goes down.

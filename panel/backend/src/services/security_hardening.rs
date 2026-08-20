@@ -358,21 +358,24 @@ pub async fn alert_suspicious_ip(
         }
     }
 
-    // Also create a panel notification for all admins
-    for (admin_id,) in sqlx::query_as::<_, (uuid::Uuid,)>(
-        "SELECT id FROM users WHERE role = 'admin'"
-    ).fetch_all(pool).await.unwrap_or_default() {
-        let _ = sqlx::query(
-            "INSERT INTO panel_notifications (user_id, title, message, severity, category) \
-             VALUES ($1, $2, $3, $4, 'security')"
-        )
-        .bind(admin_id)
-        .bind(&subject)
-        .bind(&message)
-        .bind(if geo.proxy || geo.hosting { "critical" } else { "warning" })
-        .execute(pool)
-        .await;
-    }
+    // The panel notification goes through `notify_panel` like every other one.
+    // It used to be a hand-written INSERT here, and the two things it left out
+    // were the two that matter: the `link` column, so this — the single largest
+    // class of notification on a live panel — was the one class that could never
+    // become clickable; and the `NOTIF_TX` broadcast, so it was also the one
+    // class that never arrived without a page reload. Neither omission was
+    // visible from this file, because a raw INSERT into a table with defaults
+    // succeeds whatever you leave out of the column list.
+    super::notifications::notify_panel(
+        pool,
+        None,
+        &subject,
+        &message,
+        if geo.proxy || geo.hosting { "critical" } else { "warning" },
+        "security",
+        Some("/security?tab=audit"),
+    )
+    .await;
 }
 
 /// Send an emergency lockdown notification to all admin channels.
@@ -401,6 +404,24 @@ pub async fn alert_lockdown(pool: &PgPool, reason: &str, triggered_by: &str) {
             super::notifications::send_notification(pool, &channels, subject, &message, &html).await;
         }
     }
+
+    // …and to the panel itself. The loop above is the whole of the old delivery,
+    // and `get_user_channels` returns `None` for a user with no `alert_rules`
+    // row — which is every user until somebody opens Settings and saves a
+    // destination. So on a stock install the single most disruptive thing this
+    // panel can do to itself, locking every non-admin out for 24 hours,
+    // announced itself to nobody. The event reached `security_audit_log`, which
+    // is read by one tab of one screen that an operator has to think to visit.
+    super::notifications::notify_panel(
+        pool,
+        None,
+        subject,
+        &message,
+        "critical",
+        "security",
+        Some("/security?tab=lockdown"),
+    )
+    .await;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────

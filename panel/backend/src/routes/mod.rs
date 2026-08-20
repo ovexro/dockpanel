@@ -1336,10 +1336,13 @@ pub fn router() -> Router<AppState> {
         .route("/api/drift", get(drift::report))
         // Notification Center
         .route("/api/notifications", get(notifications::list))
+        .route("/api/notifications/summary", get(notifications::summary))
         .route("/api/notifications/unread-count", get(notifications::unread_count))
         .route("/api/notifications/stream", get(notifications::stream))
         .route("/api/notifications/{id}/read", post(notifications::mark_read))
         .route("/api/notifications/read-all", post(notifications::mark_all_read))
+        .route("/api/notifications/read", delete(notifications::delete_read))
+        .route("/api/notifications/{id}", delete(notifications::delete_one))
         // Backup Orchestrator
         .route("/api/backup-orchestrator/all", get(backup_orchestrator::list_all_backups))
         .route("/api/backup-orchestrator/health", get(backup_orchestrator::health))

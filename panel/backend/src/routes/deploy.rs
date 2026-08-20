@@ -567,7 +567,7 @@ async fn execute_deploy(
                         notifications::notify_panel(db, user_id_opt,
                             &format!("Deploy warning: {} returning HTTP {}", domain, status_code),
                             &format!("Deploy succeeded but the site is returning HTTP {}. Check your application logs.", status_code),
-                            "warning", "deploy", None).await;
+                            "warning", "deploy", Some(&format!("/sites/{site_id}"))).await;
                     } else {
                         tracing::info!("Post-deploy health check OK for {domain}: HTTP {status_code}");
                     }
@@ -580,7 +580,7 @@ async fn execute_deploy(
                     notifications::notify_panel(db, user_id_opt,
                         &format!("Deploy warning: {} unreachable", domain),
                         &format!("Deploy succeeded but the site is not responding: {}", e),
-                        "warning", "deploy", None).await;
+                        "warning", "deploy", Some(&format!("/sites/{site_id}"))).await;
                 }
             }
         }
@@ -687,9 +687,9 @@ async fn execute_deploy(
         .bind(site_id).fetch_optional(db).await
         .map_err(|e| internal_error("deploy notification user lookup", e))?;
     if success {
-        notifications::notify_panel(db, user_id, &format!("Deploy complete: {}", domain), "Site deployment completed successfully", "info", "deploy", None).await;
+        notifications::notify_panel(db, user_id, &format!("Deploy complete: {}", domain), "Site deployment completed successfully", "info", "deploy", Some(&format!("/sites/{site_id}"))).await;
     } else {
-        notifications::notify_panel(db, user_id, &format!("Deploy failed: {}", domain), output, "critical", "deploy", None).await;
+        notifications::notify_panel(db, user_id, &format!("Deploy failed: {}", domain), output, "critical", "deploy", Some(&format!("/sites/{site_id}"))).await;
     }
 
     Ok(log)

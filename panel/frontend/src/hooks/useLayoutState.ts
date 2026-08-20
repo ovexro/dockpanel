@@ -9,6 +9,32 @@ const themeOrder = ["terminal", "midnight", "ember", "arctic", "clean", "clean-d
  *  Distinct from `dp-layout-change` on purpose — reusing that name would make
  *  LayoutShell re-read `dp-layout` on every theme click. */
 export const THEME_CHANGE_EVENT = "dp-theme-change";
+/**
+ * Fired by the notifications page when it changes how many are unread.
+ *
+ * The badge is refreshed by a 60s poll and by SSE arrivals, and neither of those
+ * can see a mark-read: the poll is a minute behind and the stream only carries
+ * things arriving, not things being dismissed. So the bell went on showing "9+"
+ * over a feed the operator had just emptied. Same bus as the theme switch above,
+ * for the same reason — two components that must agree and do not share state.
+ */
+export const NOTIF_CHANGE_EVENT = "dp-notif-change";
+
+/**
+ * Render a count for a badge.
+ *
+ * The unread badge used to saturate at `> 9 ? "9+"`, which on this panel meant
+ * a "9+" standing for 29 — while the open-incident badge two rows away showed
+ * an uncapped "9" standing for 9. Two glyphs that read alike and mean different
+ * things, one of them by an order of magnitude. The cap has to exist (the badge
+ * is a 16px circle) but at 9 it was hiding the number almost as soon as the
+ * feature was doing anything, so it moves to 99 — and every caller pairs it with
+ * a `title` giving the exact figure and what it counts, which is the part that
+ * makes a saturated badge honest rather than merely less wrong.
+ */
+export function badgeCount(n: number): string {
+  return n > 99 ? "99+" : String(n);
+}
 
 /** Resolves the stored theme WITHOUT writing anything back. The legacy ids are
  *  migrated on read, so an old value keeps working while a never-set value stays
@@ -129,7 +155,21 @@ export function useLayoutState(): LayoutState {
     };
     fetchCounts();
     alertTimer.current = setInterval(fetchCounts, 60000);
-    return () => { if (alertTimer.current) clearInterval(alertTimer.current); };
+
+    // A mark-read is invisible to both refresh paths — the poll is up to a
+    // minute behind and the stream only carries arrivals — so the notifications
+    // page says when it has changed the unread count.
+    const onNotifChange = () => {
+      api.get<{ count: number }>("/notifications/unread-count")
+        .then((d) => setNotifCount(d.count))
+        .catch(() => {});
+    };
+    window.addEventListener(NOTIF_CHANGE_EVENT, onNotifChange);
+
+    return () => {
+      if (alertTimer.current) clearInterval(alertTimer.current);
+      window.removeEventListener(NOTIF_CHANGE_EVENT, onNotifChange);
+    };
   }, []);
 
   // SSE connection for real-time notification delivery

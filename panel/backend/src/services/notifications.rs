@@ -1033,7 +1033,7 @@ pub async fn try_fire_alert(
     .map_err(|e| format!("Failed to record alert: {e}"))?;
 
     // Also store in panel notification center (bell icon) — notify all admins
-    notify_panel(pool, None, title, message, severity, "alert", None).await;
+    notify_panel(pool, None, title, message, severity, "alert", Some("/monitoring?tab=alerts")).await;
 
     // Build the notification payload once — both the NULL-policy fan-out and the
     // policy-driven fan-out reuse it.
@@ -1113,40 +1113,72 @@ pub async fn notify_panel(
     category: &str,
     link: Option<&str>,
 ) {
-    // Build JSON payload once for SSE broadcast
-    let notif_json = serde_json::json!({
-        "title": title,
-        "message": message,
-        "severity": severity,
-        "category": category,
-        "link": link,
-    })
-    .to_string();
-
     if let Some(uid) = user_id {
-        let _ = sqlx::query(
-            "INSERT INTO panel_notifications (user_id, title, message, severity, category, link) VALUES ($1, $2, $3, $4, $5, $6)"
-        ).bind(uid).bind(title).bind(message).bind(severity).bind(category).bind(link)
-        .execute(db).await;
-
-        // Broadcast to SSE subscribers
-        if let Some(tx) = NOTIF_TX.get() {
-            let _ = tx.send((uid, notif_json));
-        }
+        insert_and_broadcast(db, uid, title, message, severity, category, link).await;
     } else {
         let admins: Vec<(uuid::Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE role = 'admin'")
             .fetch_all(db).await.unwrap_or_default();
         for (admin_id,) in &admins {
-            let _ = sqlx::query(
-                "INSERT INTO panel_notifications (user_id, title, message, severity, category, link) VALUES ($1, $2, $3, $4, $5, $6)"
-            ).bind(admin_id).bind(title).bind(message).bind(severity).bind(category).bind(link)
-            .execute(db).await;
-
-            // Broadcast to SSE subscribers
-            if let Some(tx) = NOTIF_TX.get() {
-                let _ = tx.send((*admin_id, notif_json.clone()));
-            }
+            insert_and_broadcast(db, *admin_id, title, message, severity, category, link).await;
         }
+    }
+}
+
+/// One recipient's copy: write the row, then broadcast what was written.
+///
+/// Two things here used to be wrong in ways nothing could report.
+///
+/// The INSERT was `let _ = …`, so a notification that failed to store — a
+/// constraint, a full disk, a pool timeout — was indistinguishable from one
+/// that stored fine. The one class of message whose entire job is to tell you
+/// something went wrong was the class that failed silently. It still does not
+/// return an error (a caller reporting a deploy result must not fail because
+/// the notification did not store), but it now says so at `error!`.
+///
+/// And the SSE payload was built from the arguments, so it carried no `id`, no
+/// `created_at` and no `read_at` — every field a client needs to render the row
+/// or to mark it read. That is why the only subscriber in the frontend threw the
+/// body away and re-fetched a count instead. The INSERT now RETURNs the row's
+/// identity and the payload carries it, so a live list can prepend what arrives
+/// instead of asking the server what it just sent.
+async fn insert_and_broadcast(
+    db: &sqlx::PgPool,
+    user_id: uuid::Uuid,
+    title: &str,
+    message: &str,
+    severity: &str,
+    category: &str,
+    link: Option<&str>,
+) {
+    let inserted: Result<(uuid::Uuid, chrono::DateTime<chrono::Utc>), _> = sqlx::query_as(
+        "INSERT INTO panel_notifications (user_id, title, message, severity, category, link) \
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at"
+    ).bind(user_id).bind(title).bind(message).bind(severity).bind(category).bind(link)
+    .fetch_one(db).await;
+
+    let (id, created_at) = match inserted {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::error!(
+                "notification not stored for {user_id} ({category}/{severity}): {title} — {e}"
+            );
+            return;
+        }
+    };
+
+    if let Some(tx) = NOTIF_TX.get() {
+        let payload = serde_json::json!({
+            "id": id,
+            "title": title,
+            "message": message,
+            "severity": severity,
+            "category": category,
+            "link": link,
+            "read_at": serde_json::Value::Null,
+            "created_at": created_at,
+        })
+        .to_string();
+        let _ = tx.send((user_id, payload));
     }
 }
 
@@ -1249,5 +1281,5 @@ pub async fn resolve_alert(
     }
 
     // Panel notification center
-    notify_panel(pool, Some(user_id), &format!("Resolved: {}", title), message, "info", "alert", None).await;
+    notify_panel(pool, Some(user_id), &format!("Resolved: {}", title), message, "info", "alert", Some("/monitoring?tab=alerts")).await;
 }

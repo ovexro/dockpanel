@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.132.1 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.133.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -37,6 +37,7 @@
 | **DNS** | Cloudflare + PowerDNS, zone templates, propagation, DNSSEC | `routes/dns.rs` | — | `Dns.tsx` | `dns_zones` |
 | **Mail** | Postfix+Dovecot+OpenDKIM, Rspamd, Roundcube, SMTP relay, TLS | `routes/mail.rs` | `mail.rs`, `smtp.rs` | `Mail.tsx` | `mail_domains`, `mail_accounts`, `mail_aliases` |
 | **Monitoring** | HTTP/TCP/ping uptime checks, SLA, public status page, PagerDuty | `routes/monitors.rs` | — | `Monitoring.tsx` | `monitors`, `monitor_checks`, `incidents` |
+| **Notification Centre** | In-panel feed for every event the panel raises, across 10 categories. Real-time SSE arrival on the bell and on the list, per-notification link to the thing it is about, filter by unread or category, keyset paging, delete and clear-read. 30-day retention. | `routes/notifications.rs`, `services/notifications.rs` | — | `Notifications.tsx`, `useLayoutState.ts` (badges) | `panel_notifications` |
 | **Logs** | Site/system/Docker/service logs, search, stream, stats, truncate | `routes/logs.rs`, `system_logs.rs` | `logs.rs` | `Logs.tsx` | `system_logs`, `activity_logs` |
 | **Terminal** | Browser SSH via WebSocket, tabs, themes, sharing, recording | `routes/terminal.rs` | `terminal.rs` | `Terminal.tsx` | — |
 
@@ -233,8 +234,8 @@ honest:
 | Panel services RAM (agent + API) | ~49 MB | measured | 2026-07-27 |
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
 | App templates | 148 | derived | every commit |
-| HTTP routes | 825 (537 backend + 288 agent) | derived | every commit |
-| Regression-pin assertions | 2606 (79 suites) | derived | every commit |
+| HTTP routes | 828 (540 backend + 288 agent) | derived | every commit |
+| Regression-pin assertions | 2636 (80 suites) | derived | every commit |
 | Frontend pages | 53 | derived | every commit |
 | DB migrations | 113 | derived | every commit |
 | Supervised background services | 15 | derived | every commit |

@@ -4,6 +4,133 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.133.0]
+
+### Fixed — a notification centre where nothing was clickable, and the panel's loudest security events never reached it
+
+**Every notification was a dead end, and the destination was already in the
+database.** `panel_notifications.link` has existed since the notification centre
+shipped in March. The migration creates it, `notify_panel` binds it, the list
+endpoint SELECTs it, and the frontend types it as `link: string | null` — and
+the render never read it. `git log -S'n.link' -- panel/frontend/src` is empty
+across the whole history of the repository: the field was written, transported
+and typed for five months without being read once, while seventeen producers
+were passing a real destination the entire time. The panel knew which site had
+failed to deploy and made you go and find it.
+
+The title of a notification is now a link when the panel knows where the event
+happened, and following it marks the notification read. Every producer that had
+nowhere to point now points somewhere: alerts to the Alerts tab, monitors to
+Monitors, security events to the audit log, sites to the site. The single
+exception is *site deleted*, which is deliberately left unlinked and says so in
+the source — its subject no longer exists, and the catch-all route would land
+the operator on the Dashboard without explaining why.
+
+**The largest class of notification on a live panel did not go through
+`notify_panel` at all.** "Login from new IP" was a hand-written INSERT with its
+own column list, and the two columns it omitted were the two that matter:
+`link`, so that class could never become clickable, and the `NOTIF_TX`
+broadcast, so it was also the only class that never arrived without a page
+reload. On the demo it is 25 of 78 rows. A raw INSERT into a table with defaults
+succeeds whatever you leave out of the column list, so nothing could report this.
+
+**And it re-alerted for ever.** "Is this address new?" was answered by counting
+`user_sessions`, which the retention sweep truncates at 24 hours — so every
+address became new again the day after it was last used. Twenty-five alerts from
+five distinct addresses, fourteen of them the loopback of our own deploy script.
+The question is now asked of `security_audit_log`, which records every login
+with its address and is the one table a DELETE trigger refuses.
+
+**Three security paths delivered only to channels that do not exist by
+default.** `get_user_channels` returns `None` for a user with no `alert_rules`
+row, which is every user until somebody opens Settings and saves a destination.
+Emergency lockdown, the canary tripwire shipped in 2.132.0, and every uptime
+monitor state change delivered *exclusively* through it. So on a stock install
+the panel could lock every non-admin out for 24 hours, or detect an intrusion,
+and tell nobody: the event reached `security_audit_log`, which `Security.tsx`
+notes in its own comment is "the only surface where a `security_audit_log` row
+is ever seen". All three now also reach the notification feed.
+
+### Added — the notification centre is a screen you can work in
+
+- **It updates live.** The bell has been on the SSE stream since the feature
+  shipped; the list never was, so a notification arriving while you read it
+  stayed invisible until you reloaded — on the one screen whose purpose is to
+  show you what just happened. The stream payload now carries the complete row
+  (`id`, `read_at`, `created_at`), so an arrival can be rendered rather than
+  counted.
+- **Filter** by unread, or by any category the feed contains. The filter row is
+  built from the server's own `GROUP BY`, so a new producer's category appears
+  the first time it fires instead of waiting for someone to edit a list.
+- **Paging.** The list was a hard `LIMIT 50` with no offset, no cursor and
+  nothing in the UI able to ask for row 51 — on the demo, 28 of 78 notifications
+  had no route to the screen at all. `GET /api/notifications` now takes `limit`,
+  `before`, `category` and `unread`, and the page pages back through the feed.
+- **Delete** a notification, or **Clear read** to remove every one you have
+  already read. There was previously no way to remove a notification at all: the
+  only DELETE against the table in the entire product is the retention sweep.
+  Clear-read is scoped to `read_at IS NOT NULL`, so it can never discard
+  something unseen.
+- `GET /api/notifications/summary` returns the totals the list cannot carry, so
+  the page header and the bell badge stop deriving the same number two different
+  ways.
+- A failed notification INSERT is now logged instead of discarded. The one class
+  of message whose entire job is to tell you something went wrong was the class
+  that failed in silence.
+
+### Fixed — badges that read alike and meant different things
+
+The unread badge saturated at `> 9 ? "9+"` while the open-incident badge two
+rows away was uncapped, so a "9+" standing for 29 sat on the same screen as a
+"9" standing for 9. The cap moves to 99 and lives in one shared helper rather
+than in five copies across four layout files, and every bell states the exact
+figure on hover. The firing-alert pill in the Command header drew the *same bell
+glyph* as the notification bell over an unrelated number; it now has the alert
+glyph and the word "firing". The two counts on the Monitoring row are labelled
+apart.
+
+Two rendering bugs went with them. Both Monitoring pills carried their own
+`ml-auto`, and two auto margins in one flex row split the free space between
+them, so whenever both counts were live the pair drifted apart instead of
+sitting together at the end of the row. And `Icon` falls back to the dashboard
+glyph for an unknown name, silently — so the **Notifications** nav row wore the
+Dashboard icon in all three layouts, and **Servers** wore it in two of them,
+because those names were never added to the icon sets.
+
+Also: multi-line notification bodies rendered as one run-on line (`whitespace-
+pre-line`), the exact timestamp is available on hover, and the row's actions
+were revealed only by `group-hover` — which means they did not exist for a
+keyboard or on a touch screen.
+
+### Added — `tests/notifications-pin-e2e.sh`, 30 assertions, 15/15 mutations killed
+
+The durable half is a set of checks over the *class*, not over these defects:
+
+- Every column the list endpoint returns must be rendered by the page or waived
+  with a reason — the column list is derived from the endpoint's own SELECT, so
+  the next field plumbed end-to-end and dropped at the render fails here.
+- `notify_panel` must be the only writer of `panel_notifications`, so the next
+  hand-rolled INSERT that omits a column fails without anyone remembering this.
+- Every producer must pass a link, against an allow-list that carries its reason
+  and fails if it goes stale.
+- Every link a producer can emit must resolve against the SPA's own route table,
+  so a notification can never point at a screen that is not there.
+- Every icon name the nav registry declares must exist in every icon set.
+- The guide's cap, page size and category table must match the code.
+
+2606 → 2636 assertions across 79 → 80 suites. HTTP routes 825 → 828.
+
+### Fixed — the site rate-limit refusal now names the setting that changes it
+
+The per-user site-creation limit has been operator-settable since 2.46.0, under
+**Settings > Account > Security Hardening**. The one place a person actually
+meets it — the `429` when they hit it — said only that the limit exists. So
+[#116](https://github.com/ovexro/dockpanel/issues/116) arrived asking us to make
+configurable a number that already has a control, which is the correct
+conclusion to draw from the message we were sending. All three refusals (site
+create, its sibling in the same file, and staging) now name the screen and note
+that `0` removes the limit.
+
 ## [2.132.1]
 
 ### Fixed — arming the canaries raised an intrusion alert for the canaries that were already there

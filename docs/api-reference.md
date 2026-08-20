@@ -1,6 +1,6 @@
 # API Reference
 
-DockPanel exposes 825 REST endpoints (537 backend + 288 agent) across 50+ categories — the figure derived from the two routers in `FEATURES.md` §Verified Metrics, which owns it. The tables below document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
+DockPanel exposes 828 REST endpoints (540 backend + 288 agent) across 50+ categories — the figure derived from the two routers in `FEATURES.md` §Verified Metrics, which owns it. The tables below document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
 
 ## Authentication
 
@@ -815,10 +815,13 @@ leaves the stored value unchanged — there is no way to clear one through this 
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/notifications` | List notifications |
+| GET | `/api/notifications` | List notifications (`limit`, `before`, `category`, `unread`) |
+| GET | `/api/notifications/summary` | Totals and per-category counts |
 | GET | `/api/notifications/unread-count` | Unread badge count |
 | POST | `/api/notifications/{id}/read` | Mark as read |
 | POST | `/api/notifications/read-all` | Mark all read |
+| DELETE | `/api/notifications/{id}` | Delete one notification |
+| DELETE | `/api/notifications/read` | Delete every notification already read |
 | GET | `/api/notifications/stream` | SSE real-time stream |
 
 ---

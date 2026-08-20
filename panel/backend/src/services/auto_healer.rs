@@ -666,7 +666,7 @@ async fn auto_clean_disk(pool: &PgPool, agents: &AgentRegistry) {
             ),
             "info",
             "auto_heal",
-            None,
+            Some("/system"),
         )
         .await;
     }
@@ -1021,7 +1021,7 @@ async fn auto_renew_ssl(pool: &PgPool, agents: &AgentRegistry) {
             SSL_RENEWALS_SUCCESS.fetch_add(1, Ordering::Relaxed);
 
             // Panel notification
-            notifications::notify_panel(pool, None, &format!("SSL renewed: {}", domain), &format!("SSL certificate for {} was automatically renewed", domain), "info", "ssl", None).await;
+            notifications::notify_panel(pool, None, &format!("SSL renewed: {}", domain), &format!("SSL certificate for {} was automatically renewed", domain), "info", "ssl", Some("/monitoring?tab=certificates")).await;
         } else {
             // Fire an alert so the user is notified about the SSL renewal failure.
             //
@@ -1956,6 +1956,25 @@ async fn security_check_canary_files(pool: &PgPool) {
                 }
             }
 
+            // The loop above is the entire audience for an intrusion signal, and
+            // it is empty until somebody configures a destination:
+            // `get_user_channels` returns `None` for a user with no `alert_rules`
+            // row. The tripwire shipped in v2.132.0 could therefore fire on a
+            // stock install and be seen by no one — the trigger reached the
+            // audit log, and `Security.tsx` says in its own comment that that tab
+            // is "the only surface where a security_audit_log row is ever seen".
+            // A tripwire you have to go looking for is not a tripwire.
+            super::notifications::notify_panel(
+                pool,
+                None,
+                &subject,
+                &message,
+                "critical",
+                "security",
+                Some("/security?tab=audit"),
+            )
+            .await;
+
             // Update stored atime
             let _ = sqlx::query(
                 "UPDATE settings SET value = $1 WHERE key = $2"
@@ -2180,7 +2199,7 @@ async fn auto_sleep_idle_containers(pool: &PgPool, agents: &AgentRegistry) {
                         &format!("Container {} auto-slept (idle {}+ min)", container_name, threshold_minutes),
                         "info",
                         "system",
-                        None,
+                        Some("/apps"),
                     ).await;
                 }
                 Err(e) => {

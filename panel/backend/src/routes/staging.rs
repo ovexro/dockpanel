@@ -139,7 +139,9 @@ pub async fn create(
             .await;
             return Err(err(
                 StatusCode::TOO_MANY_REQUESTS,
-                &format!("Site creation rate limit: max {max_sites} sites per hour"),
+                &format!("Site creation rate limit: max {max_sites} sites per hour. \
+                          An administrator can change this in Settings > Account > Security Hardening \
+                          (\"Site Creation Rate Limit\"); set it to 0 to remove the limit."),
             ));
         }
     }

@@ -339,7 +339,9 @@ pub async fn create(
                 Some(&format!("User tried to create site #{} in 1 hour", recent.0 + 1)),
             ).await;
             return Err(err(StatusCode::TOO_MANY_REQUESTS,
-                &format!("Site creation rate limit: max {max_sites} sites per hour")));
+                &format!("Site creation rate limit: max {max_sites} sites per hour. \
+                          An administrator can change this in Settings > Account > Security Hardening \
+                          (\"Site Creation Rate Limit\"); set it to 0 to remove the limit.")));
         }
     }
 
@@ -620,7 +622,7 @@ pub async fn create(
             ).await;
 
             // Panel notification
-            notifications::notify_panel(&state.db, Some(claims.sub), &format!("Site created: {}", body.domain), &format!("New {} site is now active", runtime), "info", "site", None).await;
+            notifications::notify_panel(&state.db, Some(claims.sub), &format!("Site created: {}", body.domain), &format!("New {} site is now active", runtime), "info", "site", Some(&format!("/sites/{}", site.id))).await;
 
             fire_event(&state.db, "site.created", serde_json::json!({
                 "site_id": site.id, "domain": site.domain, "runtime": site.runtime,
@@ -1991,6 +1993,11 @@ pub async fn remove(
     ).await;
 
     // Panel notification
+    // Deliberately unlinked: every other site notification carries
+    // `/sites/{id}`, but this one's subject no longer exists. `main.tsx`'s
+    // catch-all route sends an unresolvable path to the Dashboard without
+    // saying why, so a link here would be a control that silently lies about
+    // where it is taking you. A notification with no link renders as plain text.
     notifications::notify_panel(&state.db, Some(claims.sub), &format!("Site deleted: {}", site.domain), "Site and all associated resources have been removed", "info", "site", None).await;
 
     fire_event(&state.db, "site.deleted", serde_json::json!({
@@ -2621,7 +2628,9 @@ pub async fn clone_site(
         .unwrap_or((0,));
         if recent.0 >= max_sites {
             return Err(err(StatusCode::TOO_MANY_REQUESTS,
-                &format!("Site creation rate limit: max {max_sites} sites per hour")));
+                &format!("Site creation rate limit: max {max_sites} sites per hour. \
+                          An administrator can change this in Settings > Account > Security Hardening \
+                          (\"Site Creation Rate Limit\"); set it to 0 to remove the limit.")));
         }
     }
     let target_domain = &ensure_domain_available(&state, target_domain, &headers, &claims.role).await?;
@@ -2980,7 +2989,7 @@ pub async fn rename_domain(
 
     notifications::notify_panel(&state.db, Some(claims.sub),
         &format!("Domain renamed: {old_domain} → {new_domain}"),
-        "Site domain has been updated", "info", "site", None,
+        "Site domain has been updated", "info", "site", Some(&format!("/sites/{id}")),
     ).await;
 
     Ok(Json(serde_json::json!({
@@ -3045,7 +3054,7 @@ pub async fn toggle_enabled(
 
     notifications::notify_panel(&state.db, Some(claims.sub),
         &format!("Site {action_label}: {}", site.domain),
-        &format!("Site has been {action_label}"), "info", "site", None,
+        &format!("Site has been {action_label}"), "info", "site", Some(&format!("/sites/{id}")),
     ).await;
 
     Ok(Json(serde_json::json!({
@@ -3115,7 +3124,7 @@ pub async fn toggle_fastcgi_cache(
 
     notifications::notify_panel(&state.db, Some(claims.sub),
         &format!("FastCGI cache {action}: {}", site.domain),
-        &format!("FastCGI cache has been {action}"), "info", "site", None,
+        &format!("FastCGI cache has been {action}"), "info", "site", Some(&format!("/sites/{id}")),
     ).await;
 
     Ok(Json(serde_json::json!({
@@ -3259,7 +3268,7 @@ pub async fn toggle_redis_cache(
 
     notifications::notify_panel(&state.db, Some(claims.sub),
         &format!("Redis cache {action}: {}", site.domain),
-        &format!("Redis object cache has been {action} (DB {redis_db})"), "info", "site", None,
+        &format!("Redis object cache has been {action} (DB {redis_db})"), "info", "site", Some(&format!("/sites/{id}")),
     ).await;
 
     Ok(Json(serde_json::json!({
@@ -3371,7 +3380,7 @@ pub async fn toggle_waf(
 
     notifications::notify_panel(&state.db, Some(claims.sub),
         &format!("WAF {action}: {}", site.domain),
-        &format!("Web Application Firewall has been {action}"), "info", "site", None,
+        &format!("Web Application Firewall has been {action}"), "info", "site", Some(&format!("/sites/{id}")),
     ).await;
 
     Ok(Json(serde_json::json!({
