@@ -1745,66 +1745,146 @@ async fn security_ingest_suspicious_events(pool: &PgPool) {
 /// Check canary files for access (Feature 12).
 /// Compares atime (last access) against a stored baseline.
 /// If atime changed, someone accessed the file — trigger alert.
+/// Every path this process watches for canary access, newest set first.
+///
+/// Two generations live here on purpose. The last four are what the agent's
+/// `/security/canary/setup` used to advertise, and a box armed by hand before
+/// v2.132.0 still carries them — dropping them would silently stop watching a
+/// tripwire somebody is relying on. The first three are the new plant set
+/// (`CANARY_PLANT_PATHS`, agent `routes/security.rs`), chosen because the agent
+/// can actually write them and this process can actually read them; `/var/www`
+/// is in both generations and appears once.
+///
+/// `/etc/.dockpanel-canary` is watchable but NOT plantable: `ProtectSystem=strict`
+/// leaves bare `/etc` read-only for the agent, so it is carried for legacy boxes
+/// only. Do not add it to the plant set — measured under the shipped unit, that
+/// write fails EROFS.
+pub const CANARY_WATCH_PATHS: [&str; 7] = [
+    "/etc/dockpanel/.dockpanel-canary",
+    "/var/lib/dockpanel/.dockpanel-canary",
+    "/var/backups/dockpanel/.dockpanel-canary",
+    "/var/www/.dockpanel-canary",
+    "/etc/.dockpanel-canary",
+    "/root/.dockpanel-canary",
+    "/home/.dockpanel-canary",
+];
+
+/// The subset of `CANARY_WATCH_PATHS` the agent will actually plant.
+///
+/// ⚠ Mirrors `CANARY_PLANT_PATHS` in `panel/agent/src/routes/security.rs`. The
+/// two crates cannot share a const, so `canary-arm-pin-e2e.sh` asserts they stay
+/// identical AND that neither ever gains a path outside the agent unit's
+/// `ReadWritePaths=` — which is how the original set came to advertise three
+/// directories the agent could never write.
+///
+/// `/etc/.dockpanel-canary` is watched but not listed here on purpose: bare
+/// `/etc` is read-only to the agent under `ProtectSystem=strict`.
+pub const CANARY_PLANTABLE: [&str; 4] = [
+    "/etc/dockpanel/.dockpanel-canary",
+    "/var/lib/dockpanel/.dockpanel-canary",
+    "/var/backups/dockpanel/.dockpanel-canary",
+    "/var/www/.dockpanel-canary",
+];
+
+/// Paths this process can never observe, whatever is on disk, because our own
+/// unit masks them. `ProtectHome=yes` (`scripts/setup.sh` for the api,
+/// `panel/agent/dockpanel-agent.service` for the agent) replaces `/home` and
+/// `/root` with an empty read-only mount for both daemons.
+///
+/// A masked path does NOT report `PermissionDenied` — the namespace simply has
+/// nothing there, so it reports `NotFound`, indistinguishable from "nobody
+/// planted it". That is why this list exists rather than an `Err` arm.
+///
+/// Widening the sandbox is not the answer and was measured too: `ReadWritePaths=/root`
+/// under `ProtectHome=yes` still yields EROFS, so exposing these would mean weakening
+/// ProtectHome itself — a real loss of hardening bought for a tripwire.
+pub const SANDBOX_MASKED_PREFIXES: [&str; 2] = ["/root/", "/home/"];
+
+/// What this process can currently see at one canary path.
+///
+/// Three outcomes, not two. `Masked` is structurally unobservable here and looks
+/// exactly like `Absent` to `std::fs::metadata`, which is the distinction the
+/// whole feature turned on: a masked path reports `NotFound` because the mount
+/// namespace has nothing there, so an `Err` arm keyed on `PermissionDenied`
+/// could never fire for the sandbox case. `Absent` means nobody planted it and
+/// planting it would work. `Unreadable` means it may exist and we cannot see it
+/// — a blind spot rather than an all-clear.
+#[derive(Debug)]
+pub enum CanaryState {
+    Watching,
+    Absent,
+    Masked,
+    Unreadable(String),
+}
+
+impl CanaryState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CanaryState::Watching => "watching",
+            CanaryState::Absent => "absent",
+            CanaryState::Masked => "masked",
+            CanaryState::Unreadable(_) => "unreadable",
+        }
+    }
+}
+
+/// The ONE place a canary path is classified.
+///
+/// The two-minute checker and the Settings status endpoint both call this. They
+/// used to be one loop and no endpoint, and the reason to keep a single
+/// implementation is specific rather than stylistic: if the screen classified a
+/// path differently from the sweeper, the panel would report a tripwire as armed
+/// while the thing that raises the alarm skipped it — the exact failure this
+/// feature already had, moved one layer up.
+pub fn classify_canary(path: &str) -> (CanaryState, Option<std::fs::Metadata>) {
+    match std::fs::metadata(path) {
+        Ok(m) => (CanaryState::Watching, Some(m)),
+        Err(e) => {
+            if SANDBOX_MASKED_PREFIXES.iter().any(|p| path.starts_with(p)) {
+                (CanaryState::Masked, None)
+            } else if e.kind() == std::io::ErrorKind::NotFound {
+                (CanaryState::Absent, None)
+            } else {
+                (CanaryState::Unreadable(e.to_string()), None)
+            }
+        }
+    }
+}
+
 async fn security_check_canary_files(pool: &PgPool) {
     use std::os::unix::fs::MetadataExt;
 
-    let canary_paths = [
-        "/etc/.dockpanel-canary",
-        "/root/.dockpanel-canary",
-        "/home/.dockpanel-canary",
-        "/var/www/.dockpanel-canary",
-    ];
+    let canary_paths = CANARY_WATCH_PATHS;
 
     // How many canaries this tick could actually be examined. A tripwire with nothing
     // on the wire reports "all clear" forever, which is the one answer an intrusion
     // detector must never give by default — and the Settings toggle renders ON unless
     // the operator has explicitly turned it off, so silence read as protection.
     //
-    // Nothing in the tree plants these files: the writer is the agent's
-    // `/security/canary/setup`, which has no caller anywhere. Two of the four paths
-    // are additionally unreadable to this process on a stock install, because the
-    // unit runs under `ProtectHome=yes`. Both cases used to take the same silent
-    // `continue`, so "never armed" and "armed and quiet" were indistinguishable.
-    // Paths this process can never observe, whatever is on disk, because our own unit
-    // masks them. `ProtectHome=yes` (scripts/setup.sh, and panel/agent/dockpanel-agent.service
-    // for the agent) replaces /home and /root with an empty, read-only mount for both
-    // daemons — measured on this box: a canary file present in the real /root is
-    // invisible to the api and the agent alike, and a write to either prefix fails EROFS.
-    //
-    // This list is why the Err arm below is not enough on its own. A masked path does
-    // NOT report PermissionDenied — the namespace simply has nothing there, so it
-    // reports NotFound, indistinguishable from "nobody planted it". The previous
-    // release added that Err arm specifically for the sandbox case and it could never
-    // fire for the sandbox case. Telling an operator to "create the canary files" for
-    // these two is advice that cannot work: they can create them, and this process
-    // still will not see them.
-    //
-    // Widening the sandbox is not the answer and was measured too: `ReadWritePaths=/root`
-    // under `ProtectHome=yes` still yields EROFS, so exposing these would mean weakening
-    // ProtectHome itself — a real loss of hardening bought for a tripwire.
-    const SANDBOX_MASKED_PREFIXES: [&str; 2] = ["/root/", "/home/"];
-
+    // Until v2.132.0 nothing in the tree planted these files: the writer is the
+    // agent's `/security/canary/setup`, and it had no caller anywhere, so the
+    // shipped default was zero armed paths on every install. It is now reachable
+    // from Settings > Security Hardening, and this function's state is reported
+    // there rather than only here. Two of the seven paths remain unreadable to
+    // this process whatever is on disk, because the unit runs under
+    // `ProtectHome=yes`. Both cases used to take the same silent `continue`, so
+    // "never armed" and "armed and quiet" were indistinguishable.
     let mut examined = 0usize;
     let mut masked: Vec<&str> = Vec::new();
     let mut absent: Vec<&str> = Vec::new();
 
     for path in &canary_paths {
-        let meta = match std::fs::metadata(path) {
-            Ok(m) => m,
-            Err(e) => {
-                // Three outcomes, not two. Masked: structurally unobservable here, and
-                // it looks exactly like absent. Absent: nobody ever planted it, and
-                // planting it would work. Unreadable: it may exist and we cannot see
-                // it — a blind spot rather than an all-clear, worth saying out loud.
-                if SANDBOX_MASKED_PREFIXES.iter().any(|p| path.starts_with(p)) {
-                    masked.push(path);
-                } else if e.kind() == std::io::ErrorKind::NotFound {
-                    absent.push(path);
-                } else {
-                    tracing::warn!(
+        let meta = match classify_canary(path) {
+            (CanaryState::Watching, Some(m)) => m,
+            (state, _) => {
+                match state {
+                    CanaryState::Masked => masked.push(path),
+                    CanaryState::Absent => absent.push(path),
+                    CanaryState::Unreadable(e) => tracing::warn!(
                         "Canary {path} exists or may exist but is unreadable ({e}); \
                          it is NOT being monitored"
-                    );
+                    ),
+                    CanaryState::Watching => unreachable!("Watching always carries metadata"),
                 }
                 continue;
             }
@@ -1892,11 +1972,11 @@ async fn security_check_canary_files(pool: &PgPool) {
         if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
             tracing::warn!(
                 "Canary file monitoring is enabled but NOT ARMED — 0 of {} canary paths are \
-                 being watched, so no alert can ever fire. {} can be armed by creating the \
-                 file ({}); {} cannot be watched by this process at all under ProtectHome= \
-                 and planting them would not help ({}). Nothing in DockPanel plants these \
-                 files: create the armable ones by hand, or turn the setting off so the \
-                 panel stops implying a tripwire exists.",
+                 being watched, so no alert can ever fire. {} are absent and can be planted \
+                 from Settings > Security Hardening > Arm canary files ({}); {} cannot be \
+                 watched by this process at all under ProtectHome= and planting them would \
+                 not help ({}). Arm them, or turn the setting off so the panel stops \
+                 implying a tripwire exists.",
                 canary_paths.len(),
                 absent.len(),
                 if absent.is_empty() { "-".to_string() } else { absent.join(", ") },

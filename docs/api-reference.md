@@ -1,6 +1,6 @@
 # API Reference
 
-DockPanel exposes 823 REST endpoints (535 backend + 288 agent) across 50+ categories — the figure derived from the two routers in `FEATURES.md` §Verified Metrics, which owns it. The tables below document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
+DockPanel exposes 825 REST endpoints (537 backend + 288 agent) across 50+ categories — the figure derived from the two routers in `FEATURES.md` §Verified Metrics, which owns it. The tables below document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
 
 ## Authentication
 
@@ -440,7 +440,7 @@ Add a DNS record.
 
 ---
 
-## Security (21 endpoints)
+## Security (23 endpoints)
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -465,6 +465,8 @@ Add a DNS record.
 | POST | `/api/security/fix` | Apply security fix |
 | POST | `/api/security/panel-jail/setup` | Create Fail2Ban jail for panel |
 | GET | `/api/security/panel-jail/status` | Panel jail status |
+| GET | `/api/security/canary-status` | Canary tripwire state — which paths are watched, absent or masked |
+| POST | `/api/security/canary/arm` | Plant the canary files the agent can write |
 
 ---
 

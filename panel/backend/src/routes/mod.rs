@@ -1072,6 +1072,8 @@ pub fn router() -> Router<AppState> {
         // Panel Fail2Ban Jail
         .route("/api/security/panel-jail/setup", post(security::setup_panel_jail))
         .route("/api/security/panel-jail/status", get(security::panel_jail_status))
+        .route("/api/security/canary-status", get(security::canary_status))
+        .route("/api/security/canary/arm", post(security::canary_arm))
         // Security Compliance Report
         .route("/api/security/report", get(security::compliance_report))
         // Security Hardening (post-incident features)

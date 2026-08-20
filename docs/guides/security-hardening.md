@@ -372,7 +372,26 @@ One user may create at most **Site Creation Rate Limit** sites per hour (default
 
 ### Canary Files
 
-While **Canary File Monitoring** is on, DockPanel checks hidden canary files in sensitive directories (`/etc/`, `/root/`, `/home/`, `/var/www/`) every 2 minutes and alerts if their access times change. Canary monitoring, suspicious-event ingestion and auto-lockdown expiry run independently of the auto-healer's own switch.
+A canary file is a decoy nobody legitimate reads. While **Canary File Monitoring** is on, DockPanel checks each one every 2 minutes and raises a critical alert — audit-log entry, suspicious event, and a notification to every admin — if its access time has moved. Canary monitoring, suspicious-event ingestion and auto-lockdown expiry run independently of the auto-healer's own switch.
+
+**The tripwire has to be armed before it can trip.** Press **Arm canary files** in **Settings** > **Account** > **Security Hardening**; the row beside the switch tells you how many paths are actually being watched. DockPanel plants four:
+
+| Path | Why |
+|------|-----|
+| `/etc/dockpanel/.dockpanel-canary` | where the agent token and panel credentials live |
+| `/var/lib/dockpanel/.dockpanel-canary` | runtime state |
+| `/var/backups/dockpanel/.dockpanel-canary` | panel database dumps |
+| `/var/www/.dockpanel-canary` | web root |
+
+Three older paths — `/etc/.dockpanel-canary`, `/root/.dockpanel-canary` and `/home/.dockpanel-canary` — are still watched if you armed a host by hand before v2.132.0, so upgrading does not stop monitoring a tripwire you were relying on.
+
+**What this does not do, stated plainly:**
+
+- **Before v2.132.0 nothing planted these files at all.** The switch is seeded on, and the endpoint that creates the canaries had no caller anywhere in the panel, so on a stock install the feature watched **zero** files and its silence was indistinguishable from an all-clear. If you are upgrading, arm it — being switched on was never the same as being armed.
+- **`/root/` and `/home/` can never be watched**, whatever is on disk. Both daemons run under `ProtectHome=yes`, which replaces those trees with an empty mount, so the panel does not see a file you place there. Widening the sandbox to reach them would cost more hardening than the tripwire is worth, so DockPanel does not plant them and no longer implies it watches them.
+- **`/etc/.dockpanel-canary` is watched but not planted.** `ProtectSystem=strict` leaves bare `/etc` read-only for the agent, so the panel cannot create it; `/etc/dockpanel/` is used instead.
+- **Repeat reads inside 24 hours may not register.** Linux mounts default to `relatime`, which updates an access time only when it is older than the file's modification time or more than a day stale. The first read after arming is caught — that is the intrusion you care about — but a second read soon after may not raise a separate alert.
+- **It cannot tell an intruder from a backup.** Anything that reads the whole filesystem — a backup agent, an antivirus scan, `updatedb` — moves the access time and trips the alert. Treat a canary alert as a prompt to check the audit log and forensic snapshot, not as proof on its own.
 
 ### Backup Integrity Hashes
 

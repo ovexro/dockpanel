@@ -403,10 +403,26 @@ if [ -z "$CAN" ]; then
 else
   # C1. Absent and unreadable are different facts. They used to share one silent
   # `continue`, which is how a tripwire under ProtectHome=yes reads as all-clear.
-  if [ "$(printf '%s' "$CAN" | grep -c 'ErrorKind::NotFound')" -gt 0 ]; then
-    ok "C1 the canary check distinguishes a canary that was never created from one it cannot read"
+  #
+  # s380 moved the three-way decision out of this function into `classify_canary`,
+  # so the Settings screen and this sweeper cannot disagree about what a path is.
+  # The arm follows the code — but repointing it there is only half the fix
+  # (lesson #555): a helper that draws the distinction perfectly is worth nothing
+  # if the sweeper stopped calling it. C1a checks the distinction where it now
+  # lives; C1b checks that this function still REACHES it.
+  CLASSIFY=$(fn_body "$BE/services/auto_healer.rs" classify_canary)
+  if [ -z "$CLASSIFY" ]; then
+    bad "C1a could not slice classify_canary — the three-way canary decision has no measurable home"
+  elif [ "$(printf '%s' "$CLASSIFY" | grep -c 'ErrorKind::NotFound')" -gt 0 ]; then
+    ok "C1a the canary classifier distinguishes a canary that was never created from one it cannot read"
   else
-    bad "C1 the canary check treats unreadable exactly like absent — a blind spot reported as all-clear"
+    bad "C1a the canary classifier treats unreadable exactly like absent — a blind spot reported as all-clear"
+  fi
+
+  if [ "$(printf '%s' "$CAN" | grep -c 'classify_canary(')" -gt 0 ]; then
+    ok "C1b the two-minute sweeper still routes every path through classify_canary"
+  else
+    bad "C1b the sweeper no longer calls classify_canary — it is classifying paths on its own again, and C1a is measuring dead code"
   fi
 
   # C2. And it must say when nothing at all is being watched. Scoped to the

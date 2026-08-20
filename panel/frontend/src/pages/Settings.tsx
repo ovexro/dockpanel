@@ -224,6 +224,9 @@ export default function Settings() {
   // settings; the secret key is not, so the two halves of billing are configured
   // in different places and only one of them is on this page.
   const [billingEnabled, setBillingEnabled] = useState<boolean | null>(null);
+  const [canary, setCanary] = useState<{ enabled: boolean; watching: number; total: number; armable: number; paths: { path: string; state: string; plantable: boolean; detail: string | null }[] } | null>(null);
+  const [canaryErr, setCanaryErr] = useState<string | null>(null);
+  const [arming, setArming] = useState(false);
 
   const loadSettings = async () => {
     try {
@@ -311,6 +314,24 @@ export default function Settings() {
     }
   };
 
+  // What the canary tripwire is ACTUALLY watching, as opposed to whether its
+  // setting is on. The row below rendered "on" from the setting alone, and the
+  // setting is seeded true, so a panel watching zero files looked identical to a
+  // panel watching all of them.
+  type CanaryPath = { path: string; state: string; plantable: boolean; detail: string | null };
+  type CanaryStatus = { enabled: boolean; watching: number; total: number; armable: number; paths: CanaryPath[] };
+  const loadCanary = async () => {
+    try {
+      setCanary(await api.get<CanaryStatus>("/security/canary-status"));
+      setCanaryErr(null);
+    } catch (e) {
+      // Deliberately NOT a silent catch: a status this screen cannot read is the
+      // one state the row must never paint as protected.
+      setCanary(null);
+      setCanaryErr(e instanceof Error ? e.message : "unavailable");
+    }
+  };
+
   const loadNotifyChannels = async () => {
     try {
       const rules = await api.get<{ id?: string; escalation_policy_id?: string | null; notify_email?: boolean; notify_slack_url?: string; notify_discord_url?: string; notify_pagerduty_key?: string; muted_types?: string; alert_gpu?: boolean; gpu_util_threshold?: number; gpu_util_duration?: number; gpu_temp_threshold?: number; gpu_vram_threshold?: number }[]>("/alert-rules");
@@ -344,6 +365,7 @@ export default function Settings() {
     loadSettings();
     loadHealth();
     loadNotifyChannels();
+    loadCanary();
     api.get<{ count: number }>("/system/updates/count")
       .then((d) => setUpdateCount(d.count))
       .catch(() => {});
@@ -1553,22 +1575,86 @@ export default function Settings() {
               </button>
             </div>
             {/* Canary Files */}
-            <div className="px-5 py-3 flex items-center justify-between">
-              <div>
-                <p className="text-sm text-dark-100">Canary File Monitoring</p>
-                <p className="text-xs text-dark-400">Detect unauthorized filesystem exploration</p>
+            <div className="px-5 py-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-dark-100">Canary File Monitoring</p>
+                  <p className="text-xs text-dark-400">Detect unauthorized filesystem exploration</p>
+                </div>
+                <button onClick={async () => {
+                  const current = settings.security_canary_enabled !== "false";
+                  const newVal = !current;
+                  try {
+                    await api.put("/settings", { security_canary_enabled: newVal ? "true" : "false" });
+                    setSettings(prev => ({ ...prev, security_canary_enabled: newVal ? "true" : "false" }));
+                    setMessage({ text: `Canary monitoring ${newVal ? "enabled" : "disabled"}`, type: "success" });
+                  } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
+                }} className={`relative w-11 h-6 rounded-full transition-colors ${settings.security_canary_enabled !== "false" ? "bg-rust-500" : "bg-dark-600"}`}>
+                  <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.security_canary_enabled !== "false" ? "translate-x-5.5 left-0.5" : "left-0.5"}`} />
+                </button>
               </div>
-              <button onClick={async () => {
-                const current = settings.security_canary_enabled !== "false";
-                const newVal = !current;
-                try {
-                  await api.put("/settings", { security_canary_enabled: newVal ? "true" : "false" });
-                  setSettings(prev => ({ ...prev, security_canary_enabled: newVal ? "true" : "false" }));
-                  setMessage({ text: `Canary monitoring ${newVal ? "enabled" : "disabled"}`, type: "success" });
-                } catch (e) { setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" }); }
-              }} className={`relative w-11 h-6 rounded-full transition-colors ${settings.security_canary_enabled !== "false" ? "bg-rust-500" : "bg-dark-600"}`}>
-                <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${settings.security_canary_enabled !== "false" ? "translate-x-5.5 left-0.5" : "left-0.5"}`} />
-              </button>
+              {/* The switch above reports the SETTING. This reports the TRIPWIRE.
+                  They were the same control until v2.132.0, and because nothing in
+                  the product planted a canary, "on" meant "watching nothing" on
+                  every install — an intrusion detector whose only observable
+                  behaviour was silence, which is what a working one looks like. */}
+              {settings.security_canary_enabled !== "false" && (
+                <div className="mt-2.5">
+                  {canaryErr ? (
+                    <p className="text-xs text-warn-400">Armed state unavailable ({canaryErr}) — this screen cannot confirm anything is being watched.</p>
+                  ) : canary ? (
+                    <>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className={`text-xs ${canary.watching === 0 ? "text-danger-400" : "text-dark-300"}`}>
+                          {canary.watching === 0
+                            ? "NOT ARMED — no canary file is being watched, so no alert can ever fire."
+                            : `Watching ${canary.watching} of ${canary.total} canary paths.`}
+                        </p>
+                        {canary.armable > 0 && (
+                          <button
+                            disabled={arming}
+                            onClick={async () => {
+                              setArming(true);
+                              try {
+                                const r = await api.post<{ armed: number; total: number; refused: { path: string; reason: string }[] }>("/security/canary/arm", {});
+                                await loadCanary();
+                                // Report the refusals too. The agent endpoint used to
+                                // drop them, which is how three of its four paths went
+                                // unplanted without anyone being told.
+                                setMessage(
+                                  r.refused && r.refused.length > 0
+                                    ? { text: `Armed ${r.armed} of ${r.total}. Refused: ${r.refused.map(f => `${f.path} (${f.reason})`).join("; ")}`, type: "error" }
+                                    : { text: `Armed ${r.armed} of ${r.total} canary files`, type: "success" }
+                                );
+                              } catch (e) {
+                                setMessage({ text: e instanceof Error ? e.message : "Failed to arm canary files", type: "error" });
+                              } finally { setArming(false); }
+                            }}
+                            className="shrink-0 px-2 py-1 rounded text-xs font-medium bg-rust-500/20 text-rust-400 hover:bg-rust-500/30 disabled:opacity-50"
+                          >
+                            {arming ? "Arming..." : `Arm ${canary.armable} canary file${canary.armable === 1 ? "" : "s"}`}
+                          </button>
+                        )}
+                      </div>
+                      <ul className="mt-1.5 space-y-0.5">
+                        {canary.paths.map(p => (
+                          <li key={p.path} className="text-xs font-mono flex items-baseline gap-2">
+                            <span className={
+                              p.state === "watching" ? "text-rust-400"
+                                : p.state === "masked" ? "text-dark-400"
+                                : "text-warn-400"
+                            }>{p.state === "watching" ? "watching" : p.state}</span>
+                            <span className="text-dark-300">{p.path}</span>
+                            {p.detail && <span className="text-dark-400 font-sans">— {p.detail}</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <p className="text-xs text-dark-400">Checking what is armed...</p>
+                  )}
+                </div>
+              )}
             </div>
             {/* Lockdown Threshold */}
             <div className="px-5 py-3 flex items-center justify-between">

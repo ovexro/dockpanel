@@ -439,17 +439,53 @@ async fn db_backup() -> Result<Json<serde_json::Value>, ApiErr> {
 // path and requires zero hits, so do not write the literal here even to explain the
 // removal — describing it, as above, is deliberate. See lesson #340.
 
-/// POST /security/canary/setup — Create canary files in sensitive directories (Feature 12).
-async fn canary_setup() -> Result<Json<serde_json::Value>, ApiErr> {
-    let canary_locations = [
-        ("/etc/.dockpanel-canary", "System config directory canary"),
-        ("/root/.dockpanel-canary", "Root home directory canary"),
-        ("/home/.dockpanel-canary", "Home directories canary"),
-        ("/var/www/.dockpanel-canary", "Web root canary"),
-    ];
+/// Where a canary can actually be planted on a DockPanel host.
+///
+/// The four this endpoint used to advertise — `/etc`, `/root`, `/home`,
+/// `/var/www` — were never a set this process could write. The unit runs under
+/// `ProtectSystem=strict` with an explicit `ReadWritePaths=`, so every write
+/// outside that list fails `EROFS`, and `ProtectHome=yes` replaces `/root` and
+/// `/home` with an empty read-only mount on top of that. Measured under the
+/// shipped unit rather than inferred from it: `/etc`, `/root` and `/home` all
+/// refuse a `touch`; only `/var/www` accepts one. So three of the four writes
+/// could never have succeeded — and the endpoint reported success anyway,
+/// because each one was an `if …is_ok()` with no `else` and the response
+/// listed only what worked.
+///
+/// These four are inside `ReadWritePaths` (so the agent can plant them) and
+/// outside `ProtectHome=` (so the API process can still `stat` them on its own
+/// two-minute tick — a file this agent can write but that process cannot see is
+/// not a tripwire, it is a decoration). Three of them are also where this
+/// product keeps its own secrets: the agent token, the panel database dumps and
+/// the runtime state. That is where someone looking for credentials goes first,
+/// which makes them better tripwires than a home directory nobody can watch.
+pub const CANARY_PLANT_PATHS: [(&str, &str); 4] = [
+    (
+        "/etc/dockpanel/.dockpanel-canary",
+        "Panel credential directory canary",
+    ),
+    (
+        "/var/lib/dockpanel/.dockpanel-canary",
+        "Panel state directory canary",
+    ),
+    (
+        "/var/backups/dockpanel/.dockpanel-canary",
+        "Panel database backup canary",
+    ),
+    ("/var/www/.dockpanel-canary", "Web root canary"),
+];
 
+/// POST /security/canary/setup — Create canary files in sensitive directories (Feature 12).
+///
+/// Answers per path. A refusal is reported, never swallowed: "armed 4 of 4" and
+/// "armed 1 of 4 and said nothing about the other three" have to be
+/// distinguishable by the caller, because the second one is the state this
+/// endpoint shipped in.
+async fn canary_setup() -> Result<Json<serde_json::Value>, ApiErr> {
     let mut created = Vec::new();
-    for (path, desc) in &canary_locations {
+    let mut refused = Vec::new();
+
+    for (path, desc) in &CANARY_PLANT_PATHS {
         let content = format!(
             "DOCKPANEL CANARY FILE — DO NOT TOUCH\n\
              Created: {}\n\
@@ -458,17 +494,41 @@ async fn canary_setup() -> Result<Json<serde_json::Value>, ApiErr> {
             chrono::Utc::now().to_rfc3339()
         );
 
-        if std::fs::write(path, &content).is_ok() {
-            // Set permissions: readable by all (so attackers trigger it), but hidden
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o444));
-            created.push(serde_json::json!({ "path": path, "description": desc }));
-            tracing::info!("Canary file created: {path}");
+        // The parent is inside ReadWritePaths but need not exist yet —
+        // /var/backups/dockpanel is created by the database-backup task, which an
+        // operator may never have run.
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        // Re-arming has to work: the previous canary is mode 0444, and replacing
+        // it is how an operator recovers from a triggered or tampered tripwire.
+        let _ = std::fs::remove_file(path);
+
+        match std::fs::write(path, &content) {
+            Ok(()) => {
+                // Readable by all — an intruder must be able to read it, that is
+                // the whole mechanism — but not writable by anyone.
+                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o444));
+                created.push(serde_json::json!({ "path": path, "description": desc }));
+                tracing::info!("Canary file created: {path}");
+            }
+            Err(e) => {
+                tracing::warn!("Canary file {path} could NOT be created: {e}");
+                refused.push(serde_json::json!({
+                    "path": path,
+                    "description": desc,
+                    "reason": e.to_string(),
+                }));
+            }
         }
     }
 
     Ok(Json(serde_json::json!({
-        "canaries": created,
-        "monitoring": "inotify-based monitoring recommended"
+        "created": created,
+        "refused": refused,
+        "armed": created.len(),
+        "total": CANARY_PLANT_PATHS.len(),
     })))
 }
 

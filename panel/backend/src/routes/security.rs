@@ -486,6 +486,101 @@ pub async fn setup_panel_jail(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// GET /api/security/canary-status — what the tripwire is actually watching.
+///
+/// Deliberately does NOT take `ServerScope`, for the same reason
+/// `telemetry::preview` does not: `security_check_canary_files` runs inside this
+/// process and stats THIS host's filesystem, so the only honest answer is about
+/// this host. The frontend sends `X-Server-Id` from a global picker on every
+/// request, so accepting it here would report a fleet member as armed on the
+/// strength of the panel's own files — the same shape of lie this endpoint
+/// exists to end.
+pub async fn canary_status(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use crate::services::auto_healer::{
+        classify_canary, CanaryState, CANARY_PLANTABLE, CANARY_WATCH_PATHS,
+    };
+
+    let enabled =
+        security_hardening::get_setting_bool(&state.db, "security_canary_enabled", true).await;
+
+    let mut paths = Vec::new();
+    let mut watching = 0usize;
+    let mut armable = 0usize;
+
+    for path in CANARY_WATCH_PATHS {
+        let (canary_state, _) = classify_canary(path);
+        if matches!(canary_state, CanaryState::Watching) {
+            watching += 1;
+        }
+        // Only an ABSENT path that the agent can actually write is offerable.
+        // A masked path stays masked however many times it is planted, and
+        // saying otherwise is the advice the previous release gave.
+        let plantable = CANARY_PLANTABLE.contains(&path);
+        if plantable && matches!(canary_state, CanaryState::Absent) {
+            armable += 1;
+        }
+        paths.push(serde_json::json!({
+            "path": path,
+            "state": canary_state.as_str(),
+            "plantable": plantable,
+            "detail": match &canary_state {
+                CanaryState::Unreadable(e) => Some(e.clone()),
+                CanaryState::Masked => Some(
+                    "masked by ProtectHome= in this unit; planting it would not help".to_string(),
+                ),
+                _ => None,
+            },
+        }));
+    }
+
+    Ok(Json(serde_json::json!({
+        "enabled": enabled,
+        "watching": watching,
+        "total": CANARY_WATCH_PATHS.len(),
+        "armable": armable,
+        "paths": paths,
+    })))
+}
+
+/// POST /api/security/canary/arm — plant the canary files the agent can write.
+///
+/// Local-only for the same reason as `canary_status`: planting a canary on a
+/// host nothing watches is not a tripwire. The agent answers per path, and both
+/// halves of its answer are passed through — an operator who gets "armed 3 of 4"
+/// needs to see which one refused and why, because the version of this endpoint
+/// that swallowed refusals is what let the feature ship watching nothing.
+pub async fn canary_arm(
+    State(state): State<AppState>,
+    AdminUser(claims): AdminUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = state
+        .agents
+        .local()
+        .post("/security/canary/setup", None)
+        .await
+        .map_err(|e| agent_error("Arm canary files", e))?;
+
+    let armed = result.get("armed").and_then(|v| v.as_u64()).unwrap_or(0);
+    let total = result.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "security.canary_armed",
+        Some("canary"),
+        None,
+        Some(&format!("Armed {armed} of {total} canary files")),
+        None,
+    )
+    .await;
+
+    Ok(Json(result))
+}
+
 /// GET /api/security/panel-jail/status — Check if panel jail exists.
 pub async fn panel_jail_status(
     State(_state): State<AppState>,

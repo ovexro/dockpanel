@@ -4,6 +4,80 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.132.0]
+
+### Fixed — an intrusion tripwire that was switched on by default and had never watched a single file
+
+**Canary File Monitoring reported all clear because there was nothing on the
+wire.** `security_canary_enabled` is seeded `true`, the sweeper runs every two
+minutes outside the auto-healer's own switch, Settings rendered the toggle ON,
+and `docs/guides/security-hardening.md` stated without qualification that
+DockPanel "checks hidden canary files in sensitive directories (`/etc/`,
+`/root/`, `/home/`, `/var/www/`) every 2 minutes and alerts if their access times
+change".
+
+Nothing planted those files. The writer is the agent's
+`POST /security/canary/setup`, and it had **no caller anywhere** — not in the
+panel, not in the CLI, not in `setup.sh` or `install-agent.sh`. The only
+panel-side mention of it was a comment recording that it has no caller. So on
+every install the tripwire watched **zero** paths, and the one answer an
+intrusion detector must never give by default was the only one it could give.
+Silence is also what a working tripwire looks like, which is why four months of
+it read as protection.
+
+Three of the four advertised paths could never have been written in the first
+place. The agent unit runs `ProtectSystem=strict` with an explicit
+`ReadWritePaths=`, and bare `/etc`, `/root` and `/home` are not in it — measured
+under the shipped unit rather than inferred from it: all three refuse a write and
+only `/var/www` accepts one. `canary_setup` wrapped each write in
+`if …is_ok()` with no `else` and returned only what succeeded, so "armed 4 of 4"
+and "armed 1 of 4, silently" were the same response. `/root` and `/home` cannot
+be **watched** either — both daemons run `ProtectHome=yes`, which replaces those
+trees with an empty mount — so planting them by any means changes nothing, and
+widening the sandbox to reach them would cost more hardening than a tripwire is
+worth.
+
+**What changed.** The canaries now go where the agent can actually write them and
+this process can actually read them, which is also where this product keeps its
+own secrets: `/etc/dockpanel/`, `/var/lib/dockpanel/`, `/var/backups/dockpanel/`
+and `/var/www/` — the agent token, the panel database dumps, the runtime state
+and the web root. Someone looking for credentials goes there first, which makes
+them better tripwires than a home directory nobody can watch. The three legacy
+paths stay in the **watch** set, so a host armed by hand before this release does
+not silently stop being monitored.
+
+`POST /api/security/canary/arm` and `GET /api/security/canary-status` are new,
+both local-only for the same reason `telemetry::preview` is: the sweeper stats
+*this* host, so accepting the frontend's global `X-Server-Id` would report a
+fleet member as armed on the strength of the panel's own files. Settings now
+reports the **tripwire** rather than the setting — per-path `watching` /
+`absent` / `masked`, an explicit `NOT ARMED` state, and an Arm button that names
+what it could not create and why. `canary_setup` answers per path and its
+refusals are passed through to the operator.
+
+The guide now says what the feature does not do, using the convention its own
+neighbouring section already used: that it needed arming, that `/root` and
+`/home` can never be watched, that `relatime` may not register a second read
+within 24 hours, and that a backup or `updatedb` pass trips it too.
+
+### Added — `canary-arm-pin-e2e.sh`, a derived check over the whole class
+
+The durable half is not a check for this endpoint. §1 parses the agent's security
+router for every registered `/security/*` path and asserts each has a panel-side
+caller or an explicit allow-list entry naming why not, with a positive control so
+"nothing is severed" cannot be a broken matcher — the next severed agent endpoint
+fails the same arm. (`/security/db-backup` is allow-listed: `auto_healer.rs` runs
+the panel database dump itself with a direct `pg_dump`, under its own comment
+saying it does not need the agent client.) §2 pins the plant set against the
+**sandbox** rather than against a list, so a path either crate gains that the
+agent cannot write, that `ProtectHome=` masks, or that nothing watches, fails
+without anyone remembering this happened. 18 assertions; 15/15 mutations killed.
+
+The three-way `absent` / `masked` / `unreadable` decision moved into one
+`classify_canary`, so the screen and the sweeper cannot disagree about what a
+path is — and `access-recovery-pin-e2e.sh` now checks both that the classifier
+draws the distinction and that the sweeper still reaches it.
+
 ## [2.131.0]
 
 ### Fixed — a button labelled "Silence Alerts" that silenced five of nineteen alert types
