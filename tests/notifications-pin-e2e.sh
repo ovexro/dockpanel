@@ -377,6 +377,41 @@ else
 fi
 
 echo
+echo "── 4c. a status control leads to the tab that shows its own subject ──"
+
+# The Dashboard's health pill said "System Issues Detected" — raised by firing
+# alerts — and linked to a bare `/monitoring`, which resolves to the MONITORS
+# tab. On an install with no monitors configured that is an empty screen while
+# alerts are firing. The page already knew better: `REC_ACTION_ROUTES.alerts` is
+# `/monitoring?tab=alerts` and three other links on the same screen use it, and
+# `Monitoring.tsx` names that path in its own comment as the contract.
+#
+# So the convention on this page is: name the tab. The arm pins the convention
+# rather than this one link.
+DASH=panel/frontend/src/pages/Dashboard.tsx
+if [ ! -f "$DASH" ]; then
+  bad "N4c $DASH is missing"
+else
+  BARE=$(/usr/bin/grep -cE 'to="/monitoring"' "$DASH" || true)
+  TABBED=$(/usr/bin/grep -cE 'monitoring\?tab=' "$DASH" || true)
+  if [ "$TABBED" -lt 3 ]; then
+    bad "N4c only $TABBED tabbed monitoring links on the dashboard — the pattern is wrong, not the code"
+  elif [ "$BARE" -eq 0 ]; then
+    ok "N4c every dashboard link into monitoring names its tab ($TABBED of them)"
+  else
+    bad "N4c $BARE dashboard link(s) into monitoring drop the tab and land on Monitors"
+  fi
+fi
+
+# And the pill's destination must be derived from the same condition as its
+# label, not fixed — otherwise the two drift apart silently again.
+if /usr/bin/grep -q 'to={overallStatus.to}' "$DASH"; then
+  ok "N4c the health pill's destination follows the state that produced its label"
+else
+  bad "N4c the health pill links to a fixed path again — its label and its target can disagree"
+fi
+
+echo
 echo "── 5. the badge cap is shared and honest ──"
 
 # Five copies of `> 9 ? "9+"` is how the cap came to disagree with the uncapped

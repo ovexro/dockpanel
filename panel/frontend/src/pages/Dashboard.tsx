@@ -603,15 +603,53 @@ export default function Dashboard() {
     return daysLeft > 365 ? null : daysLeft; // Only show if meaningful
   }, [metricsHistory]);
 
-  // Feature #10: Visual health indicator
+  // Feature #10: Visual health indicator.
+  //
+  // The destination follows the REASON the pill is showing, which it did not
+  // used to: every state linked to a bare `/monitoring`, and that resolves to the
+  // Monitors tab. So "System Issues Detected" — which is raised by firing alerts —
+  // took you to a list of uptime monitors, and on an install with no monitors
+  // configured that is an empty screen while alerts are firing. This page already
+  // knew the right answer: `REC_ACTION_ROUTES.alerts` is `/monitoring?tab=alerts`
+  // and three other links on this same screen use it. Monitoring.tsx's own
+  // comment names `/monitoring?tab=alerts from the dashboard` as the contract.
   const overallStatus = useMemo(() => {
     const alertCount = intel?.firing_alerts ?? 0;
     const healthScore = intel?.health_score ?? 100;
-    if (alertCount > 0 || healthScore < 50)
-      return { label: "System Issues Detected", color: "bg-danger-500/10 border-danger-500/20 text-danger-400", dot: "bg-danger-400" };
+    if (alertCount > 0)
+      return {
+        label: "System Issues Detected",
+        to: REC_ACTION_ROUTES.alerts,
+        title: `${alertCount} firing alert${alertCount === 1 ? "" : "s"} — open the Alerts tab`,
+        color: "bg-danger-500/10 border-danger-500/20 text-danger-400",
+        dot: "bg-danger-400",
+      };
+    // No alert is firing, so the score is what is low. That is a property of the
+    // server rather than of a monitor, and the Monitors tab is where the server's
+    // own checks live — the default destination is right for this branch only.
+    if (healthScore < 50)
+      return {
+        label: "System Issues Detected",
+        to: "/monitoring",
+        title: `Health score ${healthScore} — open monitoring`,
+        color: "bg-danger-500/10 border-danger-500/20 text-danger-400",
+        dot: "bg-danger-400",
+      };
     if (healthScore < 80)
-      return { label: "Degraded Performance", color: "bg-warn-500/10 border-warn-500/20 text-warn-400", dot: "bg-warn-500" };
-    return { label: "All Systems Operational", color: "bg-rust-500/10 border-rust-500/20 text-rust-400", dot: "bg-rust-500" };
+      return {
+        label: "Degraded Performance",
+        to: "/monitoring",
+        title: `Health score ${healthScore} — open monitoring`,
+        color: "bg-warn-500/10 border-warn-500/20 text-warn-400",
+        dot: "bg-warn-500",
+      };
+    return {
+      label: "All Systems Operational",
+      to: "/monitoring",
+      title: "View monitoring & system status",
+      color: "bg-rust-500/10 border-rust-500/20 text-rust-400",
+      dot: "bg-rust-500",
+    };
   }, [intel]);
 
   // Feature #6: Also update bandwidth when network changes via polling
@@ -653,7 +691,7 @@ export default function Dashboard() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {intel && (
-            <Link to="/monitoring" title="View monitoring & system status" className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium hover:opacity-80 transition-opacity ${overallStatus.color}`}>
+            <Link to={overallStatus.to} title={overallStatus.title} className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium hover:opacity-80 transition-opacity ${overallStatus.color}`}>
               <span className={`w-1.5 h-1.5 rounded-full ${overallStatus.dot} ${overallStatus.dot === "bg-rust-500" ? "animate-pulse" : ""}`} />
               {overallStatus.label}
             </Link>

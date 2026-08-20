@@ -4,6 +4,34 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.133.1]
+
+### Fixed — "System Issues Detected" did not lead to the issues
+
+The Dashboard's health pill is raised by **firing alerts** (`intel.firing_alerts
+> 0`), and it linked to a bare `/monitoring` — which resolves to the **Monitors**
+tab. So clicking the thing that told you something was wrong took you to a list
+of uptime monitors, and on an install with none configured that is an empty
+screen while alerts are firing. On the demo right now: 2 alerts firing, 0
+monitors.
+
+The page already knew the right destination. `REC_ACTION_ROUTES.alerts` is
+`/monitoring?tab=alerts`, three other links on that same screen use it, and
+`Monitoring.tsx` names `/monitoring?tab=alerts from the dashboard` in its own
+comment as the contract. This one link was the exception.
+
+The destination now follows the state that produced the label: firing alerts open
+the Alerts tab, a low health score with no alerts opens monitoring, and each
+state carries a `title` naming the reason (`2 firing alerts — open the Alerts
+tab`) instead of one fixed tooltip for all four.
+
+`notifications-pin-e2e.sh` §4c pins the convention rather than the link: no
+dashboard link into monitoring may drop its tab, and the pill's destination must
+be derived from the same condition as its label so the two cannot drift apart in
+silence again. 2637 → 2639 assertions; 18/18 mutations killed.
+
+Reported by Ovidiu, who clicked it.
+
 ## [2.133.0]
 
 ### Fixed — a notification centre where nothing was clickable, and the panel's loudest security events never reached it
