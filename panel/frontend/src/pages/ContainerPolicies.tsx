@@ -93,7 +93,9 @@ export default function ContainerPolicies() {
           max_containers: maxContainers,
           max_memory_mb: maxMemory,
           max_cpu_percent: maxCpu,
-          allowed_images: allowedImages || null,
+          // Empty clears the allow-list (back to "any image"); null would
+          // have meant "leave it", which is why it could never be undone.
+          allowed_images: allowedImages,
         });
         setMessage({ text: "Policy updated", type: "success" });
       } else {

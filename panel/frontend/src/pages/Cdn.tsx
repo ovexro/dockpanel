@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../api";
 import { formatDate } from "../utils/format";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 interface CdnZone {
   id: string;
@@ -244,15 +245,15 @@ export default function Cdn() {
         </div>
       )}
 
-      {/* Confirm delete bar */}
+      {/* Confirm delete — portalled via ConfirmDialog (issue #120) so the prompt
+          cannot render off-screen from the trigger that armed it. */}
       {pendingDelete && selectedZone && (
-        <div className="border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
-          <span className="text-xs text-danger-400 font-mono">Remove CDN zone for {selectedZone.domain}?</span>
-          <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeDelete} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Confirm</button>
-            <button onClick={() => setPendingDelete(false)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
-          </div>
-        </div>
+        <ConfirmDialog
+          label={`Remove CDN zone for ${selectedZone.domain}?`}
+          tone="danger"
+          onConfirm={executeDelete}
+          onCancel={() => setPendingDelete(false)}
+        />
       )}
 
       {/* Add Zone Form */}

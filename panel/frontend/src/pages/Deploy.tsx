@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { api } from "../api";
 import { formatDate } from "../utils/format";
 import ProvisionLog from "../components/ProvisionLog";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 interface DeployConfig {
   id: string;
@@ -256,15 +257,14 @@ export default function Deploy() {
         </div>
       )}
 
-      {/* Inline confirmation */}
+      {/* Issue #120: portalled so arming Rollback (far down the Releases list) can't leave the prompt off-screen. */}
       {pendingConfirm && (
-        <div className="border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
-          <span className="text-xs text-danger-400 font-mono">{pendingConfirm.label}</span>
-          <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Confirm</button>
-            <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
-          </div>
-        </div>
+        <ConfirmDialog
+          label={pendingConfirm.label}
+          tone="danger"
+          onConfirm={executeConfirm}
+          onCancel={() => setPendingConfirm(null)}
+        />
       )}
 
       {/* Deploy provisioning log */}

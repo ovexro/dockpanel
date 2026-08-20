@@ -4,6 +4,32 @@ import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
+import ConfirmDialog from "../components/ConfirmDialog";
+
+/**
+ * Hide credentials embedded in a repository URL before it reaches the screen.
+ *
+ * `is_valid_repo_url` on the agent accepts any https:// URL, userinfo included,
+ * and nothing on the panel side strips it — so an operator who pastes
+ * `https://ghp_xxx@github.com/me/app.git` (the workaround people reach for when
+ * a private HTTPS clone fails) stores a live token in `git_deploys.repo_url`.
+ * This page then printed it back in three places, one of which — the deploy
+ * approval queue — is read by an ADMINISTRATOR looking at somebody else's
+ * deployment. Masking here does not un-store the token, and the guide now says
+ * so; it stops the panel being the thing that shows it around.
+ *
+ * Only the userinfo is touched. Everything else about the URL still renders, so
+ * the operator can still tell which repository a row is for.
+ */
+export function maskRepoCredentials(url: string): string {
+  // Anchored on the scheme so a path containing '@' cannot be mistaken for
+  // userinfo, and non-greedy up to the LAST '@' before the first '/' of the
+  // path — which is where a parser puts the authority boundary.
+  return url.replace(
+    /^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^/@]*@)/,
+    (_m, scheme) => `${scheme}•••@`,
+  );
+}
 
 interface GitDeploy {
   id: string;
@@ -253,16 +279,30 @@ export default function GitDeploys() {
       branch: formBranch || "main",
       dockerfile: formDockerfile || "Dockerfile",
       container_port: formPort || 3000,
-      domain: formDomain.trim() || null,
+      // Send each optional field exactly as the operator left it, empty
+      // included. Substituting null for an empty box made clearing impossible:
+      // the handler COALESCEs a null onto the stored value, so the old command
+      // survived, the hook kept running, and the save still answered
+      // "Deploy configuration updated." Same defect and same remedy as the
+      // notification destinations in v2.120.0 — the empty string is the
+      // sentinel at both ends, and every reader guards on non-empty before it
+      // acts (the two that did not, domain and ssl_email, now do).
+      domain: formDomain.trim(),
       env_vars: envVars,
       auto_deploy: formAutoDeploy,
-      ssl_email: formSslEmail.trim() || null,
-      pre_build_cmd: formPreBuild.trim() || null,
-      post_deploy_cmd: formPostDeploy.trim() || null,
+      ssl_email: formSslEmail.trim(),
+      pre_build_cmd: formPreBuild.trim(),
+      post_deploy_cmd: formPostDeploy.trim(),
       build_args: buildArgs,
       build_context: formBuildContext.trim() || ".",
+      // NOT converted, deliberately. The GET masks a stored token, so this box
+      // is blank on every edit of a deploy that has one; an empty string here
+      // would mean "the operator cleared it" on a form that clears itself, and
+      // every ordinary save would delete the token and silently stop posting
+      // commit statuses. `encrypt_stored_token` maps both blank and the mask
+      // back to "leave it alone".
       github_token: formGithubToken.trim() || null,
-      deploy_cron: formCron.trim() || null,
+      deploy_cron: formCron.trim(),
       deploy_protected: formProtected,
       preview_ttl_hours: formPreviewTtl,
     };
@@ -486,26 +526,14 @@ export default function GitDeploys() {
         </div>
       )}
 
-      {/* Inline confirmation bar */}
+      {/* Portals to document.body (issue #120): the triggers that arm this — per-entry Rollback most of all — sit far below this point. */}
       {pendingConfirm && (
-        <div className={`mb-4 px-4 py-3 rounded-lg border flex items-center justify-between ${
-          pendingConfirm.type === "deploy" || pendingConfirm.type === "approve-request"
-            ? "border-warn-500/30 bg-warn-500/5" : "border-danger-500/30 bg-danger-500/5"
-        }`}>
-          <span className={`text-xs font-mono ${
-            pendingConfirm.type === "deploy" || pendingConfirm.type === "approve-request" ? "text-warn-400" : "text-danger-400"
-          }`}>
-            {pendingConfirm.label}
-          </span>
-          <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">
-              Confirm
-            </button>
-            <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
-              Cancel
-            </button>
-          </div>
-        </div>
+        <ConfirmDialog
+          label={pendingConfirm.label}
+          tone={pendingConfirm.type === "deploy" || pendingConfirm.type === "approve-request" ? "warn" : "danger"}
+          onConfirm={executeConfirm}
+          onCancel={() => setPendingConfirm(null)}
+        />
       )}
 
       {/* Deploy provisioning log */}
@@ -556,7 +584,7 @@ export default function GitDeploys() {
                       <span className="text-xs text-dark-300 shrink-0 hidden sm:inline">{new Date(a.created_at).toLocaleString()}</span>
                     </div>
                     <div className="mt-1 text-xs text-dark-200 font-mono truncate">
-                      {a.requested_by_email} &middot; {a.repo_url.replace(/^https?:\/\//, "").replace(/\.git$/, "")} &middot; {a.branch}
+                      {a.requested_by_email} &middot; {maskRepoCredentials(a.repo_url).replace(/^https?:\/\//, "").replace(/\.git$/, "")} &middot; {a.branch}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -663,7 +691,7 @@ export default function GitDeploys() {
                     )}
                   </td>
                   <td className="px-5 py-4 text-sm text-dark-200 font-mono truncate max-w-xs hidden md:table-cell">
-                    {d.repo_url.replace(/^https?:\/\//, "").replace(/\.git$/, "")}
+                    {maskRepoCredentials(d.repo_url).replace(/^https?:\/\//, "").replace(/\.git$/, "")}
                   </td>
                   <td className="px-5 py-4 text-sm text-dark-200 font-mono hidden sm:table-cell">{d.branch}</td>
                   <td className="px-5 py-4 text-sm text-dark-200 font-mono hidden lg:table-cell">{d.domain || "\u2014"}</td>
@@ -717,7 +745,7 @@ export default function GitDeploys() {
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 {[
                   { label: "Name", value: selected.name },
-                  { label: "Repository", value: selected.repo_url },
+                  { label: "Repository", value: maskRepoCredentials(selected.repo_url) },
                   { label: "Branch", value: selected.branch },
                   { label: "Dockerfile", value: selected.dockerfile },
                   { label: "Container Port", value: String(selected.container_port) },

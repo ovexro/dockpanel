@@ -269,6 +269,69 @@ else
 fi
 
 echo
+echo "── §H a confirmation an operator cannot see is a control they cannot reach (#120)"
+
+# Issue #120: clicking "nginx" to switch the reverse proxy back "appears to do
+# nothing at all". It armed a confirmation — the bar rendered at the TOP of
+# Settings while the control sits near the bottom. The reporter concluded the
+# panel was refusing the switch and found the Confirm button by reading the
+# source. A sweep found 23 such detached banners across the SPA, none of them
+# carrying sticky, scrollIntoView, role="alert", aria-live or autoFocus, and
+# there is no toast system, so arming produced no signal of any kind.
+#
+# DERIVED, not enumerated: every page that ARMS a confirmation must render it
+# through the shared portalled dialog. Listing the pages by name is the defect
+# this arm exists to catch, so the population comes from the code.
+#
+# Derived from the state DECLARATION, not from the setter call. Keying on
+# `setPendingX({` looked equivalent and was not: pages whose armed state is a
+# boolean or an id call `setPendingDelete(true)`, so five pages — Cdn among them
+# — fell outside the population entirely and the arm stayed green when one of
+# them dropped the component. A mutation is what surfaced it (#551: your list of
+# doors is itself the defect).
+SPA=panel/frontend/src/pages
+armed=$("$G" -rlE 'const \[(pending|svcPending)[A-Za-z]*, set[A-Za-z]+\] = useState' "$SPA" | sort)
+acount=$(printf '%s\n' "$armed" | "$G" -c . || true)
+
+if [ "$acount" -lt 15 ]; then
+  bad "§H-derivation the armed-confirmation population is non-empty" \
+      "found $acount pages — the state-setter grep stopped matching"
+else
+  ok "§H-derivation the armed-confirmation population is non-empty ($acount pages)"
+fi
+
+# Four pages legitimately do not, and the reason matters in each case:
+#   SiteDetail.tsx           its bar already renders inside the card that arms
+#                            it — the other correct answer, needing no portal.
+#   BackupOrchestrator.tsx   in-place swap: Confirm/Cancel replace the trigger
+#                            button in its own row, so it cannot be off-screen.
+#   Telemetry.tsx            its bar sits directly beneath the toolbar holding
+#                            its only two triggers. (It has a separate defect —
+#                            the state is page-level while the bar is tab-gated,
+#                            so arming on one tab and switching leaves it armed
+#                            and invisible — recorded, not fixed here.)
+#   SecurityHardening.tsx    dead code: zero importers, content consolidated
+#                            into Security's Lockdown tab. Converting it would
+#                            be work on a page nothing can render.
+EXEMPT="BackupOrchestrator.tsx SecurityHardening.tsx SiteDetail.tsx Telemetry.tsx"
+missing=""
+for f in $armed; do
+  base=$(basename "$f")
+  case " $EXEMPT " in *" $base "*) continue ;; esac
+  "$G" -q 'components/ConfirmDialog' "$f" || missing="$missing $base"
+done
+eq "§H every page that arms a confirmation renders it through ConfirmDialog" \
+   "$(printf '%s' "$missing" | sed 's/^ //')" ""
+
+# The component's two safety properties, keyed on the operation rather than on a
+# name a comment could satisfy. Focusing Confirm would leave a destructive action
+# one Enter away; portalling is what makes the offset question disappear.
+n=$("$G" -c 'cancelRef.current?.focus()' panel/frontend/src/components/ConfirmDialog.tsx || true)
+eq "§H focus goes to Cancel, never to the destructive button" "$n" "1"
+n=$("$G" -c 'document.body,' panel/frontend/src/components/ConfirmDialog.tsx || true)
+eq "§H the dialog portals out of the page's scroll container" "$n" "1"
+
+echo
 
 if [ "$FAIL" -eq 0 ]; then
   printf '\033[32mPASS %d  FAIL %d\033[0m\n' "$PASS" "$FAIL"

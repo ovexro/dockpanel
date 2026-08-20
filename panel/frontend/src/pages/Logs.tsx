@@ -4,6 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import { api, ApiError } from "../api";
 import SystemLogsContent from "./SystemLogs";
 import AuditLogContent from "./Activity";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 interface Site {
   id: string;
@@ -761,15 +762,14 @@ function SiteLogsContent() {
         </div>
       )}
 
-      {/* Confirm truncate bar */}
+      {/* Issue #120: the truncate prompt portals to document.body — its trigger is a per-file row far below this point. */}
       {pendingTruncate && (
-        <div className="mx-4 sm:mx-6 mt-4 border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
-          <span className="text-xs text-danger-400 font-mono">Clear log file? This cannot be undone: {pendingTruncate}</span>
-          <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeTruncate} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Confirm</button>
-            <button onClick={() => setPendingTruncate(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
-          </div>
-        </div>
+        <ConfirmDialog
+          label={`Clear log file? This cannot be undone: ${pendingTruncate}`}
+          tone="danger"
+          onConfirm={executeTruncate}
+          onCancel={() => setPendingTruncate(null)}
+        />
       )}
 
       {/* Feature #2: Stats Panel */}

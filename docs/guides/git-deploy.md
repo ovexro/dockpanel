@@ -54,31 +54,95 @@ Now every push to the configured branch triggers a build and deploy.
 
 ## Deploy Keys (Private Repositories)
 
-For private repositories, DockPanel needs SSH access.
+Private repositories are cloned over **SSH**, with a deploy key the panel
+generates for you. Generate it from the panel — a key you place on the server by
+hand is not used, because the only thing that records where a deploy's key lives
+is the **Generate Deploy Key** button.
 
-1. Generate a deploy key on the server:
-   ```bash
-   ssh-keygen -t ed25519 -C "dockpanel-deploy" -f /tmp/deploy-key -N ""
-   ```
-
-2. Add the public key to your repository:
-   - **GitHub**: Repository > Settings > Deploy keys > Add deploy key
-   - **GitLab**: Repository > Settings > Repository > Deploy keys
-   ```bash
-   cat /tmp/deploy-key.pub
-   ```
-
-3. Use the SSH repository URL when creating the Git Deploy:
+1. Create the Git Deploy with the **SSH** repository URL:
    ```
    git@github.com:you/your-private-app.git
    ```
+   The first deploy will fail to clone until step 3 — that is expected.
 
-4. Move the private key where the agent can access it:
-   ```bash
-   sudo mkdir -p /etc/dockpanel/deploy-keys
-   sudo mv /tmp/deploy-key /etc/dockpanel/deploy-keys/your-app
-   sudo chmod 600 /etc/dockpanel/deploy-keys/your-app
-   ```
+2. Open the deploy and click **Generate Deploy Key**. The panel creates the
+   keypair on the server that hosts the deploy, stores the private key where the
+   agent can read it, and shows you the public half.
+
+3. Add that public key to your repository:
+   - **GitHub**: Repository → Settings → Deploy keys → Add deploy key
+   - **GitLab**: Repository → Settings → Repository → Deploy keys
+
+4. Click **Deploy** (or push, if the webhook is set up). The clone now succeeds.
+
+Clicking **Generate Deploy Key** again replaces the key, so the old public key
+stops working and has to be removed from the provider and re-added.
+
+### Cloning a private repository over HTTPS is not supported
+
+An `https://` URL to a private repository fails with
+
+```
+fatal: could not read Username for 'https://github.com': terminal prompts disabled
+```
+
+The agent runs git non-interactively and has no credential store, so there is no
+password prompt to answer. Use the SSH URL and a deploy key as above.
+
+> **Do not put a token in the repository URL.**
+> `https://TOKEN@github.com/you/app.git` clones, which is exactly what makes it
+> tempting — but the URL is stored as you typed it, so the token ends up in the
+> panel's database, in `.git/config` on the server, in git's own error output,
+> and in every pre-update snapshot archive. It also keeps working after you
+> rotate the token in the panel, because the checkout on disk still has the old
+> one. The panel masks credentials wherever it prints a repository URL, which
+> limits who can read it but does not un-store it. A deploy key is scoped to one
+> repository, does not expire, and is what this path is built for.
+
+### What the GitHub Token field is for
+
+The **GitHub Token** on the deploy form is **not** a clone credential. It is used
+only to post commit statuses back to GitHub after a deploy, so a commit shows a
+green tick. Leaving it empty changes nothing about cloning.
+
+## Git Deploys have no persistent storage
+
+**A Git Deploy container has no volumes and no bind mounts, and every deploy
+replaces the container. Anything the application writes to its own filesystem —
+uploaded files, generated documents, a SQLite database, a cache — is gone on the
+next deploy.**
+
+Nothing warns you at the time. The first deploy works, the app writes files, and
+the loss happens on the *second* deploy, which is usually much later and looks
+unrelated. Design around it from the start:
+
+- **A database** — create one under **Databases** and connect to it with an
+  environment variable. This is the right home for anything relational.
+- **Object storage** — S3, MinIO or similar for user uploads and generated
+  files. This also survives moving the app to another server.
+- **Deploy it as a Docker App instead** — Docker Apps *do* bind declared volumes.
+  You give up the webhook, preview-environment and rollback features that make
+  Git Deploy worth using, so this is a trade rather than a workaround.
+
+Two things that look like solutions and are not:
+
+- **`VOLUME` in the Dockerfile** gives each new container a fresh anonymous
+  volume, so nothing carries over.
+- **Mounting something by hand with `docker run`** is undone by the next deploy,
+  which recreates the container without it — it works until it doesn't.
+
+> **Do not add a `docker-compose.yml` to an existing Git Deploy to get volumes.**
+> The presence of a compose file switches the deploy onto a different code path
+> that does not read the Domain field, does not write an nginx vhost, does not
+> issue a certificate, and does not remove the container already running. Your
+> domain would go on serving the previous build indefinitely while the panel
+> reported the deploy as successful. It also skips any compose service that
+> builds from source rather than naming an image — which is exactly what a repo
+> with a Dockerfile will have — and permanently disables blue-green deploys,
+> previews and rollback for that deploy.
+
+Volumes on Git Deploys are tracked as unbuilt work rather than declined; see the
+issue tracker.
 
 ## Nixpacks Auto-Detection
 

@@ -603,8 +603,8 @@ pub async fn update_config(
     let config: StatusPageConfig = sqlx::query_as(
         "UPDATE status_page_config SET \
          title = COALESCE(NULLIF($2, ''), title), \
-         description = COALESCE(NULLIF($3, ''), description), \
-         logo_url = COALESCE($4, logo_url), \
+         description = CASE WHEN $3 = '' THEN NULL ELSE COALESCE($3, description) END, \
+         logo_url = CASE WHEN $4 = '' THEN NULL ELSE COALESCE($4, logo_url) END, \
          accent_color = COALESCE(NULLIF($5, ''), accent_color), \
          show_subscribe = COALESCE($6, show_subscribe), \
          show_incident_history = COALESCE($7, show_incident_history), \
@@ -616,7 +616,12 @@ pub async fn update_config(
     )
     .bind(claims.sub)
     .bind(req.title.as_deref().unwrap_or(""))
-    .bind(req.description.as_deref().unwrap_or(""))
+    // NOT `unwrap_or("")` any more. The empty string is now the instruction to
+    // clear, so collapsing an absent key onto it would blank the description of
+    // any client that simply did not send the field. `title` and `accent_color`
+    // keep the NULLIF guard deliberately: a status page with no title and no
+    // colour is not a state an operator can want, so blank stays "leave it".
+    .bind(req.description.as_deref())
     .bind(&req.logo_url)
     .bind(req.accent_color.as_deref().unwrap_or(""))
     .bind(req.show_subscribe)

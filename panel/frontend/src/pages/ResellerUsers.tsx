@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Navigate } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { useAuth } from "../context/AuthContext";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 interface UserItem {
   id: string;
@@ -115,14 +116,17 @@ export default function ResellerUsers() {
         <div className="px-4 py-3 bg-rust-500/10 border border-rust-500/30 rounded-lg text-sm text-rust-400">{success}</div>
       )}
 
+      {/* Issue #120: this used to be an inline bar rendered here, above the user
+          table. The Delete buttons that arm it sit in the rows below, so on a
+          long list the prompt appeared off-screen. It is a portalled dialog now
+          — see components/ConfirmDialog. */}
       {pendingDelete && (
-        <div className="border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
-          <span className="text-xs text-danger-400 font-mono">Delete user "{pendingDelete.email}"? Their sites and databases will also be deleted.</span>
-          <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeDelete} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Confirm</button>
-            <button onClick={() => setPendingDelete(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
-          </div>
-        </div>
+        <ConfirmDialog
+          label={`Delete user "${pendingDelete.email}"? Their sites and databases will also be deleted.`}
+          tone="danger"
+          onConfirm={executeDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
       )}
 
       {creating && (

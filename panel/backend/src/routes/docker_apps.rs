@@ -2022,7 +2022,7 @@ pub async fn update_policy(
          max_containers = COALESCE($1, max_containers), \
          max_memory_mb = COALESCE($2, max_memory_mb), \
          max_cpu_percent = COALESCE($3, max_cpu_percent), \
-         allowed_images = COALESCE($4, allowed_images), \
+         allowed_images = CASE WHEN $4 = '' THEN NULL ELSE COALESCE($4, allowed_images) END, \
          updated_at = NOW() \
          WHERE user_id = $5"
     )

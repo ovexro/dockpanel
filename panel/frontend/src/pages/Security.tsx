@@ -3,6 +3,7 @@ import { Navigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import PanicReport, { serverList, unreachableNames, type PanicResult, type UnreachableServer } from "../components/PanicReport";
+import ConfirmDialog from "../components/ConfirmDialog";
 import DiagnosticsContent from "./Diagnostics";
 
 interface SecurityOverview {
@@ -715,23 +716,14 @@ export default function Security() {
         </div>
       )}
 
-      {/* Inline confirmation bar */}
+      {/* Issue #120: the prompt portals to document.body — its eleven triggers are scattered across three tabs, so a bar rendered here was off-screen for most of them. */}
       {pendingConfirm && (
-        <div className={`mb-4 px-4 py-3 rounded-lg border flex items-center justify-between ${
-          ["panic", "delete_file", "lockdown"].includes(pendingConfirm.type) ? "border-danger-500/30 bg-danger-500/5" : "border-warn-500/30 bg-warn-500/5"
-        }`}>
-          <span className={`text-xs font-mono ${["panic", "delete_file", "lockdown"].includes(pendingConfirm.type) ? "text-danger-400" : "text-warn-400"}`}>
-            {pendingConfirm.label}
-          </span>
-          <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">
-              Confirm
-            </button>
-            <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
-              Cancel
-            </button>
-          </div>
-        </div>
+        <ConfirmDialog
+          label={pendingConfirm.label}
+          tone={["panic", "delete_file", "lockdown"].includes(pendingConfirm.type) ? "danger" : "warn"}
+          onConfirm={executeConfirm}
+          onCancel={() => setPendingConfirm(null)}
+        />
       )}
 
       {/* Tabs */}

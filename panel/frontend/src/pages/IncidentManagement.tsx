@@ -3,6 +3,7 @@ import { Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { api } from "../api";
 import { formatDate, timeAgo } from "../utils/format";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 interface Incident {
   id: string;
@@ -231,16 +232,14 @@ export default function IncidentManagement() {
         </div>
       )}
 
+      {/* Issue #120: the delete prompt portals to document.body instead of rendering as a detached bar here, whose triggers sit far below. */}
       {pendingDelete && (
-        <div className="mb-4 px-4 py-3 rounded-lg border border-danger-500/30 bg-danger-500/5 flex items-center justify-between">
-          <span className="text-xs font-mono text-danger-400">{pendingDelete.label}</span>
-          <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={() => { const { type, id } = pendingDelete; setPendingDelete(null); type === "incident" ? deleteIncident(id) : deleteComponent(id); }}
-              className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Confirm</button>
-            <button onClick={() => setPendingDelete(null)}
-              className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
-          </div>
-        </div>
+        <ConfirmDialog
+          label={pendingDelete.label}
+          tone="danger"
+          onConfirm={() => { const { type, id } = pendingDelete; setPendingDelete(null); type === "incident" ? deleteIncident(id) : deleteComponent(id); }}
+          onCancel={() => setPendingDelete(null)}
+        />
       )}
 
       <div className="flex gap-1 mb-6 border-b border-dark-600">
@@ -489,7 +488,7 @@ export default function IncidentManagement() {
           </div>
           <div>
             <label className="block text-xs font-medium text-dark-100 mb-1 font-mono">Logo URL</label>
-            <input type="text" value={config.logo_url || ""} onChange={e => setConfig({ ...config, logo_url: e.target.value || null })}
+            <input type="text" value={config.logo_url || ""} onChange={e => setConfig({ ...config, logo_url: e.target.value })}
               className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-sm font-mono text-dark-50 outline-none" />
           </div>
           <p className="text-xs text-dark-300 font-mono">

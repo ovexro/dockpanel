@@ -247,14 +247,14 @@ pub async fn update(
 
     sqlx::query(
         "UPDATE reseller_profiles SET \
-         panel_name = COALESCE($1, panel_name), \
+         panel_name = CASE WHEN $1 = '' THEN NULL ELSE COALESCE($1, panel_name) END, \
          max_users = COALESCE($2, max_users), \
          max_sites = COALESCE($3, max_sites), \
          max_databases = COALESCE($4, max_databases), \
          max_disk_mb = COALESCE($5, max_disk_mb), \
          max_email_accounts = COALESCE($6, max_email_accounts), \
-         logo_url = COALESCE($7, logo_url), \
-         accent_color = COALESCE($8, accent_color), \
+         logo_url = CASE WHEN $7 = '' THEN NULL ELSE COALESCE($7, logo_url) END, \
+         accent_color = CASE WHEN $8 = '' THEN NULL ELSE COALESCE($8, accent_color) END, \
          hide_branding = COALESCE($9, hide_branding), \
          updated_at = NOW() \
          WHERE id = $10",

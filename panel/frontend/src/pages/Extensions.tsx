@@ -2,6 +2,7 @@ import { useAuth } from "../context/AuthContext";
 import { Navigate } from "react-router-dom";
 import { useState, useEffect, useCallback } from "react";
 import { api, ApiError } from "../api";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 interface Extension {
   id: string;
@@ -178,25 +179,22 @@ export default function Extensions() {
       </div>
 
       {error && <div className="px-4 py-3 bg-danger-500/10 border border-danger-500/30 rounded-lg text-sm text-danger-400">{error}</div>}
+      {/* Issue #120: both prompts portal to document.body — their triggers sit on the extension rows far below. */}
       {pendingDelete && (
-        <div className="border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
-          <span className="text-xs text-danger-400 font-mono">Delete extension "{pendingDelete.name}"?</span>
-          <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeDelete} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Confirm</button>
-            <button onClick={() => setPendingDelete(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
-          </div>
-        </div>
+        <ConfirmDialog
+          label={`Delete extension "${pendingDelete.name}"?`}
+          tone="danger"
+          onConfirm={executeDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
       )}
       {pendingRotate && (
-        <div className="border border-warn-500/30 bg-warn-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
-          <span className="text-xs text-warn-400 font-mono">
-            Rotate the webhook secret for "{pendingRotate.name}"? Deliveries signed with the old secret will stop verifying immediately.
-          </span>
-          <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeRotate} className="px-3 py-1.5 bg-warn-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-warn-600 transition-colors">Confirm</button>
-            <button onClick={() => setPendingRotate(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
-          </div>
-        </div>
+        <ConfirmDialog
+          label={`Rotate the webhook secret for "${pendingRotate.name}"? Deliveries signed with the old secret will stop verifying immediately.`}
+          tone="warn"
+          onConfirm={executeRotate}
+          onCancel={() => setPendingRotate(null)}
+        />
       )}
       {rotated && (
         <div className="bg-rust-500/10 border border-rust-500/30 rounded-lg p-5 space-y-3">

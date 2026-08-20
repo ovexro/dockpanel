@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 /**
  * The admin's door onto /api/resellers.
@@ -23,9 +24,13 @@ import { api } from "../api";
  *    carries `email` and no branding/disk fields; `ResellerProfile` carries the
  *    branding and disk fields and no `email`. Editing therefore needs BOTH: the
  *    email comes down from the row that was clicked, the rest from a GET.
- *  - `update` is COALESCE on every column, so `null` means KEEP, never CLEAR.
- *    A blank input cannot unset a quota, and the form says so rather than
- *    pretending otherwise.
+ *  - `update` distinguishes THREE states on the three text columns since #117:
+ *    an absent key keeps the stored value, an empty string clears it to NULL,
+ *    and a value writes it. So the branding fields — panel name, logo, accent
+ *    colour — can now be taken off again, which they could not before.
+ *    The NUMERIC quotas are still COALESCE-only: `null` means KEEP, and a blank
+ *    box cannot restore "unlimited", because the empty-string sentinel has no
+ *    numeric spelling. The form still says so for those, and only those.
  */
 
 interface ResellerListItem {
@@ -80,8 +85,10 @@ interface ServerRow {
   name: string;
 }
 
-// The API cannot clear a column, so an empty box means "leave as it is" on edit
-// and "no limit" on create. One helper so both directions agree.
+// Numeric quotas only. The API cannot clear a NUMBER, so an empty box means
+// "leave as it is" on edit and "no limit" on create. One helper so both
+// directions agree. (The three text columns are clearable since #117 — they
+// send the empty string rather than null and do not go through this helper.)
 const numOrNull = (s: string): number | null => {
   const t = s.trim();
   if (t === "") return null;
@@ -198,14 +205,20 @@ export default function Resellers() {
     try {
       if (editId) {
         await api.put(`/resellers/${editId}`, {
-          panel_name: panelName || null,
+          // On an UPDATE the empty string means "clear it"; null means "leave it
+          // alone" (see the three-state contract on the handler). Sending null
+          // for a blank box made the white-label fields one-way — an operator
+          // could set a panel name, a logo and an accent colour and never take
+          // any of them off again. The create payload below keeps `|| null`,
+          // where a blank box genuinely does mean "never set".
+          panel_name: panelName,
           max_users: numOrNull(maxUsers),
           max_sites: numOrNull(maxSites),
           max_databases: numOrNull(maxDatabases),
           max_disk_mb: numOrNull(maxDiskMb),
           max_email_accounts: numOrNull(maxEmailAccounts),
-          logo_url: logoUrl || null,
-          accent_color: accentColor || null,
+          logo_url: logoUrl,
+          accent_color: accentColor,
           hide_branding: hideBranding,
         });
         setMessage({ text: "Reseller updated", type: "success" });
@@ -337,18 +350,17 @@ export default function Resellers() {
           </div>
         )}
 
+        {/* Issue #120: this was a banner at the top of the page while the Remove
+            button lives on a reseller row further down. The blast radius below is
+            stated ONLY here and nowhere on the row, so an operator on a long list
+            was confirming a demotion whose consequences were off-screen. */}
         {pendingDelete && (
-          <div className="mb-4 border border-danger-500/30 bg-danger-500/5 rounded-lg px-4 py-3 flex items-center justify-between">
-            <span className="text-xs text-danger-400 font-mono">
-              Remove reseller "{pendingDelete.email}"? They become an ordinary user, are signed out
-              everywhere, lose every allocated server, and their {pendingDelete.used_users} sub-account(s)
-              stop being theirs. Nothing is deleted.
-            </span>
-            <div className="flex items-center gap-2 shrink-0 ml-4">
-              <button onClick={executeDelete} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">Confirm</button>
-              <button onClick={() => setPendingDelete(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">Cancel</button>
-            </div>
-          </div>
+          <ConfirmDialog
+            label={`Remove reseller "${pendingDelete.email}"? They become an ordinary user, are signed out everywhere, lose every allocated server, and their ${pendingDelete.used_users} sub-account(s) stop being theirs. Nothing is deleted.`}
+            confirmLabel="Remove"
+            onConfirm={executeDelete}
+            onCancel={() => setPendingDelete(null)}
+          />
         )}
 
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-x-auto">
@@ -575,7 +587,9 @@ export default function Resellers() {
 
               {editId && (
                 <p className="text-xs text-dark-400">
-                  A blank field leaves the stored value unchanged — this form cannot clear one.
+                  Clearing the panel name, logo or accent colour removes it. A blank
+                  quota leaves the stored number unchanged — those cannot be reset to
+                  unlimited here.
                 </p>
               )}
             </div>

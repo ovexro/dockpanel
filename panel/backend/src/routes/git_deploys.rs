@@ -274,7 +274,13 @@ pub(crate) fn build_deploy_body(b: DeployBody<'_>) -> serde_json::Value {
         "env": env_object(b.env_vars),
         "scope": b.scope,
     });
-    if let Some(d) = b.domain {
+    // An emptied text column arrives here as Some("") rather than None, because
+    // clearing a field is expressed as the empty string on the wire (the shape
+    // v2.120.0 settled on for the alert destinations). Blank is absent for both
+    // of these: a blank domain would have the agent write a vhost named
+    // ".conf", and a blank ssl_email would have it open an ACME order with no
+    // account address. Guard the value, not the Option.
+    if let Some(d) = b.domain.filter(|d| !d.trim().is_empty()) {
         body["domain"] = serde_json::json!(d);
     }
     if let Some(mem) = b.memory_mb {
@@ -283,7 +289,7 @@ pub(crate) fn build_deploy_body(b: DeployBody<'_>) -> serde_json::Value {
     if let Some(cpu) = b.cpu_percent {
         body["cpu_percent"] = serde_json::json!(cpu);
     }
-    if let Some(email) = b.ssl_email {
+    if let Some(email) = b.ssl_email.filter(|e| !e.trim().is_empty()) {
         body["ssl_email"] = serde_json::json!(email);
     }
     body
@@ -478,7 +484,11 @@ pub async fn create(
             )
             .await?,
         ),
-        None => body.domain.clone(),
+        // Was `body.domain.clone()`, which round-tripped a blank box back into the
+        // column as ''. Harmless while the form sent null for an empty field;
+        // load-bearing now that it sends the empty string, because `remove` reads
+        // this column with `unwrap_or(&name)` and '' is not None.
+        None => None,
     };
 
     // Encrypted at rest; `set_github_status` decrypts. `encrypt_stored_token`
@@ -506,13 +516,18 @@ pub async fn create(
     .bind(&webhook_secret)
     .bind(body.memory_mb)
     .bind(body.cpu_percent)
-    .bind(&body.ssl_email)
-    .bind(&body.pre_build_cmd)
-    .bind(&body.post_deploy_cmd)
+    // The form posts the same object to create and to update, so these arrive
+    // blank rather than absent whenever the operator left the box alone. NULL is
+    // the stored spelling of "not set" on this table — every reader is written
+    // against it — so the blank is normalised away here rather than stored and
+    // guarded against at each of the readers for ever after.
+    .bind(blank_to_none(body.ssl_email.as_deref()))
+    .bind(blank_to_none(body.pre_build_cmd.as_deref()))
+    .bind(blank_to_none(body.post_deploy_cmd.as_deref()))
     .bind(&build_args)
     .bind(build_context)
     .bind(&github_token_enc)
-    .bind(&body.deploy_cron)
+    .bind(blank_to_none(body.deploy_cron.as_deref()))
     .bind(deploy_protected)
     .bind(preview_ttl)
     .fetch_one(&state.db)
@@ -632,6 +647,33 @@ pub async fn update(
                 .await?,
             )
         }
+        // Emptying the box is now a real instruction rather than a no-op, so it
+        // has to be answered rather than folded away. It is REFUSED, and the
+        // refusal names the reason: nothing in the git path takes a vhost down.
+        // `unexpose_domain` exists for Docker apps
+        // (panel/agent/src/routes/docker_apps.rs), and `git_build.rs` says in
+        // its own comment that wiring it here is separate work — until it is,
+        // accepting the clear would drop the record of a config still proxying
+        // to this container, which is the one state `services::ownership` was
+        // written to keep out of the tree. Only fires when a domain is actually
+        // stored: a deploy that never had one submits "" on every ordinary save.
+        Some(d)
+            if d.trim().is_empty()
+                && cur_domain
+                    .as_deref()
+                    .map(|c| !c.trim().is_empty())
+                    .unwrap_or(false) =>
+        {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                &format!(
+                    "Removing the domain is not supported yet: the nginx vhost for {} would keep \
+                     proxying to this container and the panel has no way to take it down. Enter a \
+                     different domain to move the deploy, or delete the deploy to remove the vhost.",
+                    cur_domain.as_deref().unwrap_or("")
+                ),
+            ));
+        }
         other => other.map(|d| d.to_string()),
     };
 
@@ -662,6 +704,27 @@ pub async fn update(
     let github_token_enc =
         encrypt_stored_token(body.github_token.as_deref(), &state.config.jwt_secret)?;
 
+    // THREE states on the wire, two of which used to be one. A COALESCE self-guard
+    // folds an absent field onto the stored value, which is right for a key the
+    // client omitted and wrong for a box the operator emptied — both arrive as
+    // NULL, so "leave it alone" and "clear it" were indistinguishable and the
+    // second silently became the first while the save answered 200.
+    //
+    //   key absent      -> NULL -> COALESCE keeps the stored value
+    //   key sent as ""  -> ''   -> CASE writes NULL
+    //   key sent with v -> v    -> CASE writes v
+    //
+    // The empty string is a WIRE sentinel and never a stored value. v2.120.0 fixed
+    // the same defect on the alert destinations by letting '' reach the column, and
+    // that is safe THERE because every reader of those columns guards on non-empty.
+    // It is not safe here: `remove` falls back with `domain.as_deref().unwrap_or(&name)`,
+    // so a stored '' would hand the agent an empty site identifier where a NULL
+    // correctly yields the deploy's name. Normalising at the writer keeps every
+    // existing Option-shaped reader out of the blast radius.
+    //
+    // `domain` is deliberately NOT in this list — see the refusal above; and
+    // `github_token` is not either, because the GET masks it and the box is blank
+    // on every ordinary edit.
     let mut deploy: GitDeploy = sqlx::query_as(
         "UPDATE git_deploys SET \
          repo_url = COALESCE($1, repo_url), \
@@ -673,13 +736,13 @@ pub async fn update(
          auto_deploy = COALESCE($7, auto_deploy), \
          memory_mb = $8, \
          cpu_percent = $9, \
-         ssl_email = COALESCE($10, ssl_email), \
-         pre_build_cmd = COALESCE($11, pre_build_cmd), \
-         post_deploy_cmd = COALESCE($12, post_deploy_cmd), \
+         ssl_email = CASE WHEN $10 = '' THEN NULL ELSE COALESCE($10, ssl_email) END, \
+         pre_build_cmd = CASE WHEN $11 = '' THEN NULL ELSE COALESCE($11, pre_build_cmd) END, \
+         post_deploy_cmd = CASE WHEN $12 = '' THEN NULL ELSE COALESCE($12, post_deploy_cmd) END, \
          build_args = COALESCE($13, build_args), \
          build_context = COALESCE($14, build_context), \
          github_token = COALESCE($15, github_token), \
-         deploy_cron = COALESCE($16, deploy_cron), \
+         deploy_cron = CASE WHEN $16 = '' THEN NULL ELSE COALESCE($16, deploy_cron) END, \
          deploy_protected = COALESCE($17, deploy_protected), \
          preview_ttl_hours = COALESCE($18, preview_ttl_hours), \
          updated_at = NOW() \
@@ -2544,6 +2607,34 @@ const GITHUB_TOKEN_MASK: &str = "\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF
 /// read. v2.48.3 shipped this class of bug once (an Edit button that re-encrypted
 /// an already-encrypted destination password); it is closed here by construction
 /// rather than by the caller remembering.
+/// Replace any credentials embedded in a repository URL's authority with a
+/// placeholder, leaving the rest of the URL readable.
+///
+/// The agent's `is_valid_repo_url` accepts `https://TOKEN@github.com/me/app.git`
+/// and nothing strips it, so a token pasted into the Repository field is stored
+/// verbatim. This does not un-store it — it stops the panel handing it to a
+/// reader who is not its owner. Used on the deploy-approval list, whose reader
+/// is an administrator of the machine rather than the deploy's operator.
+pub fn mask_repo_credentials(url: &str) -> String {
+    // Split on the authority, not on the first '@': a path may contain one.
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(authority_end);
+    match authority.rfind('@') {
+        Some(at) => format!("{scheme}://•••{}{}", &authority[at..], tail),
+        None => url.to_string(),
+    }
+}
+
+/// The wire spells "not set" as an empty string; this table spells it NULL.
+/// Translating at the writer is what keeps `Some("")` out of storage, and with it
+/// out of every `if let Some(..)` and `unwrap_or` that reads these columns.
+fn blank_to_none(v: Option<&str>) -> Option<&str> {
+    v.filter(|s| !s.trim().is_empty())
+}
+
 fn encrypt_stored_token(
     submitted: Option<&str>,
     jwt_secret: &str,
@@ -3567,7 +3658,13 @@ pub async fn list_approvals(
                 "requested_by_email": requested_by_email,
                 "status": status,
                 "deploy_name": name,
-                "repo_url": repo_url,
+                // This list is the ONE place a git deploy's URL crosses an
+                // ownership boundary: the reader is an administrator of the
+                // machine, not the operator who configured the deploy. Masking
+                // it in the SPA would not be enough, because the token would
+                // still be in this response body. Nothing edits a repo URL from
+                // the approval queue, so the masked form is all it ever needed.
+                "repo_url": mask_repo_credentials(&repo_url),
                 "branch": branch,
                 "created_at": created_at,
             })
@@ -3770,9 +3867,64 @@ pub async fn reject_deploy(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_deploy_body, env_object, is_valid_cron, preview_cleanup_target,
-        strip_container_prefix, DeployBody,
+        DeployBody, blank_to_none, build_deploy_body, env_object, is_valid_cron,
+        mask_repo_credentials, preview_cleanup_target, strip_container_prefix,
     };
+
+    #[test]
+    fn an_embedded_credential_never_reaches_a_reader_who_does_not_own_it() {
+        // The workaround operators reach for when a private HTTPS clone fails,
+        // and the reason #119 was filed. Both spellings git accepts.
+        assert_eq!(
+            mask_repo_credentials("https://ghp_secret123@github.com/me/app.git"),
+            "https://•••@github.com/me/app.git"
+        );
+        assert_eq!(
+            mask_repo_credentials("https://user:ghp_secret123@github.com/me/app.git"),
+            "https://•••@github.com/me/app.git"
+        );
+        // TWO '@' inside the authority. A username may legitimately contain one
+        // (Azure DevOps and some LDAP-backed hosts issue them), and the
+        // authority boundary is the LAST one — splitting on the first leaves
+        // ":tok@" on screen, i.e. the secret this function exists to hide. This
+        // is the case that distinguishes rfind from find; without it the test
+        // passes under both and certifies a leak.
+        assert_eq!(
+            mask_repo_credentials("https://me@corp.com:ghp_secret123@github.com/me/app.git"),
+            "https://•••@github.com/me/app.git"
+        );
+        // A URL with nothing to hide is returned untouched — the operator still
+        // has to be able to tell which repository a row is for.
+        assert_eq!(
+            mask_repo_credentials("https://github.com/me/app.git"),
+            "https://github.com/me/app.git"
+        );
+        // An '@' in the PATH is not userinfo. Splitting on the first '@' instead
+        // of the authority would have masked the host out of this one.
+        assert_eq!(
+            mask_repo_credentials("https://git.example.com/~user@host/app.git"),
+            "https://git.example.com/~user@host/app.git"
+        );
+        // scp-style SSH remotes carry no scheme and no secret; leave them alone.
+        assert_eq!(
+            mask_repo_credentials("git@github.com:me/app.git"),
+            "git@github.com:me/app.git"
+        );
+    }
+
+    #[test]
+    fn a_blank_field_is_stored_as_null_not_as_an_empty_string() {
+        // NULL is this table's spelling of "not set", and `remove` reads the
+        // domain column with `unwrap_or(&name)` — a stored "" would hand the
+        // agent an empty site identifier where NULL correctly yields the name.
+        assert_eq!(blank_to_none(Some("")), None);
+        assert_eq!(blank_to_none(Some("   ")), None);
+        assert_eq!(blank_to_none(None), None);
+        assert_eq!(
+            blank_to_none(Some("prisma-migrate")),
+            Some("prisma-migrate")
+        );
+    }
 
     #[test]
     fn a_preview_is_torn_down_in_the_space_it_was_created_in() {

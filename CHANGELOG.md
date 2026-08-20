@@ -4,6 +4,106 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.135.0]
+
+### Fixed — an optional field you could not empty, and a confirmation you could not see
+
+Four reports arrived within four minutes from one operator reading the source.
+Two were defects, and both turned out to be classes rather than instances.
+
+**Clearing a field did nothing, and said it had worked.** Emptying any optional
+box on a Git Deploy — a post-deploy hook, a build command, a deploy schedule, an
+SSL address — returned 200 and left the value in place, back on the next reload.
+The form sent `null` for an empty box and the handler wrapped every column in
+`COALESCE($n, column)`, so "the client omitted this key" and "the operator
+emptied this box" arrived identically and the second silently became the first.
+A post-deploy hook that had been removed went on running.
+
+There are now three states on the wire instead of two: an absent key keeps the
+stored value, an empty string clears it, a value writes it. The empty string is
+a wire sentinel and is never stored — NULL stays this table's spelling of "not
+set", because `remove` reads the domain column with `unwrap_or(&name)` and a
+stored `""` would have handed the agent an empty site identifier.
+
+A derivation over the crate found **121 COALESCE-guarded columns across 12
+handlers**. The great majority are correct and untouched — an agent check-in
+that omits a metric must not blank the stored one, and a NOT NULL identifier has
+no "clear" to express. **Ten were genuine defects**, reached from five different
+screens, and all ten are fixed: Git Deploys (four fields), container policies'
+image allow-list, reseller white-label branding (three), and the status page's
+description and logo.
+
+**Removing a domain is now refused rather than ignored**, and the refusal says
+why: nothing in the git path takes an nginx vhost down, so accepting the clear
+would have dropped the panel's record of a config still proxying to the
+container. Renaming or deleting the deploy both still work.
+
+**A confirmation that rendered where you were not looking.** Clicking a control
+near the bottom of a page armed a confirmation bar at the top of it, so the click
+looked like it had done nothing at all. The reporter concluded the panel was
+refusing the switch and found the Confirm button by reading our source.
+
+It was not one misplaced div. A sweep of the SPA found this shape on screen after
+screen, and none of them carried a scroll, a focus, an ARIA role or any
+announcement — there is no toast system either — so arming produced no signal at
+all, only a layout shift that pushed the button down, out from under the cursor
+that had just clicked it. They clustered because writing a correct one was
+awkward, not because a dozen authors were careless.
+
+Confirmations now render through one shared dialog, portalled out of the page's
+scroll container: no offset to get wrong under four operator-selectable layouts,
+no tab to be stranded on, Escape to dismiss, and focus on Cancel rather than one
+Enter away from purging a Cloudflare zone. **17 confirmation prompts across 13
+screens** were converted. The ones that already swap Confirm and Cancel into the
+trigger's own row were correct and were left alone, as was the one that already
+rendered inside the card that arms it.
+
+### Fixed — a credential the panel showed to someone who did not own it
+
+Private repositories clone over SSH with a generated deploy key. The guide
+documented a different procedure — generate a key by hand, drop it in
+`/etc/dockpanel/deploy-keys/` — which cannot work: the only thing that records
+where a deploy's key lives is the **Generate Deploy Key** button, and clicking it
+later deletes a hand-placed key. The one path that works appeared in no document.
+
+Operators pushed into that gap reach for `https://TOKEN@github.com/...`, which
+clones immediately and stores a live token in the deploy's repository URL. The
+panel then printed it back on three screens — one of them the deploy approval
+queue, whose reader is an administrator of the machine rather than the operator
+who configured the deploy. Credentials in a repository URL are now masked
+wherever the panel renders one, and masked server-side on the approval queue, so
+the token is not in the response body either. The guide documents the working
+procedure and says plainly why a token in the URL is the wrong answer.
+
+### Documented — Git Deploys have no persistent storage
+
+A Git Deploy container has no volumes and no bind mounts, and every deploy
+replaces the container, so anything the application writes to its own filesystem
+is gone on the next push. Nothing said so anywhere: not the guide, not the UI,
+not the feature register — while the neighbouring Docker Apps screen advertises
+"Persistent Volumes". The first deploy works and the loss happens on the second,
+which is usually much later and looks unrelated.
+
+The guide now states the limitation and names the alternatives that do survive.
+It also warns against the workaround that looks obvious: adding a
+`docker-compose.yml` switches the deploy onto a path that never reads the Domain
+field, never writes a vhost, never issues a certificate and never removes the
+running container — so the domain would go on serving the previous build
+indefinitely while the panel reported success. Volumes on Git Deploys are tracked
+as unbuilt work, not declined.
+
+### Tests
+
+New `clearable-fields-pin-e2e.sh` (27 assertions) derives both halves of the
+clear-a-field class — the COALESCE-guarded columns from the crate, the
+null-for-empty form fields from the SPA — and pins the intersection with a
+per-pair count, so a regrowth on an update payload fails even in a file whose
+create payload legitimately has one. `reachable-controls-pin-e2e.sh` gains §H
+(33 → 37), deriving every page that arms a confirmation and requiring it to
+render through the shared dialog. Two Rust unit tests cover the URL masking,
+including the two-`@` authority that distinguishes a correct parse from one that
+leaves the secret on screen. 80 → 81 suites, 2641 → 2672 assertions.
+
 ## [2.134.0]
 
 ### Fixed — controls that named a destination and did not go there

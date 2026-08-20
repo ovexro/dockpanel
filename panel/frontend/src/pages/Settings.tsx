@@ -6,6 +6,7 @@ import ProvisionLog from "../components/ProvisionLog";
 import UpdatesContent from "./Updates";
 import { timeAgo } from "../utils/format";
 import { applyTheme, readStoredTheme } from "../hooks/useLayoutState";
+import ConfirmDialog from "../components/ConfirmDialog";
 import {
   TwoFactorCard,
   PasskeysCard,
@@ -554,23 +555,17 @@ export default function Settings() {
         </div>
       )}
 
-      {/* Inline confirmation bar */}
+      {/* Issue #120: this used to be an inline bar rendered here, at the top of
+          the page. The Reverse Proxy control that arms it sits near the bottom,
+          so switching back to nginx looked like it did nothing at all. It is a
+          portalled dialog now — see components/ConfirmDialog. */}
       {pendingConfirm && (
-        <div className={`mb-4 px-4 py-3 rounded-lg border flex items-center justify-between ${
-          pendingConfirm.type === "revoke_sessions" ? "border-danger-500/30 bg-danger-500/5" : "border-warn-500/30 bg-warn-500/5"
-        }`}>
-          <span className={`text-xs font-mono ${pendingConfirm.type === "revoke_sessions" ? "text-danger-400" : "text-warn-400"}`}>
-            {pendingConfirm.label}
-          </span>
-          <div className="flex items-center gap-2 shrink-0 ml-4">
-            <button onClick={executeConfirm} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">
-              Confirm
-            </button>
-            <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
-              Cancel
-            </button>
-          </div>
-        </div>
+        <ConfirmDialog
+          label={pendingConfirm.label}
+          tone={pendingConfirm.type === "revoke_sessions" ? "danger" : "warn"}
+          onConfirm={executeConfirm}
+          onCancel={() => setPendingConfirm(null)}
+        />
       )}
 
       <div className="space-y-6">
@@ -2439,21 +2434,16 @@ function ServiceInstallers({ pdnsApiUrl, setPdnsApiUrl, pdnsApiKey, setPdnsApiKe
           </div>
         )}
 
-        {/* Inline confirmation bar for service uninstall */}
+        {/* Issue #120: this detached uninstall bar rendered here, above the
+            service list, while the Uninstall buttons that arm it sit in the rows
+            below. It is a portalled dialog now — see components/ConfirmDialog. */}
         {svcPendingConfirm && (
-          <div className="px-4 py-3 rounded-lg border flex items-center justify-between border-danger-500/30 bg-danger-500/5">
-            <span className="text-xs font-mono text-danger-400">
-              Uninstall {svcPendingConfirm.label}?
-            </span>
-            <div className="flex items-center gap-2 shrink-0 ml-4">
-              <button onClick={executeUninstall} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">
-                Confirm
-              </button>
-              <button onClick={() => setSvcPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
-                Cancel
-              </button>
-            </div>
-          </div>
+          <ConfirmDialog
+            label={`Uninstall ${svcPendingConfirm.label}?`}
+            tone="danger"
+            onConfirm={executeUninstall}
+            onCancel={() => setSvcPendingConfirm(null)}
+          />
         )}
 
         <button
