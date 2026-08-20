@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api, ApiError } from "../api";
 import SystemLogsContent from "./SystemLogs";
@@ -944,7 +944,20 @@ type LogTab = "site" | "system" | "audit";
 
 export default function Logs() {
   const { user } = useAuth();
-  const [tab, setTab] = useState<LogTab>("site");
+  // Deep-linkable tab (see Monitoring.tsx). Two legacy URLs redirect here —
+  // `/activity` and `/system-logs` — and both landed on Site Logs, which is a
+  // file tailer, not the audit trail or the system events they are named for.
+  // The Dashboard's "Recent Activity → View all" had the same problem: it lists
+  // `activity_logs` rows and sent you to a tab that reads nginx files.
+  const LOG_TABS: readonly string[] = ["site", "system", "audit"];
+  const [searchParams] = useSearchParams();
+  const resolveLogTab = (raw: string | null): LogTab =>
+    raw && LOG_TABS.includes(raw) ? (raw as LogTab) : "site";
+  const [tab, setTab] = useState<LogTab>(() => resolveLogTab(searchParams.get("tab")));
+  useEffect(() => {
+    setTab(resolveLogTab(searchParams.get("tab")));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   if (!user) return <Navigate to="/login" replace />;
   if (user.role !== "admin") return <Navigate to="/" replace />;

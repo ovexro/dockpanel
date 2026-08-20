@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
@@ -477,7 +478,22 @@ export default function Settings() {
     }
   };
 
-  const [tab, setTab] = useState("general");
+  // Deep-linkable tab, the same shape Monitoring.tsx and Security.tsx already
+  // use. Without it this page always opened on "general", so every control
+  // anywhere in the panel that said "configure X in Settings" landed the
+  // operator one tab short of X and left them to find it — and there was no way
+  // to write a correct link even if you wanted to, because nothing here read the
+  // URL. "Configure alert channels →" on the notifications page was the instance
+  // that surfaced it; there are several more.
+  const SETTINGS_TABS: readonly string[] = ["general", "email", "account", "channels", "services"];
+  const [searchParams] = useSearchParams();
+  const resolveSettingsTab = (raw: string | null): string =>
+    raw && SETTINGS_TABS.includes(raw) ? raw : "general";
+  const [tab, setTab] = useState(() => resolveSettingsTab(searchParams.get("tab")));
+  useEffect(() => {
+    setTab(resolveSettingsTab(searchParams.get("tab")));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   if (loading) {
     return (

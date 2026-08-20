@@ -412,6 +412,113 @@ else
 fi
 
 echo
+echo "── 4d. a ?tab= link must point at a page that reads the parameter ──"
+
+# The failure this prevents is a link that LOOKS fixed. Writing
+# `/settings?tab=channels` against a page that never calls `useSearchParams` is a
+# no-op: the operator lands on the default tab exactly as before, and the URL now
+# claims otherwise. Both sides derived — the link targets from the tree, the
+# param-reading pages from their own source.
+TABLINKS=$(python3 - panel/frontend/src <<'PY'
+import os, re, sys
+root = sys.argv[1]
+targets, sources = {}, {}
+for dirpath, _, files in os.walk(root):
+    for fn in files:
+        if not fn.endswith((".tsx", ".ts")):
+            continue
+        path = os.path.join(dirpath, fn)
+        for m in re.finditer(r'["\'`](/([a-z0-9-]+))\?tab=([a-z]+)', open(path).read()):
+            targets.setdefault(m.group(1), set()).add(os.path.relpath(path, root))
+if not targets:
+    print("NO-TABLINKS"); raise SystemExit
+# Map a route path to the page component that main.tsx renders for it.
+main = open(os.path.join(root, "main.tsx")).read()
+pages = {}
+for m in re.finditer(r'path="(/[a-z0-9-]+)" element=\{<([A-Za-z]+)', main):
+    pages[m.group(1)] = m.group(2)
+print(f"TARGETS={len(targets)}")
+for t, users in sorted(targets.items()):
+    comp = pages.get(t)
+    if not comp:
+        print("NOPAGE", t); continue
+    f = os.path.join(root, "pages", comp + ".tsx")
+    if not os.path.exists(f):
+        print("NOFILE", t, comp); continue
+    page = open(f).read()
+    # Either router API counts: `useSearchParams()`, or `URLSearchParams` over
+    # `location.search`. Naming only the first would fail a page that is correct.
+    if not ("useSearchParams(" in page or "URLSearchParams(" in page):
+        print("IGNORES", f"{t} -> {comp}.tsx (linked from {','.join(sorted(users))})")
+PY
+)
+if echo "$TABLINKS" | /usr/bin/grep -q "NO-TABLINKS"; then
+  bad "N4d found no ?tab= links at all — the pattern is wrong, not the code"
+else
+  NT=$(echo "$TABLINKS" | sed -n 's/^TARGETS=\([0-9]*\)/\1/p')
+  NIG=$(echo "$TABLINKS" | /usr/bin/grep -cE "^(IGNORES|NOPAGE|NOFILE)" || true)
+  if [ "${NT:-0}" -lt 3 ]; then
+    bad "N4d only ${NT:-0} deep-link targets — the parse is wrong, not the code"
+  elif [ "$NIG" -eq 0 ]; then
+    ok "N4d all $NT ?tab= targets are pages that read the parameter"
+  else
+    bad "N4d $NIG ?tab= target(s) ignore the parameter: $(echo "$TABLINKS" | /usr/bin/grep -E '^(IGNORES|NOPAGE|NOFILE)' | tr '\n' ' ')"
+  fi
+fi
+
+echo
+echo "── 4e. an in-app route is reached with Link, not with a full page reload ──"
+
+# `<a href="/sites">` inside the SPA discards the router, refetches the bundle and
+# throws away whatever the operator was looking at. Migration's two result CTAs
+# did exactly that to the migration report the operator had just produced.
+# Allowed: /api/* (real backend navigations, e.g. the OAuth handoffs) and any
+# anchor opening a new tab, which is a deliberate departure from the SPA.
+ANCHORS=$(python3 - panel/frontend/src <<'PY'
+import os, re, sys
+root = sys.argv[1]
+routes = set(re.findall(r'path="(/[^"]*)"', open(os.path.join(root, "main.tsx")).read()))
+if len(routes) < 20:
+    print("ROUTES-PARSE-FAILED"); raise SystemExit
+bad, seen = [], 0
+for dirpath, _, files in os.walk(root):
+    for fn in files:
+        if not fn.endswith(".tsx"):
+            continue
+        path = os.path.join(dirpath, fn)
+        src = open(path).read()
+        for m in re.finditer(r"<a\b[^>]*?>", src, re.S):
+            tag = m.group(0)
+            hm = re.search(r'href="(/[^"]*)"', tag)
+            if not hm:
+                continue
+            href = hm.group(1)
+            seen += 1
+            if href.startswith("/api/") or "target=" in tag:
+                continue
+            base = "/" + href.strip("/").split("/")[0].split("?")[0]
+            if base in routes:
+                bad.append(f"{os.path.relpath(path, root)}:{src[:m.start()].count(chr(10))+1} -> {href}")
+print(f"SEEN={seen}")
+for b in sorted(set(bad)):
+    print("RELOAD", b)
+PY
+)
+if echo "$ANCHORS" | /usr/bin/grep -q "ROUTES-PARSE-FAILED"; then
+  bad "N4e could not derive the route table"
+else
+  NSEEN=$(echo "$ANCHORS" | sed -n 's/^SEEN=\([0-9]*\)/\1/p')
+  NREL=$(echo "$ANCHORS" | /usr/bin/grep -c "^RELOAD" || true)
+  if [ "${NSEEN:-0}" -lt 5 ]; then
+    bad "N4e inspected only ${NSEEN:-0} anchors — the parse is wrong, not the code"
+  elif [ "$NREL" -eq 0 ]; then
+    ok "N4e none of the $NSEEN internal anchors full-reloads an in-app route"
+  else
+    bad "N4e $NREL anchor(s) reload the SPA: $(echo "$ANCHORS" | /usr/bin/grep '^RELOAD' | tr '\n' ' ')"
+  fi
+fi
+
+echo
 echo "── 5. the badge cap is shared and honest ──"
 
 # Five copies of `> 9 ? "9+"` is how the cap came to disagree with the uncapped

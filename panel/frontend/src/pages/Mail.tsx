@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useState, useEffect } from "react";
 import { api } from "../api";
@@ -577,12 +578,12 @@ export default function Mail() {
               <h3 className="text-sm font-medium text-dark-50">Mail Server Not Installed</h3>
               <p className="text-xs text-dark-300 mt-0.5">Postfix + Dovecot + OpenDKIM need to be installed to manage email.</p>
             </div>
-            <a
-              href="/settings"
+            <Link
+              to="/settings?tab=services"
               className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 shrink-0 ml-4"
             >
               Go to Settings &rarr; Services
-            </a>
+            </Link>
           </div>
         </div>
       )}

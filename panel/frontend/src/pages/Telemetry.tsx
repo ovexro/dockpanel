@@ -1,4 +1,5 @@
 import { useState, useEffect, Fragment } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { formatDate } from "../utils/format";
 
@@ -226,7 +227,20 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 export default function Telemetry() {
-  const [tab, setTab] = useState<"events" | "updates" | "config">("events");
+  // Deep-linkable tab (see Monitoring.tsx for the pattern). The Dashboard's
+  // "DockPanel vX is available → View Update" banner links here, and everything
+  // it promises — version status, release notes, apply/rollback — lives on the
+  // Updates tab, while this page opened on Events.
+  const TELEMETRY_TABS = ["events", "updates", "config"] as const;
+  type TelemetryTab = (typeof TELEMETRY_TABS)[number];
+  const [searchParams] = useSearchParams();
+  const resolveTelemetryTab = (raw: string | null): TelemetryTab =>
+    raw && (TELEMETRY_TABS as readonly string[]).includes(raw) ? (raw as TelemetryTab) : "events";
+  const [tab, setTab] = useState<TelemetryTab>(() => resolveTelemetryTab(searchParams.get("tab")));
+  useEffect(() => {
+    setTab(resolveTelemetryTab(searchParams.get("tab")));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
   const [events, setEvents] = useState<TelemetryEvent[]>([]);
   const [stats, setStats] = useState<TelemetryStats | null>(null);
   const [config, setConfig] = useState<TelemetryConfig>({});

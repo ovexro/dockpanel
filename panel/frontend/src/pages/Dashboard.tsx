@@ -723,7 +723,7 @@ export default function Dashboard() {
             </Link>
           )}
           {isAdmin && (
-            <Link to="/security" className="hidden sm:flex px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium items-center gap-1.5 transition-colors">
+            <Link to={REC_ACTION_ROUTES.diagnostics} className="hidden sm:flex px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium items-center gap-1.5 transition-colors">
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z" /></svg>
               Diagnostics
             </Link>
@@ -804,7 +804,7 @@ export default function Dashboard() {
               <span className="text-dark-400 ml-1">(current: v{updateInfo.current_version})</span>
             </span>
           </div>
-          <Link to="/telemetry" className="px-3 py-1.5 bg-rust-500 hover:bg-rust-600 text-white rounded-lg text-xs font-medium transition-colors whitespace-nowrap">
+          <Link to="/telemetry?tab=updates" className="px-3 py-1.5 bg-rust-500 hover:bg-rust-600 text-white rounded-lg text-xs font-medium transition-colors whitespace-nowrap">
             View Update
           </Link>
         </div>
@@ -895,7 +895,7 @@ export default function Dashboard() {
           // issued until the domain actually resolves to this server.
           { id: "dns", label: "Point your domain here", description: "HTTPS is issued once your domain resolves to this server", link: "/sites", check: () => (intel?.ssl_countdowns.length ?? 0) > 0 },
           { id: "app", label: "Deploy a Docker app", description: "One-click deploy from the app catalogue", link: "/apps", check: () => appCount > 0 },
-          { id: "2fa", label: "Enable 2FA", description: "Protect your panel with two-factor authentication", link: "/settings", check: () => twoFaEnabled },
+          { id: "2fa", label: "Enable 2FA", description: "Protect your panel with two-factor authentication", link: "/account", check: () => twoFaEnabled },
           { id: "backup", label: "Set up backups", description: "Schedule recurring backups or run one manually", link: "/backup-orchestrator", check: () => backupSetup.has_schedule || backupSetup.has_backup },
         ];
         const completed = steps.filter(s => s.check()).length;
@@ -1232,7 +1232,7 @@ export default function Dashboard() {
             <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
               <div className="px-4 py-2.5 border-b border-dark-600 flex justify-between items-center">
                 <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Recent Activity</h3>
-                <Link to="/logs" className="text-[10px] text-rust-400 hover:text-rust-300">View all</Link>
+                <Link to="/logs?tab=audit" className="text-[10px] text-rust-400 hover:text-rust-300">View all</Link>
               </div>
               <div className="divide-y divide-dark-600">
                 {recentActivity.map((a, i) => (
@@ -1259,7 +1259,7 @@ export default function Dashboard() {
                 <div className="border border-dark-500 bg-dark-800 rounded-lg p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-xs text-dark-300 uppercase tracking-widest">Active Issues</h3>
-                    <Link to="/monitors" className="text-xs text-rust-400 hover:text-rust-300">View all</Link>
+                    <Link to={REC_ACTION_ROUTES.alerts} className="text-xs text-rust-400 hover:text-rust-300">View all</Link>
                   </div>
                   <div className="space-y-2">
                     {intel.top_issues.slice(0, 4).map((issue, i) => (

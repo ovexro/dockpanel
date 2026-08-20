@@ -153,12 +153,12 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/git-deploys" element={<GitDeploys />} />
               <Route path="/extensions" element={<Navigate to="/integrations" replace />} />
               <Route path="/security" element={<Security />} />
-              <Route path="/diagnostics" element={<Navigate to="/security" replace />} />
+              <Route path="/diagnostics" element={<Navigate to="/security?tab=diagnostics" replace />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/account" element={<Account />} />
               <Route path="/updates" element={<Navigate to="/system" replace />} />
-              <Route path="/activity" element={<Navigate to="/logs" replace />} />
-              <Route path="/system-logs" element={<Navigate to="/logs" replace />} />
+              <Route path="/activity" element={<Navigate to="/logs?tab=audit" replace />} />
+              <Route path="/system-logs" element={<Navigate to="/logs?tab=system" replace />} />
               <Route path="/mail" element={<Mail />} />
               <Route path="/servers" element={<Servers />} />
               <Route path="/migration" element={<MigrationWizard />} />
@@ -179,9 +179,9 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/monitoring" element={<Monitoring />} />
               <Route path="/system" element={<System />} />
               <Route path="/telemetry" element={<Telemetry />} />
-              <Route path="/security-hardening" element={<Navigate to="/security" replace />} />
+              <Route path="/security-hardening" element={<Navigate to="/security?tab=lockdown" replace />} />
               <Route path="/monitors" element={<Navigate to="/monitoring" replace />} />
-              <Route path="/alerts" element={<Navigate to="/monitoring" replace />} />
+              <Route path="/alerts" element={<Navigate to="/monitoring?tab=alerts" replace />} />
             </Route>
             <Route path="/status" element={<PublicStatusPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />

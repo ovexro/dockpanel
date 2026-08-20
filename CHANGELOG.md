@@ -4,6 +4,67 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.134.0]
+
+### Fixed — controls that named a destination and did not go there
+
+A panel-wide sweep of **436 controls** — every link, button and redirect whose
+label names somewhere specific — after v2.133.1 turned up a third instance of the
+same defect within an hour of the second. It is not a 404: the link "works", so
+nothing reports it. The operator lands one tab short and finishes the navigation
+by hand, or lands on an empty screen.
+
+The root cause for most of them was that the destination could not be named.
+Only five pages read a tab from the URL; the rest opened on their default
+whatever the link said, so writing a correct link was impossible.
+
+**Three pages gained deep-link support**, copying the `resolveTab` shape
+`Monitoring.tsx` and `Security.tsx` already use:
+
+- **Settings** — five tabs, opened on General. Every "configure X in Settings"
+  message in the product landed one tab short of X.
+- **Telemetry** — opened on Events while the Updates tab holds everything the
+  Dashboard's update banner promises.
+- **Logs** — opened on Site Logs, a file tailer, while two legacy URLs redirect
+  here for the audit trail and the system events they are named for.
+
+**Controls repointed at what they name:**
+
+- `Configure alert channels →` on the notifications page → `?tab=channels`
+  (reported by Ovidiu).
+- `Enable 2FA` in the Getting Started checklist → `/account`. It pointed at
+  Settings, where personal 2FA enrolment does not exist in any tab — the only
+  2FA control there is the admin policy that requires it of *other* users. All
+  three layouts' own 2FA banner already said "Enable it from My Account".
+- `View all` over **Active Issues** → the Alerts tab. Those rows come from the
+  `alerts` table, and the link went to Monitors — empty on any install without
+  uptime monitors, which is exactly when alerts fire.
+- `View all` over **Recent Activity** → the Audit Log tab. It listed
+  `activity_logs` rows and sent you to a tab that tails nginx files.
+- `Diagnostics` in the Dashboard header → `?tab=diagnostics`. The constant for
+  it was already in that file and already used by the Health stat cell.
+- `View Update` → `?tab=updates`.
+- `Go to Settings → Services` (Mail) and the PowerDNS setup cross-reference
+  (DNS) were raw `<a href>` — a full page reload that discards the router — and
+  neither could reach the Services tab. Both are now `Link`s that name it.
+- `View Sites` / `View Databases` after a migration were also `<a href>`, so
+  finishing a migration and clicking through reloaded the app and threw away the
+  report you had just produced.
+- Five legacy URL aliases now name their tab: `/alerts`, `/activity`,
+  `/system-logs`, `/diagnostics`, `/security-hardening`.
+
+### Added — three more class arms in `notifications-pin-e2e.sh`
+
+- **§4c** — no dashboard link into monitoring may drop its tab, and the health
+  pill's destination must derive from the same condition as its label.
+- **§4d** — a `?tab=` link must point at a page that actually reads the
+  parameter. Writing one against a page that ignores it is a no-op with a URL
+  that claims otherwise, and it looks exactly like a fix.
+- **§4e** — an in-app route must be reached with `Link`, never `<a href>`.
+  `/api/*` and anything opening a new tab are allowed.
+
+2639 → 2641 assertions; 20/20 mutations killed.
+
 ## [2.133.1]
 
 ### Fixed — "System Issues Detected" did not lead to the issues

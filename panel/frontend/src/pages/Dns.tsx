@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api";
 
 interface DnsZone {
@@ -728,7 +729,7 @@ export default function Dns() {
                 </svg>
                 <p className="text-xs text-dark-200">
                   PowerDNS must be installed and its API URL + key configured in{" "}
-                  <a href="/settings" className="text-accent-400 hover:text-accent-300 underline underline-offset-2">Settings</a>{" "}
+                  <Link to="/settings?tab=services" className="text-accent-400 hover:text-accent-300 underline underline-offset-2">Settings</Link>{" "}
                   before creating zones. See the setup guide there for installation steps.
                 </p>
               </div>

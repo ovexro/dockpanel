@@ -277,7 +277,7 @@ export default function Notifications() {
               the honest thing is to stop promising it rather than to keep
               offering a door that refuses. See the s325 carry. */}
           {user?.role === "admin" && (
-            <Link to="/settings" className="text-xs text-accent-400 hover:text-accent-300 mt-1 inline-block">
+            <Link to="/settings?tab=channels" className="text-xs text-accent-400 hover:text-accent-300 mt-1 inline-block">
               Configure alert channels &rarr;
             </Link>
           )}

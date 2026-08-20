@@ -1,5 +1,5 @@
 import { useAuth } from "../context/AuthContext";
-import { Navigate } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { useState, useEffect, useRef } from "react";
 import { api, ApiError } from "../api";
 
@@ -595,12 +595,15 @@ export default function Migration() {
           </div>
 
           <div className="flex gap-3">
-            <a href="/sites" className="px-4 py-2 bg-rust-500 text-dark-950 rounded-lg text-sm font-bold hover:bg-rust-400 transition-colors">
+            {/* `Link`, not `<a href>`: an anchor to an in-app route reloads the
+                whole SPA — it discards the router, refetches the bundle and
+                throws away the migration result the operator is looking at. */}
+            <Link to="/sites" className="px-4 py-2 bg-rust-500 text-dark-950 rounded-lg text-sm font-bold hover:bg-rust-400 transition-colors">
               View Sites
-            </a>
-            <a href="/databases" className="px-4 py-2 bg-dark-700 text-dark-200 rounded-lg text-sm hover:bg-dark-600 transition-colors">
+            </Link>
+            <Link to="/databases" className="px-4 py-2 bg-dark-700 text-dark-200 rounded-lg text-sm hover:bg-dark-600 transition-colors">
               View Databases
-            </a>
+            </Link>
             <button onClick={() => { setStep(1); setMigration(null); setProgress([]); setError(""); }} className="px-4 py-2 bg-dark-700 text-dark-200 rounded-lg text-sm hover:bg-dark-600 transition-colors">
               Start New Migration
             </button>
