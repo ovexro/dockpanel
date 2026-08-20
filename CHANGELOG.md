@@ -102,7 +102,7 @@ pre-line`), the exact timestamp is available on hover, and the row's actions
 were revealed only by `group-hover` — which means they did not exist for a
 keyboard or on a touch screen.
 
-### Added — `tests/notifications-pin-e2e.sh`, 30 assertions, 15/15 mutations killed
+### Added — `tests/notifications-pin-e2e.sh`, 31 assertions, 16/16 mutations killed
 
 The durable half is a set of checks over the *class*, not over these defects:
 
@@ -118,7 +118,13 @@ The durable half is a set of checks over the *class*, not over these defects:
 - Every icon name the nav registry declares must exist in every icon set.
 - The guide's cap, page size and category table must match the code.
 
-2606 → 2636 assertions across 79 → 80 suites. HTTP routes 825 → 828.
+- A notification addressed to one user can reach a non-admin, while one
+  addressed to `None` fans out to admins only — so a link into an `adminOnly`
+  screen is safe in the second case and a 403 in the first. Both sides are
+  derived: the admin-only set from the nav registry, the recipient from the
+  call's own second argument.
+
+2606 → 2637 assertions across 79 → 80 suites. HTTP routes 825 → 828.
 
 ### Fixed — the site rate-limit refusal now names the setting that changes it
 

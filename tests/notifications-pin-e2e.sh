@@ -298,6 +298,85 @@ else
 fi
 
 echo
+echo "── 4b. no per-user notification links at a door its recipient cannot open ──"
+
+# A notification addressed to ONE user can reach a non-admin; one addressed to
+# `None` fans out to admins only. So a link into an `adminOnly` screen is safe in
+# the second case and a 403 in the first. Both sides derived: the admin-only set
+# from the nav registry, the recipient from the call's own second argument.
+GATED=$(python3 - "$NAV" "$BACKEND" <<'PY'
+import os, re, sys
+nav = open(sys.argv[1]).read()
+admin_only = {m.group(1) for m in re.finditer(r'to:\s*"([^"]+)"[^}]*adminOnly:\s*true', nav)}
+if len(admin_only) < 3:
+    print("NAV-PARSE-FAILED"); raise SystemExit
+# `git_deploys` rows are created behind `require_admin` and store the creating
+# admin's id, so `Some(user_id)` there is always an administrator. Recorded so it
+# stays a decision rather than an oversight.
+ALLOW = {("routes/git_deploys.rs", "/git-deploys")}
+bad, checked = [], 0
+for dirpath, _, files in os.walk(sys.argv[2]):
+    for fn in files:
+        if not fn.endswith(".rs"):
+            continue
+        path = os.path.join(dirpath, fn)
+        rel = os.path.relpath(path, sys.argv[2])
+        src = open(path).read()
+        for m in re.finditer(r"notify_panel\s*\(", src):
+            head = src.rfind(chr(10), 0, m.start())
+            if src[head + 1 : m.start()].lstrip().startswith(("//", "*")):
+                continue
+            i, depth = m.end(), 1
+            while depth and i < len(src):
+                if src[i] == "(":
+                    depth += 1
+                elif src[i] == ")":
+                    depth -= 1
+                i += 1
+            args, parts, cur, depth = src[m.end() : i - 1], [], "", 0
+            for ch in args:
+                if ch in "([{":
+                    depth += 1
+                if ch in ")]}":
+                    depth -= 1
+                if ch == "," and depth == 0:
+                    parts.append(cur); cur = ""
+                else:
+                    cur += ch
+            parts.append(cur)
+            parts = [p for p in parts if p.strip()]
+            if len(parts) < 7:
+                continue
+            recipient, link = parts[1].strip(), parts[-1].strip()
+            lm = re.search(r'"(/[^"?]*)', link)
+            if not lm:
+                continue
+            target = "/" + lm.group(1).strip("/").split("/")[0]
+            checked += 1
+            if target in admin_only and not recipient.startswith("None"):
+                if (rel, target) in ALLOW:
+                    continue
+                bad.append(f"{rel} -> {target} for {recipient[:28]}")
+print(f"CHECKED={checked}")
+for b in sorted(set(bad)):
+    print("ROLE-RISK", b)
+PY
+)
+if echo "$GATED" | /usr/bin/grep -q "NAV-PARSE-FAILED"; then
+  bad "N4b could not derive the adminOnly route set from $NAV"
+else
+  NCHK=$(echo "$GATED" | sed -n 's/^CHECKED=\([0-9]*\)/\1/p')
+  NRISK=$(echo "$GATED" | /usr/bin/grep -c "^ROLE-RISK" || true)
+  if [ "${NCHK:-0}" -lt 10 ]; then
+    bad "N4b inspected only ${NCHK:-0} links — the parse is wrong, not the code"
+  elif [ "$NRISK" -eq 0 ]; then
+    ok "N4b none of the $NCHK links sends a possibly-non-admin recipient at an admin-only screen"
+  else
+    bad "N4b $NRISK link(s) would 403 their recipient: $(echo "$GATED" | /usr/bin/grep '^ROLE-RISK' | tr '\n' ' ')"
+  fi
+fi
+
+echo
 echo "── 5. the badge cap is shared and honest ──"
 
 # Five copies of `> 9 ? "9+"` is how the cap came to disagree with the uncapped
