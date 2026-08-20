@@ -52,7 +52,7 @@ Routes forward incoming webhooks to target URLs based on optional JSON filters.
 2. Go to the **Routes** tab
 3. Click **Add Route**
 4. Configure:
-   - **Target URL**: Where to forward the webhook (e.g., `http://localhost:3000/deploy`)
+   - **Target URL**: Where to forward the webhook (e.g., `https://ci.example.com/deploy`). Must be a public address — internal/private targets (`localhost`, `127.0.0.1`, `10.x`, `169.254.x`, …) are rejected as SSRF.
    - **JSON Filter**: Optional JSONPath expression to match specific payloads
    - **Headers**: Optional extra headers to include in the forwarded request
 5. Click **Save**

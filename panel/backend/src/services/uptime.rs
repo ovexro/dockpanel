@@ -312,6 +312,12 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
 async fn check_tcp(monitor: &MonitorRow) -> (Option<i32>, Option<String>, &'static str, i32) {
     let host = monitor.url.trim_start_matches("tcp://");
     let port = monitor.port.unwrap_or(80) as u16;
+    // SSRF re-validation at check time (parity with check_http): a low-TTL record can
+    // flip to an internal IP after write, and rows imported via /settings/import bypass
+    // the create-path guard. An internal target must not be probed.
+    if let Err(e) = crate::helpers::validate_host_not_internal(host, port).await {
+        return (None, Some(format!("Host blocked: {e}")), "down", 0);
+    }
     let addr = format!("{}:{}", host, port);
 
     let start = Instant::now();
@@ -331,6 +337,11 @@ async fn check_tcp(monitor: &MonitorRow) -> (Option<i32>, Option<String>, &'stat
 /// Ping/ICMP check — uses system ping command.
 async fn check_ping(monitor: &MonitorRow) -> (Option<i32>, Option<String>, &'static str, i32) {
     let host = monitor.url.trim_start_matches("ping://");
+    // SSRF re-validation at check time (parity with check_http/check_tcp): reachability
+    // of an internal host is itself the disclosure a ping monitor would leak.
+    if let Err(e) = crate::helpers::validate_host_not_internal(host, 0).await {
+        return (None, Some(format!("Host blocked: {e}")), "down", 0);
+    }
     let start = Instant::now();
 
     let output = tokio::time::timeout(

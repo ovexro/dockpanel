@@ -15,65 +15,17 @@ use crate::AppState;
 // SSRF protection: validate webhook URLs
 // ---------------------------------------------------------------------------
 
+/// Extension webhook destinations go through the ONE shared SSRF guard, same as every
+/// other outbound URL. This used to be a second, hand-rolled copy with a strictly weaker
+/// classifier (no CGNAT / ULA / fe80 / IPv4-mapped / NAT64, and the same userinfo-spoof
+/// bug — `http://public:x@169.254.169.254/` read `public` as the host and passed) while
+/// the send-time re-validation in `services/extensions.rs` already used the shared helper.
+/// That split accepted a spoofed URL at write time and then silently dropped every
+/// delivery. Delegating keeps the `webhook_url`-worded error the callers surface.
 async fn validate_webhook_url(url: &str) -> Result<(), String> {
-    let url = url.trim();
-    if url.is_empty() {
-        return Err("webhook_url is required".to_string());
-    }
-    if !url.starts_with("https://") && !url.starts_with("http://") {
-        return Err("webhook_url must use http or https".to_string());
-    }
-
-    // Extract host from URL (strip scheme, take up to next / or :)
-    let after_scheme = if url.starts_with("https://") { &url[8..] } else { &url[7..] };
-    let host = after_scheme
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("");
-
-    if host.is_empty() {
-        return Err("webhook_url has no hostname".to_string());
-    }
-
-    // Resolve hostname to IP addresses and check each one.
-    // This prevents bypasses via hex IPs (0x7f000001), decimal IPs (2130706433),
-    // IPv6 (::1), DNS names that resolve to localhost (e.g. localtest.me),
-    // and cloud metadata endpoints (169.254.169.254).
-    let lookup_host = format!("{}:80", host.trim_matches(|c| c == '[' || c == ']'));
-    match tokio::net::lookup_host(&lookup_host).await {
-        Ok(addrs) => {
-            for addr in addrs {
-                let ip = addr.ip();
-                if ip.is_loopback() || ip.is_unspecified() {
-                    return Err("webhook_url resolves to loopback address".to_string());
-                }
-                match ip {
-                    std::net::IpAddr::V4(v4) => {
-                        if v4.is_private() || v4.is_link_local() || v4.octets()[0] == 169 {
-                            return Err(
-                                "webhook_url resolves to private/link-local address".to_string(),
-                            );
-                        }
-                    }
-                    std::net::IpAddr::V6(v6) => {
-                        if v6.is_loopback() {
-                            return Err(
-                                "webhook_url resolves to loopback address".to_string(),
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        Err(_) => {
-            return Err("webhook_url hostname could not be resolved".to_string());
-        }
-    }
-
-    Ok(())
+    crate::helpers::validate_url_not_internal(url)
+        .await
+        .map_err(|e| format!("webhook_url: {e}"))
 }
 
 // ---------------------------------------------------------------------------

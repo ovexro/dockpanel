@@ -105,16 +105,34 @@ pub async fn create(
     }
 
     let url = body.url.trim();
-    if monitor_type == "http" {
-        if url.is_empty() || (!url.starts_with("http://") && !url.starts_with("https://")) {
-            return Err(err(StatusCode::BAD_REQUEST, "URL must start with http:// or https://"));
+    match monitor_type {
+        "http" => {
+            if url.is_empty() || (!url.starts_with("http://") && !url.starts_with("https://")) {
+                return Err(err(StatusCode::BAD_REQUEST, "URL must start with http:// or https://"));
+            }
+            // SSRF protection: block internal URLs
+            if let Err(e) = crate::helpers::validate_url_not_internal(url).await {
+                return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid monitor URL: {}", e)));
+            }
         }
-        // SSRF protection: block internal URLs
-        if let Err(e) = crate::helpers::validate_url_not_internal(url).await {
-            return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid monitor URL: {}", e)));
+        "tcp" | "ping" => {
+            // Same SSRF boundary as the HTTP lane, on the bare host these store: a tcp
+            // monitor to 127.0.0.1:22 is an internal port probe, not a public check.
+            if url.is_empty() {
+                return Err(err(StatusCode::BAD_REQUEST, "Host/URL is required"));
+            }
+            let host = url.trim_start_matches("tcp://").trim_start_matches("ping://");
+            let probe_port = body.port.unwrap_or(80).clamp(0, 65535) as u16;
+            if let Err(e) = crate::helpers::validate_host_not_internal(host, probe_port).await {
+                return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid monitor host: {e}")));
+            }
         }
-    } else if url.is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "Host/URL is required"));
+        _ => {
+            // heartbeat: passive, but still needs an identifier.
+            if url.is_empty() {
+                return Err(err(StatusCode::BAD_REQUEST, "Host/URL is required"));
+            }
+        }
     }
 
     let name = body.name.trim();
@@ -220,17 +238,51 @@ pub async fn update(
     .await
     .map_err(|e| internal_error("update monitors", e))?;
 
-    if existing.is_none() {
-        return Err(err(StatusCode::NOT_FOUND, "Monitor not found"));
+    let existing = match existing {
+        Some(m) => m,
+        None => return Err(err(StatusCode::NOT_FOUND, "Monitor not found")),
+    };
+
+    // A type change must be to a known type — create checks this, update did not, so a
+    // monitor could be moved to an arbitrary string and fall through the check dispatcher.
+    if let Some(ref mt) = body.monitor_type {
+        if !matches!(mt.as_str(), "http" | "tcp" | "ping" | "heartbeat") {
+            return Err(err(StatusCode::BAD_REQUEST, "monitor_type must be 'http', 'tcp', 'ping', or 'heartbeat'"));
+        }
     }
 
-    // SSRF protection: validate URL if being updated
+    // SSRF protection: validate the target if the URL/host is being updated, against the
+    // EFFECTIVE type after this update (the new type if one is supplied, else the stored
+    // one) — otherwise switching http→tcp, or setting a host on a tcp monitor, skips the
+    // guard the create path enforces.
+    let effective_type = body
+        .monitor_type
+        .as_deref()
+        .unwrap_or(existing.monitor_type.as_str());
     if let Some(ref new_url) = body.url {
         let trimmed = new_url.trim();
-        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-            if let Err(e) = crate::helpers::validate_url_not_internal(trimmed).await {
-                return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid monitor URL: {}", e)));
+        match effective_type {
+            "http" => {
+                if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                    if let Err(e) = crate::helpers::validate_url_not_internal(trimmed).await {
+                        return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid monitor URL: {}", e)));
+                    }
+                }
             }
+            "tcp" | "ping" => {
+                if !trimmed.is_empty() {
+                    let host = trimmed.trim_start_matches("tcp://").trim_start_matches("ping://");
+                    let probe_port = body
+                        .port
+                        .or(existing.port)
+                        .unwrap_or(80)
+                        .clamp(0, 65535) as u16;
+                    if let Err(e) = crate::helpers::validate_host_not_internal(host, probe_port).await {
+                        return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid monitor host: {e}")));
+                    }
+                }
+            }
+            _ => {}
         }
     }
 

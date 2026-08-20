@@ -475,6 +475,113 @@ mod tests {
         let hash = hash_agent_token("");
         assert_eq!(hash.len(), 64);
     }
+
+    // ---- SSRF validator (validate_url_not_internal) ----
+    //
+    // These arms exist to make ONE mutation impossible to reintroduce silently: the
+    // hand-rolled "strip scheme, split on '/' then ':'" host extraction, which for
+    // `http://example.com:x@169.254.169.254/` tested `example.com` (public → passed)
+    // while every HTTP client connects to the userinfo host `169.254.169.254`.
+    //
+    // No network is touched by the cases below: every rejection here is decided from
+    // the URL structure alone (a literal-IP host or a credentialed authority), before
+    // the resolver. A future rewrite that returns to substring parsing would read the
+    // wrong host and let these through — so each is RED under exactly that mutation.
+
+    use super::url_authority;
+
+    /// ⭐ THE ARM THIS MODULE EXISTS FOR, and it is deterministic OFFLINE in both
+    /// directions. `url_authority` names the host a client would dial; the retired
+    /// hand-rolled parser named the userinfo label instead. Every label here is a
+    /// PUBLIC numeric literal and every true host an INTERNAL numeric literal, so
+    /// `getaddrinfo` never runs — a DNS-free runner gives the same verdict, which the
+    /// earlier `example.com` version did not (it went green under the mutation whenever
+    /// the runner had no DNS). Restoring `split('/').next().split(':').next()` returns
+    /// the left literal and turns every assert below red.
+    #[test]
+    fn the_validated_host_is_the_host_a_client_would_connect_to() {
+        // Host AND port come from the real authority, never a substring + hardcoded :80.
+        // No resolver runs, so this is deterministic on an air-gapped runner and RED
+        // against the retired parser, which returned ("[2001", 80) / ("example.com", 80).
+        assert_eq!(
+            url_authority("http://[2001:db8::1]:8443/").unwrap(),
+            ("[2001:db8::1]".to_string(), 8443),
+            "a bracketed IPv6 literal and its real port, not the string '2001' and port 80"
+        );
+        assert_eq!(
+            url_authority("http://example.com:8443/path").unwrap(),
+            ("example.com".to_string(), 8443),
+            "the real port survives; the old parser hardcoded 80"
+        );
+        assert_eq!(
+            url_authority("https://198.51.100.7:9000/admin").unwrap(),
+            ("198.51.100.7".to_string(), 9000),
+            "host and port both from the authority"
+        );
+        // The userinfo construct — the exact host/validator disagreement — is REFUSED,
+        // not host-extracted. A substring parser reads the public left label and returns
+        // Ok, so each of these is red under the mutation.
+        assert!(
+            url_authority("http://192.0.2.1:x@127.0.0.1/").is_err(),
+            "a credentialed authority must be refused, not resolved to its userinfo label"
+        );
+        assert!(url_authority("https://198.51.100.7:tok@10.0.0.5:8080/admin").is_err());
+    }
+
+    async fn v(u: &str) -> Result<(), String> {
+        super::validate_url_not_internal(u).await
+    }
+
+    #[tokio::test]
+    async fn userinfo_spoofed_internal_host_is_rejected() {
+        // Same numeric-literal shape so no DNS is needed even under the mutation: the
+        // public label on the left, the internal host on the right, and the metadata
+        // address among them. RED against the substring parser on any runner.
+        for u in [
+            "http://192.0.2.1:x@127.0.0.1/",
+            "http://192.0.2.1:80@169.254.169.254/latest/meta-data/",
+            "https://198.51.100.7:tok@10.0.0.5:8080/admin",
+        ] {
+            assert!(
+                v(u).await.is_err(),
+                "userinfo-spoofed URL must be rejected, true host is internal: {u}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn alternate_ip_encodings_and_v6_embeddings_of_internal_are_rejected() {
+        // `url` normalises the IPv4 encodings; `v6_is_internal` extracts the embedded v4
+        // from the transition prefixes. The last two are the gap the parser fix alone
+        // left open (NAT64 well-known + 6to4, both embedding 127.0.0.1).
+        for u in [
+            "http://2130706433/",               // decimal 127.0.0.1
+            "http://0x7f000001/",               // hex
+            "http://0177.0.0.1/",               // octal
+            "http://[::1]/",                    // v6 loopback
+            "http://[::ffff:169.254.169.254]/", // v4-mapped metadata
+            "http://[64:ff9b::7f00:1]/",        // NAT64 well-known, 127.0.0.1
+            "http://[2002:7f00:1::]/",          // 6to4, 127.0.0.1
+        ] {
+            assert!(v(u).await.is_err(), "internal literal host must be rejected: {u}");
+        }
+    }
+
+    #[tokio::test]
+    async fn credentials_in_a_public_authority_are_still_refused() {
+        assert!(
+            v("https://user:tok@example.com/hook").await.is_err(),
+            "a URL with credentials must be refused regardless of the host"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bare_scheme_or_non_http_scheme_is_refused() {
+        assert!(v("").await.is_err());
+        assert!(v("ftp://example.com/").await.is_err());
+        assert!(v("file:///etc/passwd").await.is_err());
+        assert!(v("not a url").await.is_err());
+    }
 }
 
 /// True if an IPv4 address is loopback / private / link-local / CGNAT / unspecified
@@ -491,20 +598,49 @@ fn v4_is_internal(v4: std::net::Ipv4Addr) -> bool {
 }
 
 /// True if an IPv6 address is loopback / unspecified / ULA (fc00::/7) /
-/// link-local (fe80::/10), OR is an IPv4-mapped address whose embedded v4 is
-/// internal (`::ffff:127.0.0.1`, `::ffff:169.254.169.254`, …). Rust's
-/// `Ipv6Addr::is_loopback()` is false for the mapped forms, so those must be
-/// normalized explicitly — that was the SSRF-validator gap.
+/// link-local (fe80::/10), OR embeds an internal IPv4 via a transition mechanism.
+///
+/// Four embeddings reach the same internal v4 through a v6 literal, and only one of
+/// them (`::ffff:a.b.c.d`) is normalized by `Ipv6Addr::to_ipv4_mapped()`. The other
+/// three had no rule, so `http://[64:ff9b::7f00:1]/` (NAT64, embedding 127.0.0.1)
+/// passed even the rewritten validator until this was added:
+///   * `::ffff:a.b.c.d`  IPv4-mapped   — low 32 bits (handled by `to_ipv4_mapped`)
+///   * `64:ff9b::a.b.c.d` NAT64 WKP     — low 32 bits
+///   * `::a.b.c.d`        IPv4-compat   — low 32 bits (deprecated, still routed by some stacks)
+///   * `2002:a.b.c.d::/16` 6to4         — bits [16..48]
+/// In every case the embedded v4 is classified by `v4_is_internal`, so one change to
+/// the v4 ranges covers all forms at once.
 fn v6_is_internal(v6: std::net::Ipv6Addr) -> bool {
     if v6.is_loopback() || v6.is_unspecified() {
         return true;
     }
-    if let Some(v4) = v6.to_ipv4_mapped() {
+    let seg = v6.segments();
+    let low_v4 = std::net::Ipv4Addr::new(
+        (seg[6] >> 8) as u8,
+        (seg[6] & 0xff) as u8,
+        (seg[7] >> 8) as u8,
+        (seg[7] & 0xff) as u8,
+    );
+    // IPv4-mapped (::ffff:0:0/96), NAT64 well-known (64:ff9b::/96), and IPv4-compatible
+    // (::/96) all carry the embedded v4 in the low 32 bits.
+    let is_mapped = seg[0] == 0 && seg[1] == 0 && seg[2] == 0 && seg[3] == 0 && seg[4] == 0 && seg[5] == 0xffff;
+    let is_nat64 = seg[0] == 0x0064 && seg[1] == 0xff9b && seg[2] == 0 && seg[3] == 0 && seg[4] == 0 && seg[5] == 0;
+    let is_v4compat = seg[0] == 0 && seg[1] == 0 && seg[2] == 0 && seg[3] == 0 && seg[4] == 0 && seg[5] == 0;
+    if (is_mapped || is_nat64 || is_v4compat) && v4_is_internal(low_v4) {
+        return true;
+    }
+    // 6to4 (2002::/16) carries the embedded v4 in bits [16..48].
+    if seg[0] == 0x2002 {
+        let v4 = std::net::Ipv4Addr::new(
+            (seg[1] >> 8) as u8,
+            (seg[1] & 0xff) as u8,
+            (seg[2] >> 8) as u8,
+            (seg[2] & 0xff) as u8,
+        );
         if v4_is_internal(v4) {
             return true;
         }
     }
-    let seg = v6.segments();
     (seg[0] & 0xfe00) == 0xfc00 // ULA fc00::/7
         || (seg[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
 }
@@ -605,47 +741,54 @@ pub fn host_resolves_internal_blocking(host: &str, port: u16) -> bool {
     }
 }
 
-/// SSRF protection: validate that a URL does not resolve to an internal/private address.
+/// SSRF protection: reject a URL whose host is (or resolves to) an internal address.
 ///
-/// Checks loopback, private (RFC 1918), link-local, ULA, CGNAT, IPv4-mapped-IPv6,
-/// and unspecified addresses. Resolves DNS to catch bypass via hostnames that map
-/// to internal IPs.
+/// Parsed with `url::Url` rather than by hand. The previous "strip the scheme, take up
+/// to the first `/`, then up to the first `:`" logic extracted the WRONG host for a
+/// userinfo authority: for `http://example.com:x@169.254.169.254/` it tested
+/// `example.com` (public, so it passed) while every HTTP client here connects to the
+/// real host, `169.254.169.254`. A real parser also normalises alternate IPv4 encodings
+/// (`http://2130706433/`, `0x7f000001`, octal) back to dotted-decimal, so a literal-IP
+/// host is authoritative and never depends on the resolver agreeing.
+///
+/// Rejects: any credentials in the authority (the userinfo-spoof vector), and a host
+/// that is or resolves to loopback / private (RFC 1918) / link-local & metadata
+/// (169.254/16) / CGNAT (100.64/10) / ULA / IPv4-mapped-internal / unspecified /
+/// broadcast — the set `ip_is_internal` covers.
 pub async fn validate_url_not_internal(url: &str) -> Result<(), String> {
-    let url = url.trim();
-    if url.is_empty() {
-        return Err("URL is required".to_string());
-    }
-    if !url.starts_with("https://") && !url.starts_with("http://") {
-        return Err("URL must use http or https".to_string());
-    }
+    // `url_authority` decides WHAT host to check — the one a client would dial, not the
+    // userinfo label the old string-surgery mistook for it. Everything below only
+    // decides whether that host is internal, so the two concerns can be pinned apart.
+    let (host, port) = url_authority(url)?;
 
-    // Extract host from URL (strip scheme, take up to next / or :)
-    let after_scheme = if url.starts_with("https://") { &url[8..] } else { &url[7..] };
-    let host = after_scheme
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("");
-
-    if host.is_empty() {
-        return Err("URL has no hostname".to_string());
+    // A literal IP host (in any encoding — `url` has already normalised it) is
+    // authoritative; check it directly and never resolve.
+    let bare = host.trim_matches(|c| c == '[' || c == ']');
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        if ip_is_internal(ip) {
+            return Err("URL points to a private/internal address".to_string());
+        }
+        return Ok(());
     }
 
-    // Block obvious internal hostnames
-    if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "0.0.0.0" {
+    // Obvious internal names, before paying for a DNS lookup.
+    let lower = host.to_ascii_lowercase();
+    if lower == "localhost" || lower.ends_with(".localhost") {
         return Err("URL points to a local address".to_string());
     }
 
-    // Resolve hostname to IP addresses and check each one
-    let lookup_host = format!("{}:80", host.trim_matches(|c| c == '[' || c == ']'));
-    match tokio::net::lookup_host(&lookup_host).await {
+    // Resolve and reject if ANY resolved address is internal (split-horizon / rebind).
+    match tokio::net::lookup_host((host.as_str(), port)).await {
         Ok(addrs) => {
+            let mut resolved_any = false;
             for addr in addrs {
+                resolved_any = true;
                 if ip_is_internal(addr.ip()) {
                     return Err("URL resolves to a private/internal address".to_string());
                 }
+            }
+            if !resolved_any {
+                return Err("URL hostname could not be resolved".to_string());
             }
         }
         Err(_) => {
@@ -654,6 +797,83 @@ pub async fn validate_url_not_internal(url: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// SSRF guard for a BARE host — the tcp/ping monitor lane stores a host, not a URL, and
+/// `check_tcp`/`check_ping` dial it directly. Without this a non-suspended account could
+/// point a tcp monitor at `10.0.0.1:3306` or `127.0.0.1:22` and read connect/refused/
+/// filtered back as the check status: an internal port scanner the HTTP lane already
+/// forbids. Rejects the same address set as [`validate_url_not_internal`], so the two
+/// lanes agree on what "internal" means. `port` is used only for the resolver call.
+pub async fn validate_host_not_internal(host: &str, port: u16) -> Result<(), String> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err("Host is required".to_string());
+    }
+    let bare = host.trim_matches(|c| c == '[' || c == ']');
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        if ip_is_internal(ip) {
+            return Err("Host points to a private/internal address".to_string());
+        }
+        return Ok(());
+    }
+    let lower = host.to_ascii_lowercase();
+    if lower == "localhost" || lower.ends_with(".localhost") {
+        return Err("Host points to a local address".to_string());
+    }
+    match tokio::net::lookup_host((bare, port)).await {
+        Ok(addrs) => {
+            let mut resolved_any = false;
+            for addr in addrs {
+                resolved_any = true;
+                if ip_is_internal(addr.ip()) {
+                    return Err("Host resolves to a private/internal address".to_string());
+                }
+            }
+            if !resolved_any {
+                return Err("Host could not be resolved".to_string());
+            }
+        }
+        Err(_) => {
+            return Err("Host could not be resolved".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Parse a URL and return the (host, port) a client would actually connect to.
+///
+/// Pure and synchronous, so it can be pinned by equality without a resolver: for
+/// `http://192.0.2.1:x@127.0.0.1/` this returns `("127.0.0.1", 80)`, the host the HTTP
+/// client dials — where the retired hand-rolled parser returned the userinfo label
+/// `192.0.2.1` and the hardcoded port 80. `host_str()` keeps the brackets on an IPv6
+/// literal (`"[2001:db8::1]"`); the caller strips them before parsing an `IpAddr`.
+///
+/// Rejects: a parse failure, a non-http(s) scheme, and any credentials in the authority
+/// — the userinfo construct is the only thing that let the client and a validator
+/// disagree about the host, and nothing this guard protects legitimately carries one.
+pub fn url_authority(url: &str) -> Result<(String, u16), String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("URL is required".to_string());
+    }
+
+    let parsed = url::Url::parse(url).map_err(|_| "URL is not valid".to_string())?;
+
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("URL must use http or https".to_string());
+    }
+
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("URL must not contain credentials".to_string());
+    }
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "URL has no hostname".to_string())?
+        .to_string();
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    Ok((host, port))
 }
 
 /// Detect the server's public IPv4 address.

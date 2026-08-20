@@ -4,6 +4,62 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.136.0]
+
+### Security — a monitor could read services it was never meant to reach
+
+The URL guard that is supposed to keep monitors and webhooks off internal
+addresses trusted a host it parsed by hand. It stripped the scheme, took the text
+up to the first `/`, then up to the first `:` — and for a URL like
+`http://example.com:x@169.254.169.254/` that reads `example.com`, which is public,
+so the check passed, while the HTTP client connected to `169.254.169.254`, the
+address after the `@`. The two disagreed about what the host was.
+
+Driven on a fresh box before this fix, an ordinary account — any login that is not
+suspended, not just an administrator — created an uptime monitor pointed at an
+internal-only service through that construct and read its HTTP status code and
+latency straight back, plus a keyword test that answered yes/no over the service's
+response body: an internal-address probe and a one-bit content oracle, re-armable
+on demand, fifty monitors to an account. The published guide promised the
+opposite, that all such URLs are rejected.
+
+The validator now parses with a real URL parser (`url::Url`), so the host it checks
+is the host a client would dial. Credentials in the address (`user:pass@host`) are
+refused outright — nothing this guard protects legitimately carries them, and the
+userinfo section was the whole trick. Alternate encodings of an internal address
+that used to slip through are covered: decimal, hex and octal IPv4, and the IPv6
+transition forms that embed an internal v4 (IPv4-mapped, NAT64 `64:ff9b::/96`,
+6to4 `2002::/16`, IPv4-compatible). The same guard runs again at send and check
+time, so a stored row whose DNS later flips to an internal address, or one imported
+past the create-time check, is blocked when it fires — verified live: a monitor
+stored under the old build began returning "URL blocked" the moment the fixed
+binary took over, with no change to the row.
+
+Three more holes in the same class, closed in the same change:
+
+- **A second, weaker copy** of the hand-rolled parser guarded extension webhooks.
+  It has been deleted; that path now shares the one validator, which is what makes
+  the guide's "all webhook URLs" true rather than most of them.
+- **TCP and ping monitors skipped the guard entirely** and connected to a bare
+  host:port, so the same account could scan internal ports and read
+  open/closed/filtered from the result. They are now validated at create, update
+  and check time by the same address rules — the HTTP lane's boundary, applied to
+  the lanes that were missing it.
+- **The monitor update endpoint never checked the monitor type**, so a monitor
+  could be moved to an unrecognised type and fall through to the HTTP path; update
+  now validates the type the way create always did.
+
+The validator was split into a small pure function that returns the host and port
+a client would connect to, pinned by an offline equality test (no DNS): a
+regression that returns to substring parsing reads the wrong host and turns it red
+on an air-gapped runner. A new source suite (`ssrf-url-guard-pin-e2e.sh`, 8
+assertions) forbids the hand-rolled shape in both files and keeps the tcp/ping
+lane wired; five new unit arms cover the parser and the classifier. 19 call sites
+of the URL guard and 4 of the new bare-host guard, across four backend files.
+
+No public issue reported this; it was found while re-measuring a carried item
+against the current code, then proven end to end on a throwaway VPS.
+
 ## [2.135.0]
 
 ### Fixed — an optional field you could not empty, and a confirmation you could not see
