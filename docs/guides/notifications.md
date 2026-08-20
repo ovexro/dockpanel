@@ -34,8 +34,7 @@ for the feed to work.
 ## Reading notifications
 
 The bell shows how many are unread. It saturates at `99+`; hover it to read the
-exact count. Clicking it opens the **Notifications** screen — there is no
-dropdown.
+exact count. Clicking it opens the **Notifications** screen.
 
 On that screen:
 

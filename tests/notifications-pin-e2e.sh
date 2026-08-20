@@ -480,10 +480,15 @@ echo "── 7. the guide describes this product ──"
 
 # Every claim below was FALSE when written down, and the guide went on saying it
 # for five months. Each arm keys on the mechanism, not on the sentence.
-if /usr/bin/grep -q "there is no\s*$" "$GUIDE" || /usr/bin/grep -q "there is no" "$GUIDE"; then
-  ok "N7 the guide no longer promises a dropdown"
+# The bell is a plain `<Link to="/notifications">` in every layout, so any
+# sentence promising a dropdown is false. POSITIVE CONTROL: the guide must still
+# talk about the bell, or an emptied file would satisfy the absence arm.
+if ! /usr/bin/grep -qi "dropdown" "$GUIDE" && /usr/bin/grep -qi "bell" "$GUIDE"; then
+  ok "N7 the guide promises no dropdown (control: it still describes the bell)"
+elif ! /usr/bin/grep -qi "bell" "$GUIDE"; then
+  bad "N7 positive control failed — the guide does not mention the bell at all"
 else
-  bad "N7 the guide's dropdown claim is back — the bell is a plain Link"
+  bad "N7 the guide's dropdown claim is back — the bell is a plain Link in all layouts"
 fi
 
 if /usr/bin/grep -q "99+" "$GUIDE" && /usr/bin/grep -q "n > 99" "$HOOK"; then
