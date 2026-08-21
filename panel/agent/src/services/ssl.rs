@@ -152,6 +152,22 @@ pub async fn load_or_create_account(email: &str) -> Result<Account, String> {
 }
 
 /// Provision a Let's Encrypt certificate for a domain using HTTP-01 challenge.
+/// Marks an error the CERTIFICATE AUTHORITY produced, as opposed to one this
+/// machine produced.
+///
+/// The two are worth telling apart because only one of them is the operator's to
+/// act on. A rejected challenge, a rate limit, an order the CA will not accept —
+/// those are answers, and repeating them to the operator is useful. A full disk
+/// or an unwritable directory here is an agent fault, and describing it as
+/// anything the CA said would be a lie in the one direction that matters: it
+/// sends somebody to check their DNS while their server is out of space.
+///
+/// ⚠ Marked POSITIVELY, and everything unmarked is treated as local. A new arm
+/// added below therefore defaults to "this machine's fault", which keeps its
+/// incident id — the safe direction. The inverse default would quietly hand
+/// every future error to the operator as though the CA had spoken.
+pub const CA_DECLINED: &str = "[ca] ";
+
 pub async fn provision_cert(
     account: &Account,
     domain: &str,
@@ -178,25 +194,25 @@ pub async fn provision_cert(
     let mut order = account
         .new_order(&new_order)
         .await
-        .map_err(|e| format!("Failed to create ACME order: {e}"))?;
+        .map_err(|e| format!("{CA_DECLINED}The CA refused the certificate order: {e}"))?;
 
     let state = order.state();
     let needs_challenge = matches!(state.status, OrderStatus::Pending);
 
     if !needs_challenge && !matches!(state.status, OrderStatus::Ready) {
-        return Err(format!("Unexpected order status: {:?}", state.status));
+        return Err(format!("{CA_DECLINED}The CA returned an unexpected order status: {:?}", state.status));
     }
 
     if needs_challenge {
         // Get authorizations and solve HTTP-01 challenge
         let mut authorizations = order.authorizations();
         while let Some(result) = authorizations.next().await {
-            let mut authz = result.map_err(|e| format!("Failed to get authorization: {e}"))?;
+            let mut authz = result.map_err(|e| format!("{CA_DECLINED}The CA would not return an authorization: {e}"))?;
 
             match authz.status {
                 AuthorizationStatus::Valid => continue,
                 AuthorizationStatus::Pending => {}
-                status => return Err(format!("Unexpected authorization status: {status:?}")),
+                status => return Err(format!("{CA_DECLINED}The CA returned an unexpected authorization status: {status:?}")),
             }
 
             let mut challenge = authz
@@ -222,7 +238,7 @@ pub async fn provision_cert(
             challenge
                 .set_ready()
                 .await
-                .map_err(|e| format!("Failed to set challenge ready: {e}"))?;
+                .map_err(|e| format!("{CA_DECLINED}The CA would not accept the challenge as ready: {e}"))?;
         }
     }
 
@@ -233,19 +249,19 @@ pub async fn provision_cert(
     order
         .poll_ready(&RetryPolicy::new().timeout(timeout))
         .await
-        .map_err(|e| format!("Order not ready: {e}"))?;
+        .map_err(|e| format!("{CA_DECLINED}The CA did not validate the challenge: {e}"))?;
 
     // Finalize — generates CSR internally and returns private key PEM
     let private_key_pem = order
         .finalize()
         .await
-        .map_err(|e| format!("Failed to finalize order: {e}"))?;
+        .map_err(|e| format!("{CA_DECLINED}The CA would not finalize the order: {e}"))?;
 
     // Poll for certificate
     let cert_chain_pem = order
         .poll_certificate(&RetryPolicy::new().timeout(timeout))
         .await
-        .map_err(|e| format!("Failed to get certificate: {e}"))?;
+        .map_err(|e| format!("{CA_DECLINED}The CA would not hand back the certificate: {e}"))?;
 
     // Save certificate and private key
     let cert_dir = format!("{SSL_DIR}/{domain}");

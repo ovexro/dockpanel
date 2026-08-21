@@ -2850,9 +2850,19 @@ pub async fn upload_ssl(
         tracing::warn!("Uploaded certificate for {domain} stored with no new expiry — the previous value is kept rather than cleared, so the site stays visible to the expiry ladder and the auto-healer");
     }
 
+    // The profile column describes how the PANEL ordered the certificate that used
+    // to be here, and this upload replaced it. Both renewal doors feed that value
+    // back to the agent, and the auto-healer reads it for the renewal margin and
+    // the ARI cooldown, so leaving it in place applies a retired certificate's
+    // terms to whatever the operator just installed. Cleared, not preserved:
+    // absent means the next order resolves its own profile, which is what an
+    // uploaded certificate honestly implies. Unlike its three siblings this one
+    // is NOT wrapped in COALESCE — for those, keeping a known value beats erasing
+    // it, and here the stored value is precisely what has stopped being true.
     if let Err(e) = sqlx::query(
         "UPDATE sites SET ssl_enabled = true, ssl_cert_path = COALESCE($1, ssl_cert_path), \
          ssl_key_path = COALESCE($2, ssl_key_path), ssl_expiry = COALESCE($3, ssl_expiry), \
+         ssl_profile = NULL, \
          ssl_renewal_at = NULL, ssl_renewal_checked_at = NULL, updated_at = NOW() WHERE id = $4",
     )
         .bind(cert_path.as_deref())

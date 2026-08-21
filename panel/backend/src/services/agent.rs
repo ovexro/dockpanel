@@ -25,6 +25,58 @@ const MAX_CONCURRENT_CONNECTIONS: usize = 20;
 /// Maximum concurrent long-running agent operations (docker builds, etc.).
 const MAX_LONG_CONNECTIONS: usize = 5;
 
+/// Classify a failed remote send, and only count the ones that mean "offline".
+///
+/// ⚠ A timeout is not an unreachable agent, and conflating the two is worse now
+/// than it was. Every remote failure used to become `Connection`, which trips the
+/// circuit breaker and reaches the operator as "agent unreachable". A busy agent
+/// answering perfectly well would be reported as down — and moving remote long
+/// operations onto the small pool makes waiting, and therefore timing out, far
+/// more likely than it was.
+///
+/// The local twins already draw this line: an elapsed clock is a `Request`, which
+/// the breaker does not count. This is that rule, applied to the client that
+/// needed it most.
+fn remote_send_error(cb: &CircuitBreaker, e: reqwest::Error) -> AgentError {
+    if e.is_timeout() {
+        AgentError::Request(e.to_string())
+    } else {
+        cb.record_failure();
+        AgentError::Connection(e.to_string())
+    }
+}
+
+/// Take a permit within the caller's budget, and report what is left of it.
+///
+/// The budget a caller names is the time it has to spend before something above
+/// it stops waiting — the doc on `DB_RESTORE_TIMEOUT_SECS` sets 270s precisely
+/// so the 300s `TimeoutLayer` never fires first, because a timeout the panel
+/// owns is the only kind it can explain. Queuing outside that budget defeats it:
+/// the permit wait was unbounded, so the work started late and ran its full
+/// allowance on top, and the server cut the request off mid-flight with a
+/// bodyless 504 — the exact answer that doc exists to prevent.
+///
+/// So the wait is inside the budget, and a request that never got a permit says
+/// THAT, rather than borrowing the sentence for work that ran and overran.
+/// Nothing that reached the agent is described differently than before.
+async fn permit_within<'a>(
+    sem: &'a tokio::sync::Semaphore,
+    budget: Duration,
+    pool: &str,
+) -> Result<(tokio::sync::SemaphorePermit<'a>, Duration), AgentError> {
+    let start = std::time::Instant::now();
+    let permit = tokio::time::timeout(budget, sem.acquire())
+        .await
+        .map_err(|_| {
+            AgentError::Request(format!(
+                "timed out after {}s waiting for a free {pool} slot; the operation never started",
+                budget.as_secs()
+            ))
+        })?
+        .map_err(|e| AgentError::Connection(format!("{pool} semaphore closed: {e}")))?;
+    Ok((permit, budget.saturating_sub(start.elapsed())))
+}
+
 /// Maximum response size from agent (50MB).
 const MAX_RESPONSE_SIZE: usize = 50 * 1024 * 1024;
 
@@ -209,12 +261,11 @@ impl AgentClient {
         body: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, AgentError> {
         self.cb.check()?;
-        let _permit = self.cb.semaphore.acquire().await.map_err(|e| {
-            AgentError::Connection(format!("connection semaphore closed: {e}"))
-        })?;
+        let (_permit, remaining) =
+            permit_within(&self.cb.semaphore, Duration::from_secs(60), "connection").await?;
 
         let result = tokio::time::timeout(
-            Duration::from_secs(60),
+            remaining,
             self.request_inner(method, path, body),
         )
         .await
@@ -330,12 +381,15 @@ impl AgentClient {
         timeout_secs: u64,
     ) -> Result<serde_json::Value, AgentError> {
         self.cb.check()?;
-        let _permit = self.cb.long_semaphore.acquire().await.map_err(|e| {
-            AgentError::Connection(format!("long operation semaphore closed: {e}"))
-        })?;
+        let (_permit, remaining) = permit_within(
+            &self.cb.long_semaphore,
+            Duration::from_secs(timeout_secs),
+            "long operation",
+        )
+        .await?;
 
         let result = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
+            remaining,
             self.request_inner("PUT", path, Some(body)),
         )
         .await
@@ -365,12 +419,11 @@ impl AgentClient {
     /// GET that returns raw bytes instead of JSON. Used for file downloads.
     pub async fn get_bytes(&self, path: &str) -> Result<(Vec<u8>, Option<String>), AgentError> {
         self.cb.check()?;
-        let _permit = self.cb.semaphore.acquire().await.map_err(|e| {
-            AgentError::Connection(format!("connection semaphore closed: {e}"))
-        })?;
+        let (_permit, remaining) =
+            permit_within(&self.cb.semaphore, Duration::from_secs(120), "connection").await?;
 
         let result = tokio::time::timeout(
-            Duration::from_secs(120),
+            remaining,
             self.request_bytes_inner(path),
         )
         .await
@@ -451,12 +504,15 @@ impl AgentClient {
         timeout_secs: u64,
     ) -> Result<serde_json::Value, AgentError> {
         self.cb.check()?;
-        let _permit = self.cb.long_semaphore.acquire().await.map_err(|e| {
-            AgentError::Connection(format!("long operation semaphore closed: {e}"))
-        })?;
+        let (_permit, remaining) = permit_within(
+            &self.cb.long_semaphore,
+            Duration::from_secs(timeout_secs),
+            "long operation",
+        )
+        .await?;
 
         let result = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
+            remaining,
             self.request_inner("POST", path, body),
         )
         .await
@@ -494,9 +550,17 @@ impl AgentClient {
         F: Fn(serde_json::Value) + Send + 'static,
     {
         self.cb.check()?;
-        let _permit = self.cb.long_semaphore.acquire().await.map_err(|e| {
-            AgentError::Connection(format!("long operation semaphore closed: {e}"))
-        })?;
+        // A stream has no total budget by design — the idle clock bounds SILENCE,
+        // not runtime — so there is no allowance to subtract a queue wait from. The
+        // wait is bounded by that same idle figure instead: a stream that cannot
+        // even be started inside its own silence budget is stalled, and saying so
+        // beats waiting for ever behind work that may not finish.
+        let (_permit, _) = permit_within(
+            &self.cb.long_semaphore,
+            Duration::from_secs(idle_timeout_secs),
+            "long operation",
+        )
+        .await?;
 
         let ticks = Arc::new(AtomicU64::new(0));
         let probe = {
@@ -768,9 +832,10 @@ impl RemoteAgentClient {
         body: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, AgentError> {
         self.cb.check()?;
-        let _permit = self.cb.semaphore.acquire().await.map_err(|e| {
-            AgentError::Connection(format!("connection semaphore closed: {e}"))
-        })?;
+        // 60s to match this client's own default request timeout, so the wait
+        // cannot outlast the call it is waiting to make.
+        let (_permit, _) =
+            permit_within(&self.cb.semaphore, Duration::from_secs(60), "connection").await?;
 
         let url = format!("{}{}", self.base_url, path);
         let mut req = self.http.request(method, &url)
@@ -803,10 +868,7 @@ impl RemoteAgentClient {
 
                 serde_json::from_slice(&bytes).map_err(|e| AgentError::Parse(e.to_string()))
             }
-            Err(e) => {
-                self.cb.record_failure();
-                Err(AgentError::Connection(e.to_string()))
-            }
+            Err(e) => Err(remote_send_error(&self.cb, e)),
         }
     }
 
@@ -838,16 +900,21 @@ impl RemoteAgentClient {
         timeout_secs: u64,
     ) -> Result<serde_json::Value, AgentError> {
         self.cb.check()?;
-        let _permit = self.cb.semaphore.acquire().await.map_err(|e| {
-            AgentError::Connection(format!("connection semaphore closed: {e}"))
-        })?;
+        // The LONG pool, matching the local twin this function is named after. The
+        // third of three remote long-operation entry points that took the quick one.
+        let (_permit, remaining) = permit_within(
+            &self.cb.long_semaphore,
+            Duration::from_secs(timeout_secs),
+            "long operation",
+        )
+        .await?;
 
         let url = format!("{}{}", self.base_url, path);
         let result = self
             .http
             .put(&url)
             .header("authorization", format!("Bearer {}", self.token))
-            .timeout(Duration::from_secs(timeout_secs))
+            .timeout(remaining)
             .json(&body)
             .send()
             .await;
@@ -868,10 +935,7 @@ impl RemoteAgentClient {
 
                 serde_json::from_slice(&bytes).map_err(|e| AgentError::Parse(e.to_string()))
             }
-            Err(e) => {
-                self.cb.record_failure();
-                Err(AgentError::Connection(e.to_string()))
-            }
+            Err(e) => Err(remote_send_error(&self.cb, e)),
         }
     }
 
@@ -881,14 +945,13 @@ impl RemoteAgentClient {
 
     pub async fn get_bytes(&self, path: &str) -> Result<(Vec<u8>, Option<String>), AgentError> {
         self.cb.check()?;
-        let _permit = self.cb.semaphore.acquire().await.map_err(|e| {
-            AgentError::Connection(format!("connection semaphore closed: {e}"))
-        })?;
+        let (_permit, remaining) =
+            permit_within(&self.cb.semaphore, Duration::from_secs(120), "connection").await?;
 
         let url = format!("{}{}", self.base_url, path);
         let result = self.http.get(&url)
             .header("authorization", format!("Bearer {}", self.token))
-            .timeout(Duration::from_secs(120))
+            .timeout(remaining)
             .send()
             .await;
 
@@ -912,10 +975,7 @@ impl RemoteAgentClient {
 
                 Ok((bytes.to_vec(), content_disposition))
             }
-            Err(e) => {
-                self.cb.record_failure();
-                Err(AgentError::Connection(e.to_string()))
-            }
+            Err(e) => Err(remote_send_error(&self.cb, e)),
         }
     }
 
@@ -926,14 +986,22 @@ impl RemoteAgentClient {
         timeout_secs: u64,
     ) -> Result<serde_json::Value, AgentError> {
         self.cb.check()?;
-        let _permit = self.cb.semaphore.acquire().await.map_err(|e| {
-            AgentError::Connection(format!("connection semaphore closed: {e}"))
-        })?;
+        // The LONG pool, as the local client has always used here. Taking the quick
+        // pool meant `MAX_LONG_CONNECTIONS` bounded nothing on a fleet — every
+        // remote build, import and restore competed with ordinary requests for the
+        // same 20 permits, so the limit that exists to stop long work starving the
+        // panel applied only to the machine the panel runs on.
+        let (_permit, remaining) = permit_within(
+            &self.cb.long_semaphore,
+            Duration::from_secs(timeout_secs),
+            "long operation",
+        )
+        .await?;
 
         let url = format!("{}{}", self.base_url, path);
         let mut req = self.http.post(&url)
             .header("authorization", format!("Bearer {}", self.token))
-            .timeout(Duration::from_secs(timeout_secs));
+            .timeout(remaining);
 
         if let Some(b) = body {
             req = req.json(&b);
@@ -955,10 +1023,7 @@ impl RemoteAgentClient {
 
                 serde_json::from_slice(&bytes).map_err(|e| AgentError::Parse(e.to_string()))
             }
-            Err(e) => {
-                self.cb.record_failure();
-                Err(AgentError::Connection(e.to_string()))
-            }
+            Err(e) => Err(remote_send_error(&self.cb, e)),
         }
     }
 
@@ -978,9 +1043,14 @@ impl RemoteAgentClient {
         F: Fn(serde_json::Value) + Send + 'static,
     {
         self.cb.check()?;
-        let _permit = self.cb.semaphore.acquire().await.map_err(|e| {
-            AgentError::Connection(format!("connection semaphore closed: {e}"))
-        })?;
+        // The LONG pool, as the local twin uses. See the note there on why the idle
+        // figure bounds the wait.
+        let (_permit, _) = permit_within(
+            &self.cb.long_semaphore,
+            Duration::from_secs(idle_timeout_secs),
+            "long operation",
+        )
+        .await?;
 
         let ticks = Arc::new(AtomicU64::new(0));
         let probe = {

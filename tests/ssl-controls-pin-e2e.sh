@@ -409,8 +409,16 @@ eq "F8 the scanner stops rather than renewing" \
    "$(occ "$F_SCAN" 'Auto-fix:NOTrenewing{domain}')" "1"
 eq "F9 the healer stops rather than renewing" \
    "$(occ "$F_HEAL" 'Auto-heal:NOTrenewing{domain}')" "1"
+# ⚠ s387 moved this from a bare status count to the refusal's own sentence. The
+# count went 1 -> 2 when a SECOND, unrelated 422 landed in this file (a failed
+# ACME order now answers with its reason instead of an incident id), and a count
+# alone could not tell the two apart — the arm's title claims it names the ISSUER,
+# so that is what it now reads. The count is kept beside it, because two is the
+# number that is correct and a third would be a question worth asking.
 eq "F10 the manual door refuses with a 4xx naming the issuer" \
-   "$(occ "$F_SSL" 'StatusCode::UNPROCESSABLE_ENTITY,')" "1"
+   "$(occ "$F_SSL" 'StatusCode::UNPROCESSABLE_ENTITY,&format!("Thecertificateon{}wasnotissuedbyDockPanel(issuer:{})')" "1"
+eq "F10b and this file holds exactly the two refusals that earn one" \
+   "$(occ "$F_SSL" 'StatusCode::UNPROCESSABLE_ENTITY,')" "2"
 # The operator has to LEARN about a declined renewal, or a protected certificate
 # and a forgotten one look identical from the panel. Counts the CALL, so deleting
 # the alert while keeping the `continue` — a silent skip, which is what a

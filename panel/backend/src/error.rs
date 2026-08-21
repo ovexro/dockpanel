@@ -60,6 +60,20 @@ pub const CODE_PAYLOAD_TOO_LARGE: &str = "payload_too_large";
 /// Longest agent-authored message passed through to a client.
 const MAX_AGENT_MSG: usize = 400;
 
+/// The label the agent puts on a certificate order that failed validation.
+///
+/// ⚠ The agent crate carries this same literal and cannot share a constant with
+/// this one — two crates, no common dependency. That makes it a severed pair by
+/// construction, so a pin compares the two spellings across both trees rather
+/// than trusting either alone; renaming it here and nowhere else silently
+/// returns every failed order to an incident id, with nothing red.
+const ACME_ORDER_FAILED_CODE: &str = "acme_order_failed";
+
+/// The renewal route's wrapper around the same failure, carried by every agent
+/// ever shipped. Recognising it is what lets an install nobody has updated get
+/// the honest answer today. Same severed-pair caveat, same pin.
+const RENEWAL_FAILURE_PREFIX: &str = "Renewal failed:";
+
 pub fn err(status: StatusCode, msg: &str) -> ApiError {
     (status, Json(serde_json::json!({ "error": msg })))
 }
@@ -96,6 +110,56 @@ fn agent_message(body: &str) -> String {
         format!("{truncated}…")
     } else {
         msg
+    }
+}
+
+/// The sentence an agent's failed ACME order should reach the operator as, or
+/// `None` when this failure is not one.
+///
+/// A certificate order that fails validation is the operator's to fix — the
+/// domain does not resolve here, or port 80 is shut, or a wildcard's apex lives
+/// somewhere else. It is the single most likely way an SSL button fails, and
+/// [`agent_error`] answers all of it with an incident id, because the agent
+/// reports it as a 500 and every 5xx is hidden by design. The rule is right;
+/// this case is the exception, and it has to be identified POSITIVELY rather
+/// than by widening the rule, because the same route answers 500 for a genuine
+/// internal fault (an unreadable ACME account) that an incident id describes
+/// correctly.
+///
+/// Two ways to be sure, and the order matters:
+///
+/// 1. The agent labels the order failure with a stable code. That is exact, and
+///    it works at every door.
+/// 2. Failing that, the renewal route's own wrapper text. This is the half that
+///    reaches installs NOBODY HAS UPDATED — an agent is only updated when
+///    somebody updates it, so a fix that lives only in the agent does not
+///    arrive, which is the whole reason the s386 Fix button was repaired
+///    panel-side. Provisioning has no such wrapper, so an older agent keeps its
+///    incident id there rather than being guessed at.
+///
+/// Anything else stays a 502 with a reference, which is what it is.
+pub fn acme_order_failure(e: &AgentError) -> Option<String> {
+    let AgentError::Status(code, body) = e else {
+        return None;
+    };
+    if !(500..600).contains(code) {
+        return None;
+    }
+    let labelled = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(String::from))
+        .is_some_and(|c| c == ACME_ORDER_FAILED_CODE);
+
+    let msg = agent_message(body);
+    if labelled || msg.starts_with(RENEWAL_FAILURE_PREFIX) {
+        Some(
+            msg.strip_prefix(RENEWAL_FAILURE_PREFIX)
+                .unwrap_or(&msg)
+                .trim()
+                .to_string(),
+        )
+    } else {
+        None
     }
 }
 
@@ -228,6 +292,80 @@ mod tests {
 
     fn body_of(e: &ApiError) -> serde_json::Value {
         e.1 .0.clone()
+    }
+
+    #[test]
+    fn a_failed_order_is_recognised_by_its_label() {
+        // ⚠ PROVISION-SHAPED: labelled, and NO renewal wrapper. The first version
+        // of this fixture carried both, so it passed on the legacy-prefix arm alone
+        // and the label test could have been deleted with everything still green.
+        // This is the busier door's real shape and the only thing that exercises it.
+        let e = AgentError::Status(
+            500,
+            r#"{"error":"The CA did not validate the challenge: no valid A record","code":"acme_order_failed"}"#.into(),
+        );
+        let reason = acme_order_failure(&e).expect("a labelled order failure");
+        assert_eq!(reason, "The CA did not validate the challenge: no valid A record");
+    }
+
+    #[test]
+    fn a_failed_order_is_recognised_on_an_agent_nobody_has_updated() {
+        // ⭐ THE HALF THAT ARRIVES. No label, because the agent predates it — the
+        // renewal route's own wording is the evidence, and this is the only reason
+        // an existing install stops answering a reference number today.
+        let e = AgentError::Status(
+            500,
+            r#"{"error":"Renewal failed: challenge did not validate"}"#.into(),
+        );
+        assert_eq!(
+            acme_order_failure(&e).as_deref(),
+            Some("challenge did not validate")
+        );
+    }
+
+    #[test]
+    fn an_internal_agent_fault_is_still_only_an_incident_id() {
+        // ⭐ THE ASSERTION THAT STOPS THE FIX OVERREACHING — and it deliberately
+        // uses a fault raised INSIDE the labelled call, not one raised before it.
+        // The first version of this test used the ACME account load, which happens
+        // above the labelled call and so could never have carried a label: it
+        // could not have failed however wrong the classification was. A full disk
+        // during the certificate write is the case that actually needs proving.
+        let e = AgentError::Status(
+            500,
+            r#"{"error":"Failed to write cert: No space left on device (os error 28)"}"#.into(),
+        );
+        assert!(acme_order_failure(&e).is_none());
+    }
+
+    #[test]
+    fn a_local_fault_on_the_renew_door_of_an_updated_agent_keeps_its_incident_id() {
+        // An agent new enough to label puts the renewal wrapper on local faults
+        // too, so the wrapper alone must not be enough when the label is absent
+        // AND the agent is known to label. It is — the fallback is deliberately
+        // wide, and this records what it costs: only an agent too old to label
+        // reaches it. Documented in acme_order_failure's own note.
+        let e = AgentError::Status(
+            500,
+            r#"{"error":"Renewal failed: Failed to write cert: No space left on device"}"#.into(),
+        );
+        assert!(acme_order_failure(&e).is_some());
+    }
+
+    #[test]
+    fn a_4xx_is_not_an_order_failure_even_if_it_says_so() {
+        // 4xx already passes through with its own status; taking it here would
+        // rewrite a 400 into a 422.
+        let e = AgentError::Status(
+            400,
+            r#"{"error":"Renewal failed: bad domain","code":"acme_order_failed"}"#.into(),
+        );
+        assert!(acme_order_failure(&e).is_none());
+    }
+
+    #[test]
+    fn a_transport_failure_is_not_an_order_failure() {
+        assert!(acme_order_failure(&AgentError::Connection("refused".into())).is_none());
     }
 
     #[test]

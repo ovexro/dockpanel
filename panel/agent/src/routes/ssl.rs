@@ -11,6 +11,33 @@ use super::{is_valid_domain, AppState};
 use crate::routes::nginx::SiteConfig;
 use crate::services::ssl;
 
+/// Split a certificate-issuance failure into "the CA said so" and "this machine
+/// broke", and label only the first.
+///
+/// Both come back from the same call as a 500, and the panel is right to hide a
+/// 500 behind an incident id — an operator can do nothing with an unwritable
+/// directory. But the commonest failure by far is the CA declining a challenge,
+/// and answering THAT with a reference number throws away the only sentence that
+/// would have helped. The label is how the panel tells them apart without
+/// widening its rule to the status.
+///
+/// The marker is applied at the arms where the CA actually spoke, so anything
+/// unmarked — including any arm added later — stays an internal fault. That is
+/// the safe default: a missing label costs a reference number, a wrong one sends
+/// somebody to check their DNS while their disk is full.
+fn ca_or_internal(e: String) -> (StatusCode, Json<serde_json::Value>) {
+    match e.strip_prefix(ssl::CA_DECLINED) {
+        Some(reason) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": reason, "code": "acme_order_failed" })),
+        ),
+        None => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        ),
+    }
+}
+
 #[derive(Deserialize)]
 struct ProvisionRequest {
     email: String,
@@ -54,14 +81,16 @@ async fn provision(
         profile: body.profile.as_deref(),
         replaces_pem: body.replaces_pem.as_deref(),
     };
+    // Only what the CA actually said is labelled. The panel hides every agent 5xx
+    // behind an incident id — correctly, because this route also fails for reasons
+    // an operator can do nothing about (the account load above, and a full disk or
+    // an unwritable directory inside the call below) — and the label is what lets
+    // it tell those apart WITHOUT widening that rule to the status.
+    // ⚠ The panel carries the same literal; they cannot share a constant across
+    // crates, so a pin compares both spellings.
     let cert_info = ssl::provision_cert(&account, &domain, Some(&opts))
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e })),
-            )
-        })?;
+        .map_err(|e| ca_or_internal(e))?;
 
     // 3. Rewrite nginx config with SSL enabled
     let site_config = SiteConfig {
@@ -311,10 +340,14 @@ async fn renew(
     })?
     .map_err(|e| {
         tracing::error!("renew failed for {domain}: {e}");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("Renewal failed: {e}") })),
-        )
+        let (status, mut body) = ca_or_internal(e);
+        // The wrapper every agent ever shipped puts on this route. A panel newer
+        // than its agent recognises renewals by it alone, so it has to stay.
+        if let Some(msg) = body.0.get("error").and_then(|m| m.as_str()) {
+            let wrapped = format!("Renewal failed: {msg}");
+            body.0["error"] = serde_json::json!(wrapped);
+        }
+        (status, body)
     })?;
 
     // Regenerate nginx config so any config changes since the original

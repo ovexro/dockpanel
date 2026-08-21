@@ -7,10 +7,58 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser, ServerScope};
-use crate::error::{internal_error, err, agent_error, ApiError};
+use crate::error::{acme_order_failure, internal_error, err, agent_error, ApiError};
 use crate::models::Site;
 use crate::AppState;
 use crate::services::activity;
+
+/// Answer a failed certificate order with the reason, and everything else the
+/// way it was answered before.
+///
+/// s386 gave the operator a sentence for a certificate this product must not
+/// touch. It left the commoner failure untouched: a domain that IS ours but
+/// cannot answer the challenge from this box — it points somewhere else, port 80
+/// is closed, the apex of a wildcard lives elsewhere — where the agent runs a
+/// real order, loses it, and the operator gets a reference number after two
+/// minutes of spinner. The reference described nothing; the agent had already
+/// said exactly what went wrong.
+///
+/// Both doors share this, and provisioning is the one that fires more often —
+/// the first certificate for a domain that was never pointed here at all. Fixing
+/// only the one the register named would have left the busier half saying
+/// nothing, and the two are one line apart.
+///
+/// A 422 rather than a 4xx passthrough because nothing about the REQUEST was
+/// malformed: the panel asked correctly and the world declined.
+fn acme_failure_or(
+    domain: &str,
+    context: &str,
+    e: crate::services::agent::AgentError,
+) -> ApiError {
+    if let Some(reason) = acme_order_failure(&e) {
+        tracing::warn!(domain = %domain, reason = %reason, "{context} was declined");
+        // ⚠ Says what happened and nothing about WHY. A newer agent only labels
+        // what the certificate authority itself said, but the compatibility path
+        // for an agent nobody has updated recognises a renewal by its wrapper
+        // alone, and that wrapper is put on local faults too. So this sentence has
+        // to be true when the CA declined a challenge, when it refused a rate-
+        // limited order, and when the agent's own disk filled up — which means it
+        // may not name a cause, and must never say "try again": on a rate limit
+        // that is the one instruction that makes it worse. The hint below is
+        // conditional for the same reason, and describes the commonest case
+        // without asserting it.
+        let reason = reason.trim_end_matches(['.', ' ']);
+        return err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!(
+                "A certificate for {domain} could not be issued: {reason}. If that is a \
+                 validation failure, check that {domain} resolves to this server and that \
+                 port 80 is reachable from the internet."
+            ),
+        );
+    }
+    agent_error(context, e)
+}
 
 /// After an SSL provision/renew, re-render the FULL nginx vhost from the site's
 /// current DB config. The agent's SSL provision/renew only renders a SUBSET
@@ -178,7 +226,7 @@ pub async fn provision(
     let result = agent
         .post(&agent_path, Some(agent_body))
         .await
-        .map_err(|e| agent_error("SSL provisioning", e))?;
+        .map_err(|e| acme_failure_or(&site.domain, "SSL provisioning", e))?;
 
     // Parse expiry from agent response
     let ssl_expiry = result
@@ -595,7 +643,7 @@ pub(crate) async fn renew_for_site(
     let result = agent
         .post_long(&agent_path, Some(agent_body), 120)
         .await
-        .map_err(|e| agent_error("SSL renewal", e))?;
+        .map_err(|e| acme_failure_or(&site.domain, "SSL renewal", e))?;
 
     // Update expiry from the renew response and clear stale ARI hints so
     // the next auto-heal cycle refetches them.

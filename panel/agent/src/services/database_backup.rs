@@ -19,6 +19,132 @@ fn backup_dir(db_name: &str) -> PathBuf {
     PathBuf::from(format!("{BACKUP_DIR}/{db_name}"))
 }
 
+/// Names this module will resolve to a directory under the dump root.
+///
+/// A destructive operation should not borrow its idea of a legal name from a
+/// general-purpose route validator in another module: that validator exists to
+/// keep shell arguments safe and can reasonably be widened for a reason that has
+/// nothing to do with this, and the blast radius here is a directory that gets
+/// removed. So the purge owns its charset, and the charset admits no dot at all —
+/// `.` and `..` cannot be SPELLED, rather than being spelled and then refused.
+///
+/// ⚠ Deliberately a SUPERSET of the shared validator, never a narrowing: same
+/// characters plus no rule about the first one, same length. A name that door
+/// accepts, this one accepts. Making it narrower is how a dump door quietly stops
+/// answering for some database nobody thought about — an imported one, most
+/// likely, since a migration does not go through the panel's own create form.
+pub fn is_db_dir_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Names this module MINTED, as opposed to names it merely accepts.
+///
+/// ⚠ The distinction is the whole safety of the purge, and the obvious predicate
+/// gets it wrong. The one guarding the import door is an EXTENSION test — it says
+/// whether a file can be read as a dump, which is exactly what an operator's
+/// hand-placed `dump.sql.gz` is designed to satisfy. Deleting on that basis would
+/// take the staged import the product's own screen tells them to put here, and
+/// the set of files it would take is a superset of the set it would keep.
+///
+/// So this asks the narrower question: does the name have the shape this module
+/// writes — the database's own name, a timestamp, and an extension it mints? A
+/// file the operator named survives, and the directory survives with it.
+fn is_minted_dump_name(db_name: &str, name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(&format!("{db_name}-")) else {
+        return false;
+    };
+    // `{db_name}-%Y%m%d-%H%M%S.<ext>` — 15 characters of timestamp, then the
+    // extension, optionally followed by the encryption suffix.
+    let Some((stamp, ext)) = rest.split_once('.') else {
+        return false;
+    };
+    let stamped = stamp.len() == 15
+        && stamp.as_bytes()[8] == b'-'
+        && stamp
+            .char_indices()
+            .all(|(i, c)| if i == 8 { c == '-' } else { c.is_ascii_digit() });
+    stamped && matches!(ext, "sql.gz" | "archive.gz" | "sql.gz.enc" | "archive.gz.enc")
+}
+
+/// Remove a database's dump directory, once nothing owns it any more.
+///
+/// Deleting a database has always taken its container and its rows and left the
+/// dumps behind — unreferenced, unreachable through any list, and counted by no
+/// retention policy, because retention only ever unlinks paths named by rows
+/// that still exist. They are simply there, and on a box that recycles
+/// database names they accumulate for the life of the machine.
+///
+/// ⛔ The caller decides WHETHER, not this function. A dump directory is keyed by
+/// database NAME alone while the name is unique only per site, so two live
+/// databases on two different sites share one directory — purging on the first
+/// delete would destroy the survivor's backups. That check needs the database,
+/// so it lives in the panel; what lives here is the refusal to do anything
+/// surprising once asked.
+///
+/// Deliberately not a recursive delete. It unlinks the files this module knows
+/// how to write and then removes the directory only if that emptied it, so a
+/// directory holding anything else — an operator's staged import, a file some
+/// future version writes — survives with its contents, and no future bug in the
+/// name guard can escalate into erasing a tree.
+pub async fn purge_dir(db_name: &str) -> Result<PurgeReport, String> {
+    if !is_db_dir_name(db_name) {
+        return Err("Invalid database name".into());
+    }
+    let dir = backup_dir(db_name);
+    if !dir.is_dir() {
+        return Ok(PurgeReport { removed: 0, kept: 0, dir_removed: false });
+    }
+
+    let mut removed = 0usize;
+    let mut kept = 0usize;
+    let mut entries = tokio::fs::read_dir(&dir)
+        .await
+        .map_err(|e| format!("Failed to read dump directory: {e}"))?;
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| format!("Failed to walk dump directory: {e}"))?
+    {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if entry.file_type().await.map(|t| t.is_file()).unwrap_or(false)
+            && is_minted_dump_name(db_name, &name)
+        {
+            match tokio::fs::remove_file(entry.path()).await {
+                Ok(()) => removed += 1,
+                Err(e) => {
+                    tracing::warn!("Could not remove dump {name}: {e}");
+                    kept += 1;
+                }
+            }
+        } else {
+            kept += 1;
+        }
+    }
+
+    let dir_removed = if kept == 0 {
+        tokio::fs::remove_dir(&dir).await.is_ok()
+    } else {
+        tracing::info!(
+            "Dump directory for {db_name} keeps {kept} item(s) this purge does not own; \
+             leaving the directory in place"
+        );
+        false
+    };
+
+    Ok(PurgeReport { removed, kept, dir_removed })
+}
+
+/// What a purge actually did, so the panel can log something true about it.
+pub struct PurgeReport {
+    pub removed: usize,
+    pub kept: usize,
+    pub dir_removed: bool,
+}
+
 /// Validate container/db/user names to prevent argument injection.
 /// These must be alphanumeric + underscore/hyphen only.
 fn is_safe_db_identifier(name: &str) -> bool {
@@ -729,6 +855,85 @@ pub fn get_backup_path(db_name: &str, filename: &str) -> Result<String, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_what_the_certificate_authority_said_is_marked() {
+        use crate::services::ssl::CA_DECLINED;
+        // ⭐ The classification the panel's 422 rests on. A CA refusal carries the
+        // marker; a fault on this machine's own disk does not, and so keeps the
+        // reference number the operator cannot act on anyway.
+        let ca = format!("{CA_DECLINED}The CA did not validate the challenge: timeout");
+        assert!(ca.strip_prefix(CA_DECLINED).is_some());
+        let local = "Failed to write cert: No space left on device (os error 28)".to_string();
+        assert!(local.strip_prefix(CA_DECLINED).is_none());
+    }
+
+    #[test]
+    fn dump_dir_name_never_refuses_what_the_shared_validator_accepts() {
+        // ⭐ THE PROPERTY THAT MATTERS: superset, never narrower. The purge owning
+        // its charset is only safe if no name loses a door by the swap — and the
+        // length cap is where that nearly went wrong, since the two differed by
+        // one and nothing in a database IMPORT applies the create form's limit.
+        for n in ["wp_main", "db-legacy", "a", &"x".repeat(64)] {
+            assert!(
+                is_db_dir_name(n),
+                "{n} is accepted by the shared validator and must not lose a door"
+            );
+        }
+        assert!(is_db_dir_name("_wp"), "no rule about the first character");
+    }
+
+    #[test]
+    fn dump_dir_name_cannot_spell_a_traversal_at_all() {
+        // Not "blocks traversal" — cannot express it. A purge resolves this name
+        // to a directory it then removes, so the charset admitting no dot and no
+        // separator is the property that matters, not a list of refusals.
+        assert!(!is_db_dir_name("."));
+        assert!(!is_db_dir_name(".."));
+        assert!(!is_db_dir_name("../etc"));
+        assert!(!is_db_dir_name("a/b"));
+        assert!(!is_db_dir_name("a.b"));
+        assert!(!is_db_dir_name(""));
+        assert!(!is_db_dir_name(&"x".repeat(65)));
+        assert!(is_db_dir_name(&"x".repeat(64)));
+    }
+
+    #[test]
+    fn a_purge_takes_only_the_dumps_this_module_minted() {
+        // ⭐ THE ASSERTION THAT KEEPS THE PROMISE. The product's own screen tells
+        // operators to place an import here by hand, and the extension test that
+        // guards the import door would have called that file a dump and deleted
+        // it — the exact opposite of what the purge documents about itself.
+        assert!(is_minted_dump_name("wp", "wp-20260821-140302.sql.gz"));
+        assert!(is_minted_dump_name("wp", "wp-20260821-140302.sql.gz.enc"));
+        assert!(is_minted_dump_name("wp", "wp-20260821-140302.archive.gz"));
+        // Hand-placed, and every one of these passes the import door's test.
+        assert!(!is_minted_dump_name("wp", "dump.sql.gz"));
+        assert!(!is_minted_dump_name("wp", "wp.sql.gz"));
+        assert!(!is_minted_dump_name("wp", "wp-before-upgrade.sql.gz"));
+        assert!(!is_minted_dump_name("wp", "wp-2026.sql.gz"));
+        // Another database's dump never belongs to this one's purge.
+        assert!(!is_minted_dump_name("wp", "other-20260821-140302.sql.gz"));
+        // A minted stem with an extension we do not write is not ours either.
+        assert!(!is_minted_dump_name("wp", "wp-20260821-140302.tar"));
+    }
+
+    #[tokio::test]
+    async fn purge_refuses_a_name_it_cannot_validate() {
+        // The dot is the one that matters: the older identifier check in this very
+        // file accepts it, and resolving it would name the dump root itself.
+        assert!(purge_dir(".").await.is_err());
+        assert!(purge_dir("..").await.is_err());
+        assert!(purge_dir("a/b").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn purge_of_an_absent_directory_is_a_quiet_success() {
+        // Deleting a database that never had a dump must not fail the delete.
+        let r = purge_dir("nosuchdatabase_forpurgetest").await.expect("no error");
+        assert_eq!(r.removed, 0);
+        assert!(!r.dir_removed);
+    }
 
     #[test]
     fn safe_db_identifier_rejects_traversal() {

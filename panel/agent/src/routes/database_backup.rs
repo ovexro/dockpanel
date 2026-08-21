@@ -37,7 +37,12 @@ pub struct RestoreRequest {
 async fn dump(
     Json(req): Json<DumpRequest>,
 ) -> Result<Json<BackupInfo>, ApiErr> {
-    if !is_valid_name(&req.db_name) {
+    // The dump-directory predicate, shared with every other door onto that
+    // directory so one module decides what a dump directory may be called. It is a
+    // superset of the generic validator, so nothing this door used to accept is
+    // refused now. The container and user names below keep the generic validator:
+    // different populations, both derived by the panel, neither naming a directory.
+    if !database_backup::is_db_dir_name(&req.db_name) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid database name"));
     }
     if !is_valid_name(&req.container_name) {
@@ -91,7 +96,7 @@ async fn dump(
 async fn list(
     Path(db_name): Path<String>,
 ) -> Result<Json<Vec<BackupInfo>>, ApiErr> {
-    if !is_valid_name(&db_name) {
+    if !database_backup::is_db_dir_name(&db_name) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid database name"));
     }
 
@@ -104,7 +109,7 @@ async fn list(
 async fn remove(
     Path((db_name, filename)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    if !is_valid_name(&db_name) {
+    if !database_backup::is_db_dir_name(&db_name) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid database name"));
     }
 
@@ -118,7 +123,7 @@ async fn restore(
     Path((db_name, filename)): Path<(String, String)>,
     Json(req): Json<RestoreRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    if !is_valid_name(&db_name) {
+    if !database_backup::is_db_dir_name(&db_name) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid database name"));
     }
     if !is_valid_name(&req.container_name) {
@@ -195,7 +200,7 @@ async fn restore(
 async fn get_path(
     Path((db_name, filename)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    if !is_valid_name(&db_name) {
+    if !database_backup::is_db_dir_name(&db_name) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid database name"));
     }
 
@@ -204,9 +209,32 @@ async fn get_path(
     Ok(Json(serde_json::json!({ "path": path })))
 }
 
+/// DELETE /db-backups/{db_name} — drop a dump directory nothing owns any more.
+///
+/// Whether it is unowned is the PANEL's question: the name is unique only per
+/// site, so the same directory can serve two live databases. This end answers
+/// only for what it did.
+async fn purge(Path(db_name): Path<String>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !database_backup::is_db_dir_name(&db_name) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid database name"));
+    }
+    let report = database_backup::purge_dir(&db_name)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+    Ok(Json(serde_json::json!({
+        "removed": report.removed,
+        "kept": report.kept,
+        "dir_removed": report.dir_removed,
+    })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/db-backups/dump", post(dump))
+        // ⚠ Both verbs on the STATIC path. A static segment wins the match outright,
+        // so registering the purge only on the parameter path leaves `DELETE
+        // /db-backups/dump` answering 405 — and `dump` is a legal database name.
+        .route("/db-backups/dump", post(dump).delete(purge))
+        .route("/db-backups/{db_name}", delete(purge))
         .route("/db-backups/{db_name}/list", get(list))
         .route("/db-backups/{db_name}/{filename}", delete(remove))
         .route("/db-backups/{db_name}/{filename}/path", get(get_path))

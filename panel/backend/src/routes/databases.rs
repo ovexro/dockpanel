@@ -371,6 +371,49 @@ pub async fn remove(
          WHERE user_id = (SELECT reseller_id FROM users WHERE id = $1 AND reseller_id IS NOT NULL)"
     ).bind(claims.sub).execute(&state.db).await;
 
+    // Take the dumps with it — but only once nothing else is using them.
+    //
+    // The dump directory is named for the DATABASE and nothing else, while the
+    // name is unique only per SITE, so two live databases belonging to two
+    // different sites on this host share one directory. Purging on the first
+    // delete would take the survivor's backups with it, which is a worse failure
+    // than the leak being closed and would be discovered at a restore.
+    //
+    // ⚠ A row whose site names no server is counted as possibly-here rather than
+    // elsewhere. It cannot be acted on through the panel — the agent lookup above
+    // refuses it — but its dumps, if any, are on some host, and this host is one
+    // of the candidates. Doubt keeps the files; only positive evidence that
+    // nothing else claims the name removes them. The reverse default trades a
+    // disclosed leak for silent data loss.
+    let shared: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM databases d JOIN sites s ON s.id = d.site_id \
+         WHERE d.name = $1 AND (s.server_id = $2 OR s.server_id IS NULL))",
+    )
+    .bind(&name)
+    .bind(site_server_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(true);
+
+    if shared {
+        tracing::info!(
+            "Keeping the dump directory for {name}: another database on this server still uses that name"
+        );
+    } else {
+        match agent.delete(&format!("/db-backups/{name}")).await {
+            Ok(v) => tracing::info!(
+                "Purged dump directory for {name}: {} file(s) removed, {} kept, directory removed: {}",
+                v.get("removed").and_then(|x| x.as_u64()).unwrap_or(0),
+                v.get("kept").and_then(|x| x.as_u64()).unwrap_or(0),
+                v.get("dir_removed").and_then(|x| x.as_bool()).unwrap_or(false),
+            ),
+            // Best-effort on purpose: the database IS deleted by now, and failing
+            // the request over leftover files would report a destructive operation
+            // that succeeded as though it had not.
+            Err(e) => tracing::warn!("Could not purge dump directory for {name}: {e}"),
+        }
+    }
+
     tracing::info!("Database deleted: {name}");
 
     Ok(Json(serde_json::json!({ "ok": true, "name": name })))
@@ -1050,9 +1093,11 @@ pub async fn reset_password(
 /// backup already moves through this product that way.
 ///
 /// ⛔ ADMIN ONLY, and this is a security boundary rather than a tidiness rule. The
-/// directory is keyed by DATABASE NAME, and a name is reusable: deleting a database
-/// removes its container and CASCADE-deletes its `database_backups` rows, but nothing
-/// removes the dumps on disk, and `databases.name` is unique only per SITE (the global
+/// directory is keyed by DATABASE NAME, and a name is reusable. Deleting a database now
+/// also purges that directory — but only when no surviving row on the same host still
+/// answers to the name, so the door below still has to assume leftovers exist: dumps
+/// written before this behaviour shipped are still there, and a shared name keeps them
+/// deliberately. `databases.name` is unique only per SITE (the global
 /// constraint was dropped in `20260312000000_data_integrity.sql`). So a tenant who
 /// creates a database with a name a previous tenant used would, under a
 /// tenant-reachable listing, see and be able to import that tenant's leftover dumps —

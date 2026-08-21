@@ -4,6 +4,72 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.140.0]
+
+### Fixed — an SSL certificate that could not be issued said only "Operation failed"
+
+The likeliest way a certificate request fails is the simplest: the domain does not
+point at this server yet, or port 80 is not reachable, or a wildcard's apex lives
+somewhere else. Let's Encrypt declines, the agent says exactly why — and the panel
+replaced that sentence with `Operation failed. Reference: <uuid>` after up to two
+minutes of spinner, because it hides every internal agent error behind a reference
+number.
+
+That rule is right, and the reason it was right is why this took care to fix: the
+same request answers the same way when the agent itself breaks — a full disk while
+writing the certificate, say — and an operator can do nothing useful with *that*.
+
+So the agent now marks the failures the certificate authority actually produced,
+and only those are answered with their reason. Anything unmarked, including any
+failure added in future, keeps its reference number. The message names what
+happened without asserting why, and never tells you to try again — on a
+rate-limited order that is the one instruction that makes it worse.
+
+Both HTTP-01 doors were fixed, not just the one the symptom was reported against:
+**provisioning** a first certificate fails this way more often than **renewing**
+one, since a domain that was never pointed here has never had a certificate to
+renew. Wildcard certificates, which are issued over DNS-01, still answer with a
+reference number — their useful advice is about Cloudflare token scope and TXT
+propagation rather than port 80, so they need their own message and will get it
+separately.
+
+### Fixed — deleting a database left its dumps on disk for ever
+
+Removing a database took its container and its records and left every dump behind:
+invisible to the backup list, ignored by every retention policy (those only remove
+files still named by a surviving record), and never cleaned up by anything. On a
+server that reuses database names they accumulated for the life of the machine.
+
+Deletion now removes the dump directory too — but only when no other database on
+that server still answers to the same name. Database names are unique per site
+rather than per server, so two sites can legitimately share one dump directory,
+and taking it on the first deletion would have destroyed the other site's backups.
+Where that is in any doubt, the files are kept.
+
+The purge removes the dump files it recognises and then the directory, only if
+that emptied it. A directory holding anything else — a dump you placed there
+yourself to import — keeps its contents.
+
+### Fixed — long operations on remote servers ignored their own concurrency limit
+
+DockPanel keeps a small pool for slow work (builds, imports, restores) so it
+cannot crowd out ordinary requests. On any server other than the panel's own, three
+kinds of long operation took the *ordinary* pool instead, so the limit applied to
+one machine in the fleet and no others.
+
+Related: the wait for a free slot was not counted against the operation's own time
+budget. A restore allows itself less time than the server allows the request, so
+that the panel is the one to stop waiting and can explain why — and time spent
+queueing was pushing past the server's limit instead, producing an empty gateway
+timeout. Queueing is now part of the budget, and an operation that never got a
+slot says so rather than reporting that it ran and overran.
+
+### Fixed — an uploaded certificate inherited the previous one's renewal settings
+
+Installing your own certificate left behind the ACME profile describing the
+certificate DockPanel used to issue for that site, and both renewal paths went on
+applying it. It is now cleared, so any future renewal decides for itself.
+
 ## [2.139.1]
 
 ### Fixed — a certificate DockPanel deliberately left alone was reported as a failure
