@@ -1043,6 +1043,45 @@ fn strip_zero_offset_seconds(s: &str) -> Option<String> {
     }
 }
 
+/// The issuer of the certificate installed for `domain`, but ONLY when that
+/// issuer proves DockPanel did not put it there.
+///
+/// The agent's ACME client is pinned to `LetsEncrypt::Production`
+/// (`panel/agent/src/services/ssl.rs`, the only directory URL in the crate), so
+/// every certificate this product issues carries a Let's Encrypt issuer. A
+/// certificate issued by anyone else therefore came from somewhere else — an
+/// operator upload, a corporate PKI, a Cloudflare Origin CA, a commercial OV or
+/// wildcard purchase. That is a PROOF, not a heuristic, and it is what lets the
+/// renewal paths tell "ours to renew" from "someone else's to protect" without a
+/// provenance column, a migration, or a backfill that could only guess.
+///
+/// ⚠ Returns `None` for "we do not know" as well as for "ours" — a missing
+/// agent, an unreadable certificate, an issuer field the parser could not
+/// produce. Every caller must treat `None` as PERMISSION TO PROCEED, because the
+/// alternative is refusing to renew a real Let's Encrypt certificate because a
+/// socket flapped, and that ends in an expired certificate and a dark site. We
+/// act only on a positive identification.
+pub async fn foreign_cert_issuer(
+    agent: &crate::services::agent::AgentHandle,
+    domain: &str,
+) -> Option<String> {
+    let status = agent.get(&format!("/ssl/status/{domain}")).await.ok()?;
+    if !status.get("has_cert").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return None;
+    }
+    let issuer = status.get("issuer").and_then(|v| v.as_str())?.trim();
+    if issuer.is_empty() {
+        return None;
+    }
+    let lowered = issuer.to_ascii_lowercase();
+    // Both spellings: the apostrophe is a typographic hazard, not a fact about
+    // the CA, and an issuer string that lost it must not read as foreign.
+    if lowered.contains("let's encrypt") || lowered.contains("lets encrypt") {
+        return None;
+    }
+    Some(issuer.to_string())
+}
+
 pub fn parse_agent_cert_expiry(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     let s = raw.trim();
     if s.is_empty() {

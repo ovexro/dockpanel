@@ -997,12 +997,21 @@ pub async fn create(
 
                         let encrypted_db_password = crate::services::secrets_crypto::encrypt_credential(&db_password, &cms_jwt_secret)
                             .unwrap_or_else(|_| db_password.clone());
+                        // The site id is already in hand — this used to resolve it
+                        // again from the domain, and `sites.domain` is unique only
+                        // per server (`idx_sites_domain_server`). On a fleet holding
+                        // the same domain twice the subquery could attach this
+                        // database — credentials included — to the OTHER host's site
+                        // row, i.e. to a different owner's account. If it matched no
+                        // row at all the NOT NULL insert simply failed into the
+                        // `let _`, leaving a running container with no row: an
+                        // orphan the retention sweep can never see.
                         let _ = sqlx::query(
                             "INSERT INTO databases (site_id, engine, name, db_user, db_password_enc, container_id, port) \
-                             VALUES ((SELECT id FROM sites WHERE domain = $1), 'mysql', $2, $3, $4, $5, $6) \
+                             VALUES ($1, 'mysql', $2, $3, $4, $5, $6) \
                              ON CONFLICT DO NOTHING",
                         )
-                        .bind(&cms_domain)
+                        .bind(site_id)
                         .bind(&db_name)
                         .bind(&db_user_name)
                         .bind(&encrypted_db_password)
@@ -2792,13 +2801,68 @@ pub async fn upload_ssl(
     let mut agent_body = body.clone();
     agent_body["domain"] = serde_json::json!(domain);
 
-    agent.post("/ssl/upload", Some(agent_body)).await
+    let uploaded = agent.post("/ssl/upload", Some(agent_body)).await
         .map_err(|e| agent_error("SSL upload", e))?;
 
-    // Update DB
-    if let Err(e) = sqlx::query("UPDATE sites SET ssl_enabled = true, updated_at = NOW() WHERE id = $1")
-        .bind(id).execute(&state.db).await {
-        tracing::warn!("Failed to update ssl_enabled for site {id}: {e}");
+    // Record WHAT was installed, not merely THAT something was.
+    //
+    // This wrote `ssl_enabled = true` and nothing else, while the ACME path
+    // (`provision`, above) writes `ssl_cert_path`, `ssl_key_path` and
+    // `ssl_expiry` in one statement. The three columns it skipped are the only
+    // ones anything downstream reads, and every one of those readers filters on
+    // `ssl_expiry IS NOT NULL`: the Dashboard SSL tile, `alert_engine`'s
+    // `check_ssl_expiry` ladder, and `auto_healer::auto_renew_ssl`. So an
+    // operator-supplied certificate was invisible to the countdown, to the
+    // pager and to the healer alike — and the certificate list, which reads
+    // the same NULL, called it OK. An uploaded certificate is precisely the
+    // kind nobody renews for you; it was the one class the panel watched least.
+    //
+    // The agent hands back the paths it wrote. The expiry needs one more
+    // question, asked of the route every agent has carried since the beginning
+    // rather than of a new field only a fresh agent would return — this fix has
+    // to reach installs whose agent nobody has updated.
+    let cert_path = uploaded.get("cert_path").and_then(|v| v.as_str()).map(str::to_string);
+    let key_path = uploaded.get("key_path").and_then(|v| v.as_str()).map(str::to_string);
+    // Prefer the expiry the upload itself reported: it describes the certificate
+    // that was just written, needs no second round trip, and cannot fail
+    // separately from the write it belongs to. The `/ssl/status` call behind it is
+    // the compatibility path for an agent older than this release — every agent
+    // has carried that route since the beginning, so the fix reaches installs
+    // nobody has updated.
+    let expiry = uploaded
+        .get("expiry")
+        .and_then(|v| v.as_str())
+        .and_then(crate::helpers::parse_agent_cert_expiry);
+    let expiry = match expiry {
+        Some(e) => Some(e),
+        None => match agent.get(&format!("/ssl/status/{domain}")).await {
+            Ok(status) => status
+                .get("not_after")
+                .and_then(|v| v.as_str())
+                .and_then(crate::helpers::parse_agent_cert_expiry),
+            Err(e) => {
+                tracing::warn!("Uploaded certificate for {domain} is installed, but its expiry could not be read back: {e}");
+                None
+            }
+        },
+    };
+    if expiry.is_none() {
+        tracing::warn!("Uploaded certificate for {domain} stored with no new expiry — the previous value is kept rather than cleared, so the site stays visible to the expiry ladder and the auto-healer");
+    }
+
+    if let Err(e) = sqlx::query(
+        "UPDATE sites SET ssl_enabled = true, ssl_cert_path = COALESCE($1, ssl_cert_path), \
+         ssl_key_path = COALESCE($2, ssl_key_path), ssl_expiry = COALESCE($3, ssl_expiry), \
+         ssl_renewal_at = NULL, ssl_renewal_checked_at = NULL, updated_at = NOW() WHERE id = $4",
+    )
+        .bind(cert_path.as_deref())
+        .bind(key_path.as_deref())
+        .bind(expiry)
+        .bind(id)
+        .execute(&state.db)
+        .await
+    {
+        tracing::warn!("Failed to record uploaded certificate for site {id}: {e}");
     }
 
     // Re-render the FULL vhost from the site's DB config — the same compensation

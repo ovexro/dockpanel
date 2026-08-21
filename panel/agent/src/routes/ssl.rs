@@ -111,6 +111,16 @@ async fn provision(
     })))
 }
 
+/// GET /ssl/certificates — Every certificate on this host.
+///
+/// Unauthenticated in the same sense every agent route is: the agent listens on
+/// the panel's private channel. It returns expiry metadata only — no key
+/// material, no paths — so it says nothing an operator reading the box could not
+/// already see.
+async fn list_certificates() -> Json<Vec<ssl::CertStatus>> {
+    Json(ssl::list_cert_status().await)
+}
+
 /// GET /ssl/status/{domain} — Get SSL certificate status.
 async fn status(
     Path(domain): Path<String>,
@@ -221,11 +231,20 @@ async fn upload_cert(
             Json(serde_json::json!({ "error": format!("Failed to enable SSL: {e}") })),
         ))?;
 
+    // Hand back the expiry of the certificate just written. The panel records it
+    // so an uploaded certificate is visible to the countdown, the expiry ladder
+    // and the auto-healer; without it the panel has to ask again in a second
+    // round trip that can fail on its own, and a failed read there used to leave
+    // the column NULL — invisible to all three.
+    let status = ssl::get_cert_status(&body.domain).await;
+
     tracing::info!("Custom SSL certificate uploaded for {}", body.domain);
     Ok(Json(serde_json::json!({
         "ok": true,
         "cert_path": cert_path,
         "key_path": key_path,
+        "expiry": status.not_after,
+        "issuer": status.issuer,
         "canonical_url": canonical,
     })))
 }
@@ -556,6 +575,12 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/ssl/provision/{domain}", post(provision))
         .route("/ssl/provision-dns01/{domain}", post(provision_dns01))
+        // Registered BEFORE the `{domain}` routes it shares a prefix with, and
+        // named `certificates` rather than a bare `/ssl` for the same reason the
+        // db-backups router pins `/db-backups/dump` above `{db_name}`: a static
+        // segment that could also be read as a parameter is a collision waiting
+        // for a domain with that name.
+        .route("/ssl/certificates", get(list_certificates))
         .route("/ssl/status/{domain}", get(status))
         .route("/ssl/profiles", get(profiles))
         .route("/ssl/{domain}/renewal-info", get(renewal_info))

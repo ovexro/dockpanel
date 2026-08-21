@@ -506,6 +506,25 @@ pub async fn renew(
         .map_err(|e| internal_error("ssl renew", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
 
+    renew_for_site(&state, &site, claims.sub, &claims.email).await
+}
+
+/// Renew the certificate for a site the caller has ALREADY been authorised to reach.
+///
+/// Split out of `renew` so the Diagnostics "Fix" button can reach a renewal that
+/// actually happens, instead of an agent arm that does not exist. It takes a
+/// [`Site`] the caller resolved through `SITE_CALLER_PREDICATE`, so the
+/// authorisation decision stays with the row and stays in ONE place: reuse
+/// carries the mechanism, never the gate, and this project shipped that exact
+/// mistake once already on the database-import door.
+pub(crate) async fn renew_for_site(
+    state: &AppState,
+    site: &Site,
+    actor_id: Uuid,
+    actor_email: &str,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let id = site.id;
+
     if !site.ssl_enabled {
         return Err(err(StatusCode::BAD_REQUEST, "SSL is not enabled for this site"));
     }
@@ -514,7 +533,35 @@ pub async fn renew(
     // whichever host this handle points at. The row names that host; the caller's
     // selection only ever named the one they were looking at.
     let agent =
-        crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
+        crate::helpers::agent_for_site_server(state, site.server_id, &site.domain).await?;
+
+    // ⛔ RENEWING IS REPLACING. `provision_cert` writes the same
+    // `fullchain.pem`/`privkey.pem` an uploaded certificate occupies, so "renew"
+    // aimed at a certificate this product did not issue does not refresh it — it
+    // DESTROYS it and puts a 90-day Let's Encrypt certificate in its place. For a
+    // commercial wildcard, a Cloudflare Origin CA certificate or a corporate PKI
+    // certificate that is a paid asset replaced without consent, and for a domain
+    // that cannot answer HTTP-01 from this box it is worse: the order fails and
+    // the operator is left with neither.
+    //
+    // So the question is asked once, here, where every deliberate renewal passes:
+    // the admin Renew button, and the Diagnostics Fix button that reaches this
+    // same function. A positive foreign issuer is a refusal WITH A SENTENCE —
+    // which is the whole point of the exercise, since the alternative outcome for
+    // exactly this case was `Operation failed. Reference: {uuid}` after a wasted
+    // ACME order.
+    if let Some(issuer) = crate::helpers::foreign_cert_issuer(&agent, &site.domain).await {
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!(
+                "The certificate on {} was not issued by DockPanel (issuer: {}). DockPanel \
+                 renews only the Let's Encrypt certificates it issued itself, and renewing \
+                 this one would replace it. Install a replacement under the site's SSL tab \
+                 instead, or renew it wherever it was issued.",
+                site.domain, issuer
+            ),
+        ));
+    }
 
     // Agent renew now needs the same context as provision so it can rebuild
     // the nginx config after issuing the new cert.
@@ -565,11 +612,11 @@ pub async fn renew(
         }
     }
 
-    rebuild_vhost_after_ssl(&state, &agent, id).await;
+    rebuild_vhost_after_ssl(state, &agent, id).await;
 
-    tracing::info!("SSL renewed for {} by {}", site.domain, claims.email);
+    tracing::info!("SSL renewed for {} by {}", site.domain, actor_email);
     activity::log_activity(
-        &state.db, claims.sub, &claims.email, "ssl.renew",
+        &state.db, actor_id, actor_email, "ssl.renew",
         Some("site"), Some(&site.domain), None, None,
     ).await;
 

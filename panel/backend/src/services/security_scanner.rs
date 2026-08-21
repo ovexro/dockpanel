@@ -208,7 +208,7 @@ async fn run_scan(pool: &PgPool, member: &FleetMember) {
 
     // Auto-fix safe findings (non-destructive only)
     if let Some(findings) = findings {
-        auto_fix_safe_findings(pool, agent, findings).await;
+        auto_fix_safe_findings(pool, member, findings).await;
     }
 
     // Keep only last 90 days of scans
@@ -282,9 +282,10 @@ async fn ssl_renewal_alert(
 /// Never auto-fixes malware, open ports, or config changes that could break things.
 async fn auto_fix_safe_findings(
     pool: &PgPool,
-    agent: &crate::services::agent::AgentHandle,
+    member: &FleetMember,
     findings: &[serde_json::Value],
 ) {
+    let agent = &member.agent;
     for f in findings {
         let check_type = f["check_type"].as_str().unwrap_or("");
         match check_type {
@@ -297,7 +298,22 @@ async fn auto_fix_safe_findings(
                     continue;
                 }
 
-                // Look up site details from DB (same pattern as auto_healer)
+                // Look up site details from DB, ON THE HOST THAT RAISED THE FINDING.
+                //
+                // ⚠ This read used to be `WHERE s.domain = $1` alone, and the
+                // hazard is spelled out 130 lines below on the vhost read: a
+                // domain is unique only per server (`idx_sites_domain_server`,
+                // migration `20260319000000_multi_server.sql:84`), so a lookup
+                // on the name alone can hand back another host's row. That
+                // comment was written about the SECOND read while the FIRST one
+                // — the read that produces the very `site_id` it then trusts —
+                // still had the defect. `fetch_optional` takes whichever row the
+                // planner returns first, so on a fleet carrying the same domain
+                // twice this renewed with the other host's runtime/root/php
+                // config, wrote the new expiry onto the other host's row (so the
+                // certificate that was actually renewed kept counting down), and
+                // pushed that host's full vhost through THIS host's agent.
+                // Unattended, on the scan loop's own schedule.
                 let site: Option<(
                     uuid::Uuid,
                     String,
@@ -307,9 +323,10 @@ async fn auto_fix_safe_findings(
                     uuid::Uuid,
                 )> = sqlx::query_as(
                     "SELECT s.id, s.runtime, s.proxy_port, s.php_version, s.root_path, s.user_id \
-                     FROM sites s WHERE s.domain = $1 AND s.ssl_enabled = TRUE",
+                     FROM sites s WHERE s.domain = $1 AND s.server_id = $2 AND s.ssl_enabled = TRUE",
                 )
                 .bind(domain)
+                .bind(member.id)
                 .fetch_optional(pool)
                 .await
                 .unwrap_or(None);
@@ -354,6 +371,48 @@ async fn auto_fix_safe_findings(
                         continue;
                     }
                 };
+
+                // ⛔ DO NOT REPLACE A CERTIFICATE THIS PRODUCT DID NOT ISSUE.
+                //
+                // This is the ONLY automatic renewal on a stock install and it is
+                // reached with no opt-in at all, so what it does unattended is what
+                // the product does by default. What it did was a full ACME order
+                // writing the same `fullchain.pem` an uploaded certificate occupies:
+                // the finding it acts on comes from the AGENT walking
+                // `/etc/dockpanel/ssl` with `openssl -checkend`, which never looks at
+                // the issuer and never consults the database — so a commercial
+                // wildcard, a Cloudflare Origin CA certificate or a corporate PKI
+                // certificate uploaded through the panel's own "upload certificate"
+                // control was silently destroyed roughly a month before it expired,
+                // every week, on every install. The operator's evidence was a working
+                // site that had quietly stopped presenting the certificate they paid
+                // for.
+                //
+                // `None` means "not proven foreign" — an unreachable agent, an
+                // unreadable certificate — and MUST still renew. Refusing on doubt
+                // would let a genuine Let's Encrypt certificate lapse, which is the
+                // failure this loop exists to prevent.
+                if let Some(issuer) =
+                    crate::helpers::foreign_cert_issuer(agent, domain).await
+                {
+                    tracing::info!(
+                        "Auto-fix: NOT renewing {domain} — the installed certificate was \
+                         issued by {issuer}, not by DockPanel. Renewing would replace it."
+                    );
+                    ssl_renewal_alert(
+                        pool,
+                        user_id,
+                        site_id,
+                        domain,
+                        &format!(
+                            "the installed certificate was issued by {issuer}, not by DockPanel. \
+                             DockPanel will not replace it — renew it wherever it was issued, or \
+                             upload the replacement under the site's SSL tab"
+                        ),
+                    )
+                    .await;
+                    continue;
+                }
 
                 tracing::info!("Auto-fix: renewing expiring SSL certificate for {domain}");
 

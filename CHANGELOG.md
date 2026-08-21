@@ -4,6 +4,100 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.139.0]
+
+### Fixed — a renewal is a replacement, and nothing was checking whose certificate it was
+
+If you uploaded your own certificate — a commercial wildcard, a Cloudflare Origin
+CA certificate, anything from a corporate PKI — DockPanel was quietly destroying
+it, roughly a month before it expired, on a weekly schedule, on a default
+install.
+
+The weekly security scan asks the agent what it found. The agent walks
+`/etc/dockpanel/ssl` and runs `openssl x509 -checkend`, which reads a date and
+nothing else: not the issuer, not the database. Anything expiring within 30 days
+came back as "SSL certificate expiring", and the panel's auto-fix answered by
+placing a fresh Let's Encrypt order and writing it to the same `fullchain.pem`
+your certificate occupied. The site kept working, so nothing looked wrong — it
+had simply stopped presenting the certificate you paid for. Where the domain
+could not answer an HTTP-01 challenge from that box, the order failed instead and
+you were left with neither.
+
+The panel's ACME client can only ever produce a Let's Encrypt certificate, so an
+issuer that is not Let's Encrypt is proof DockPanel did not issue it. Every path
+that can overwrite a certificate now asks that question first — the weekly
+scanner, the auto-healer, and the two buttons — and a certificate that is not
+ours is left alone, with the reason recorded as an alert rather than a log line.
+When the issuer cannot be read at all the renewal still goes ahead: refusing on
+doubt would let a real certificate lapse, which is the failure the loop exists to
+prevent.
+
+### Fixed — the automatic renewal could renew the wrong machine's site
+
+On a fleet, `sites.domain` is unique per server, not globally — the same domain
+may legitimately exist on two members. The scanner's auto-fix resolved the site
+by domain alone, so it could pick up a different host's row: renew using that
+host's runtime, document root and PHP version, write the new expiry onto that
+host's record, and push that host's full nginx configuration through this host's
+agent. Unattended, on the scan loop's own schedule. This is the only automatic
+renewal on a default install, since auto-healing ships off.
+
+The same shape is fixed in one-click provisioning, where a newly created database
+— credentials included — was attached to whichever site row matched the domain
+first, rather than to the site that had just been created.
+
+### Fixed — the SSL "Fix" button could only fail
+
+Diagnostics offered a **Fix** button on every certificate inside 30 days. The
+agent has no arm for that fix and never could: renewing needs the site's runtime,
+document root, PHP version and ACME contact, all of which live in the panel's
+database, and the agent has no database. So every click returned
+`Operation failed. Reference: {uuid}` — indistinguishable from a transient fault,
+which invites a retry — and wrote an internal-error record blaming an agent that
+was working perfectly.
+
+The panel now performs the renewal itself. Doing it here rather than in the agent
+is also what makes it arrive: an agent is only updated when somebody updates it.
+A certificate that belongs to no site gets a sentence explaining what the panel
+found instead of a reference number, and every one-click fix now writes the
+activity-log entry the documentation has always promised.
+
+### Fixed — an uploaded certificate was invisible to everything that watches certificates
+
+Uploading a certificate recorded only that SSL was on. It did not record when the
+certificate expires — and the expiry countdown, the expiry alert ladder and the
+auto-healer all skip rows without one. The one kind of certificate nobody renews
+for you was the kind the panel watched least. Uploads now record the expiry and
+the installed paths, and a failed read-back no longer clears a date the panel
+already had.
+
+### Fixed — "we don't know" was rendered as a green OK badge
+
+A certificate with no known expiry counted as 999 days away, which the
+certificate list showed as **OK**, and any status the page did not recognise fell
+back to **OK** as well. Both now read **Unknown**, and the countdown column shows
+a dash rather than inventing a number.
+
+### Fixed — administrators were shown findings no screen could show them
+
+The agent's diagnostics scan the whole host, so an administrator on a shared box
+was told a certificate was expiring while the certificate list — scoped to their
+own sites — could not display it. **Monitoring → Certificates** now has an *All
+certificates on this server* switch for administrators, listing every site's
+certificate with its owner, plus the certificates the host holds that belong to
+no site at all: DNS-01 wildcards, Docker app certificates, anything installed by
+hand. Those are marked as not managed here and offer no controls, because there
+is no site for the controls to act on. If the server's agent predates this
+release and cannot enumerate certificates, the page says so rather than implying
+the list is complete.
+
+### Fixed — the documented Auto-Fix list described fixes that did not exist
+
+Two of the three examples in the security-hardening guide — repairing file
+permissions and disabling debug mode — were implemented by neither of the two fix
+systems. The guide now lists what each screen can actually do, and a regression
+pin fails the build when a fix is added or removed without the list catching up.
+
 ## [2.138.0]
 
 ### Added — import a database dump you already have

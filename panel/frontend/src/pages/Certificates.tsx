@@ -3,11 +3,18 @@ import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 
 interface Certificate {
-  site_id: string;
+  /** null on the admin host-wide view for a certificate no site row explains. */
+  site_id: string | null;
   domain: string;
   expiry: string | null;
-  days_left: number;
+  /** null when the panel does not know this certificate's expiry. */
+  days_left: number | null;
   status: string;
+  /** Admin view only. */
+  owner_email?: string | null;
+  issuer?: string | null;
+  /** false = on disk, but attached to no site, so DockPanel cannot renew it here. */
+  managed?: boolean;
 }
 
 const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
@@ -15,6 +22,10 @@ const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }>
   critical: { bg: "bg-danger-500/15", text: "text-danger-400", label: "Critical" },
   warning: { bg: "bg-warn-500/15", text: "text-warn-400", label: "Warning" },
   ok: { bg: "bg-rust-500/15", text: "text-rust-400", label: "OK" },
+  // A certificate the panel did not issue arrives with no expiry, and "no
+  // information" used to fall through the `|| STATUS_STYLES.ok` below into the
+  // single most reassuring badge on the page.
+  unknown: { bg: "bg-dark-600", text: "text-dark-200", label: "Unknown" },
 };
 
 export default function Certificates() {
@@ -26,6 +37,13 @@ export default function Certificates() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const [certs, setCerts] = useState<Certificate[]>([]);
+  // Mirrors the Sites page's "All sites on this server": a separate ADMIN route
+  // rather than a role branch inside the tenant list, so a per-caller list can
+  // never quietly start returning other people's rows.
+  const [allCerts, setAllCerts] = useState(false);
+  // false = this server's agent is too old to enumerate certificates, so the
+  // host-wide half of the list is missing and the page must say so.
+  const [hostScan, setHostScan] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState({ text: "", type: "" });
@@ -34,15 +52,20 @@ export default function Certificates() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const loadCerts = () => {
-    api.get<{ certificates: Certificate[] }>("/monitors/certificates")
-      .then((data) => setCerts(data.certificates || []))
+    api.get<{ certificates: Certificate[]; host_scan?: boolean }>(
+      allCerts ? "/admin/certificates" : "/monitors/certificates",
+    )
+      .then((data) => {
+        setCerts(data.certificates || []);
+        setHostScan(data.host_scan !== false);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     loadCerts();
-  }, []);
+  }, [allCerts]);
 
   const handleRenew = async (cert: Certificate) => {
     setRenewingId(cert.site_id);
@@ -93,11 +116,32 @@ export default function Certificates() {
 
   return (
     <div>
-      <p className="text-sm text-dark-200 font-mono mb-4">
-        {certs.length > 0
-          ? `${certs.length} SSL certificate${certs.length > 1 ? "s" : ""} tracked`
-          : "No SSL certificates found"}
-      </p>
+      <div className="flex items-center justify-between gap-4 mb-4">
+        <p className="text-sm text-dark-200 font-mono">
+          {certs.length > 0
+            ? `${certs.length} SSL certificate${certs.length > 1 ? "s" : ""} tracked`
+            : "No SSL certificates found"}
+        </p>
+        {isAdmin && (
+          <label className="flex items-center gap-2 text-sm text-dark-200 select-none cursor-pointer">
+            <input
+              type="checkbox"
+              checked={allCerts}
+              onChange={(e) => { setLoading(true); setAllCerts(e.target.checked); }}
+              className="rounded border-dark-500 bg-dark-800 text-rust-500 focus:ring-rust-500"
+            />
+            All certificates on this server
+          </label>
+        )}
+      </div>
+
+      {allCerts && !hostScan && (
+        <div className="bg-warn-500/10 text-warn-400 text-sm px-4 py-3 rounded-lg border border-warn-500/20 mb-4">
+          This server's agent is older than the panel and cannot enumerate certificates,
+          so this list shows only certificates attached to a site. Update the agent to
+          see certificates the panel did not issue.
+        </div>
+      )}
 
       {error && (
         <div className="bg-danger-500/10 text-danger-400 text-sm px-4 py-3 rounded-lg border border-danger-500/20 mb-4">
@@ -135,21 +179,22 @@ export default function Certificates() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Expiry</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Days Left</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Status</th>
+                {allCerts && <th className="text-left px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Owner</th>}
                 {isAdmin && <th className="text-right px-4 py-3 text-xs font-medium text-dark-300 uppercase font-mono">Actions</th>}
               </tr>
             </thead>
             <tbody>
               {certs.map((cert) => {
-                const style = STATUS_STYLES[cert.status] || STATUS_STYLES.ok;
+                const style = STATUS_STYLES[cert.status] || STATUS_STYLES.unknown;
                 return (
-                  <tr key={cert.site_id} className="border-b border-dark-600/50 last:border-b-0">
+                  <tr key={cert.site_id ?? `unmanaged:${cert.domain}`} className="border-b border-dark-600/50 last:border-b-0">
                     <td className="px-4 py-3 font-mono text-dark-50">{cert.domain}</td>
                     <td className="px-4 py-3 text-dark-200 font-mono">
                       {cert.expiry ? new Date(cert.expiry).toLocaleDateString() : "Unknown"}
                     </td>
                     <td className="px-4 py-3 font-mono">
-                      <span className={cert.days_left <= 7 ? "text-danger-400 font-bold" : cert.days_left <= 30 ? "text-warn-400" : "text-dark-100"}>
-                        {cert.days_left < 0 ? `${Math.abs(cert.days_left)}d overdue` : `${cert.days_left}d`}
+                      <span className={cert.days_left === null ? "text-dark-300" : cert.days_left <= 7 ? "text-danger-400 font-bold" : cert.days_left <= 30 ? "text-warn-400" : "text-dark-100"}>
+                        {cert.days_left === null ? "—" : cert.days_left < 0 ? `${Math.abs(cert.days_left)}d overdue` : `${cert.days_left}d`}
                       </span>
                     </td>
                     <td className="px-4 py-3">
@@ -157,9 +202,36 @@ export default function Certificates() {
                         {style.label}
                       </span>
                     </td>
+                    {allCerts && (
+                      <td className="px-4 py-3 text-dark-200 font-mono">
+                        {cert.owner_email ?? (
+                          <span
+                            className="text-dark-300"
+                            title={
+                              cert.issuer
+                                ? `On disk, attached to no site. Issued by ${cert.issuer}.`
+                                : "On disk, attached to no site."
+                            }
+                          >
+                            Not a site
+                          </span>
+                        )}
+                      </td>
+                    )}
                     {isAdmin && (
                     <td className="px-4 py-3 text-right">
-                      {deleteTarget === cert.site_id ? (
+                      {cert.site_id === null ? (
+                        // Both controls address a SITE (`/ssl/{site_id}/renew`,
+                        // `DELETE /ssl/{site_id}`), and this certificate has no site
+                        // row — so rendering them would be the same defect the rest
+                        // of this ship removes: a control that cannot do what it says.
+                        <span
+                          className="text-xs text-dark-300"
+                          title="DockPanel did not issue this certificate for a site, so it cannot renew or remove it from here."
+                        >
+                          Not managed here
+                        </span>
+                      ) : deleteTarget === cert.site_id ? (
                         <div className="flex items-center justify-end gap-1">
                           <button
                             onClick={() => handleDelete(cert)}

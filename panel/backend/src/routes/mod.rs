@@ -1198,6 +1198,7 @@ pub fn router() -> Router<AppState> {
         // Uptime Monitors
         .route("/api/monitors", get(monitors::list).post(monitors::create))
         .route("/api/monitors/certificates", get(monitors::certificate_dashboard))
+        .route("/api/admin/certificates", get(monitors::certificate_dashboard_for_admin))
         .route("/api/monitors/maintenance", get(monitors::list_maintenance).post(monitors::create_maintenance))
         .route("/api/monitors/maintenance/{id}", delete(monitors::delete_maintenance))
         .route("/api/monitors/{id}", put(monitors::update).delete(monitors::remove))

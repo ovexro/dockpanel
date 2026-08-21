@@ -5,7 +5,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AdminUser, AuthUser, ServerScope};
 use crate::error::{internal_error, err, paginate, ApiError};
 use crate::AppState;
 
@@ -588,6 +588,22 @@ pub async fn status_page(
     })))
 }
 
+/// The one severity ladder both certificate lists use.
+///
+/// `None` is `unknown`, and that rung exists because its absence was a defect: a
+/// missing expiry became 999 days and therefore the green OK badge — the most
+/// reassuring answer on the page, produced by an absence of information. Every
+/// certificate the panel did not issue arrives that way.
+fn expiry_status(days_left: Option<i64>) -> &'static str {
+    match days_left {
+        None => "unknown",
+        Some(d) if d < 0 => "expired",
+        Some(d) if d <= 7 => "critical",
+        Some(d) if d <= 30 => "warning",
+        _ => "ok",
+    }
+}
+
 /// GET /api/monitors/certificates — List all SSL certificates with expiry status.
 pub async fn certificate_dashboard(
     State(state): State<AppState>,
@@ -604,14 +620,123 @@ pub async fn certificate_dashboard(
         "SELECT id, domain, ssl_enabled, ssl_expiry FROM sites WHERE user_id = $1 AND ssl_enabled = true ORDER BY ssl_expiry ASC NULLS LAST"
     ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
 
+    // A certificate whose expiry the panel does not know is `unknown`, not `ok`.
+    //
+    // The missing date used to become `999` days and therefore the green OK
+    // badge — the most reassuring answer available, produced by an absence of
+    // information. Every certificate the panel did not issue itself arrives
+    // that way: until v2.139.0 `upload_ssl` stored `ssl_enabled` alone, so an
+    // operator's own certificate had a NULL expiry by construction, and it is
+    // exactly the certificate nobody renews for you. `999` also flowed into the
+    // page's own countdown column, printing a confident "999d".
     let now = chrono::Utc::now();
     let items: Vec<serde_json::Value> = certs.iter().map(|(id, domain, _, expiry)| {
-        let days_left = expiry.map(|e| (e - now).num_days()).unwrap_or(999);
-        let status = if days_left < 0 { "expired" } else if days_left <= 7 { "critical" } else if days_left <= 30 { "warning" } else { "ok" };
-        serde_json::json!({ "site_id": id, "domain": domain, "expiry": expiry, "days_left": days_left, "status": status })
+        let days_left = expiry.map(|e| (e - now).num_days());
+        serde_json::json!({ "site_id": id, "domain": domain, "expiry": expiry, "days_left": days_left, "status": expiry_status(days_left) })
     }).collect();
 
     Ok(Json(serde_json::json!({ "certificates": items })))
+}
+
+/// GET /api/admin/certificates — every certificate on this server, admin only.
+///
+/// A SEPARATE route rather than a role branch inside `certificate_dashboard`,
+/// because that is the shape this codebase already chose for the identical
+/// problem: `sites::list` stayed scoped to the caller and admins got
+/// `/api/admin/sites` with its own projection, so that a per-caller list can
+/// never quietly start returning other people's rows.
+///
+/// **Why it had to exist.** The agent's diagnostics walks `/etc/dockpanel/ssl`
+/// on the HOST and raises "SSL certificate expiring soon: {domain}" for anything
+/// it finds, so an administrator on a multi-tenant box was shown a finding — with
+/// a Fix button — about a certificate that appeared on no list they could open.
+/// The API would already let them renew it (`SITE_CALLER_PREDICATE` carries an
+/// admin arm); only the list refused. The finding and the list disagreed about
+/// what existed.
+///
+/// So this returns the union of two populations, and says which is which:
+///   * every SSL-enabled site row on this server, with its owner resolved, and
+///   * every certificate the host actually holds that no such row explains —
+///     a DNS-01 wildcard apex, a Docker app's certificate (Docker apps have no
+///     table at all), one installed by hand.
+///
+/// The second half needs an agent that can enumerate certificates. An older
+/// agent has no such route, and the honest answer to that is to say so rather
+/// than to imply the list is complete: `host_scan` reports whether the disk was
+/// actually read. A limitation the product will not speak at the moment it bites
+/// is, from the operator's chair, an undocumented one.
+pub async fn certificate_dashboard_for_admin(
+    State(state): State<AppState>,
+    AdminUser(_claims): AdminUser,
+    ServerScope(server_id, agent): ServerScope,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let certs: Vec<(uuid::Uuid, String, Option<chrono::DateTime<chrono::Utc>>, Option<String>)> =
+        sqlx::query_as(
+            "SELECT s.id, s.domain, s.ssl_expiry, u.email AS owner_email \
+             FROM sites s LEFT JOIN users u ON u.id = s.user_id \
+             WHERE s.server_id = $1 AND s.ssl_enabled = true \
+             ORDER BY s.ssl_expiry ASC NULLS LAST",
+        )
+        .bind(server_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| internal_error("admin certificate list", e))?;
+
+    let now = chrono::Utc::now();
+    let mut items: Vec<serde_json::Value> = certs
+        .iter()
+        .map(|(id, domain, expiry, owner)| {
+            let days_left = expiry.map(|e| (e - now).num_days());
+            serde_json::json!({
+                "site_id": id,
+                "domain": domain,
+                "expiry": expiry,
+                "days_left": days_left,
+                "status": expiry_status(days_left),
+                "owner_email": owner,
+                "managed": true,
+            })
+        })
+        .collect();
+
+    // Best-effort, and its failure is REPORTED rather than swallowed: without it
+    // the list silently reverts to the DB-only view that caused the problem.
+    let host_scan = match agent.get("/ssl/certificates").await {
+        Ok(v) => {
+            let known: std::collections::HashSet<&str> =
+                certs.iter().map(|(_, d, _, _)| d.as_str()).collect();
+            if let Some(arr) = v.as_array() {
+                for c in arr {
+                    let Some(domain) = c.get("domain").and_then(|d| d.as_str()) else { continue };
+                    if known.contains(domain) {
+                        continue;
+                    }
+                    let days_left = c.get("days_remaining").and_then(|d| d.as_i64());
+                    items.push(serde_json::json!({
+                        "site_id": serde_json::Value::Null,
+                        "domain": domain,
+                        "expiry": c.get("not_after").and_then(|d| d.as_str())
+                            .and_then(crate::helpers::parse_agent_cert_expiry),
+                        "days_left": days_left,
+                        "status": expiry_status(days_left),
+                        "issuer": c.get("issuer"),
+                        "owner_email": serde_json::Value::Null,
+                        // No site row, so no renewal from here and no Renew button.
+                        // The Diagnostics Fix button explains the same thing in a
+                        // sentence when it is clicked on one of these.
+                        "managed": false,
+                    }));
+                }
+            }
+            true
+        }
+        Err(e) => {
+            tracing::warn!("Admin certificate list: this server's agent could not enumerate certificates ({e}) — showing site-backed certificates only");
+            false
+        }
+    };
+
+    Ok(Json(serde_json::json!({ "certificates": items, "host_scan": host_scan })))
 }
 
 /// POST /api/monitors/maintenance — Create a maintenance window.

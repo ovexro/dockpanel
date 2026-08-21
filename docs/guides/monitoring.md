@@ -146,7 +146,35 @@ Every 2 minutes, the alert engine checks all Docker containers on the server:
 
 ## SSL Certificate Dashboard
 
-The certificate dashboard shows all SSL certificates across your sites with expiry dates. Certificates expiring within the configured warning window (default: 30, 14, 7, 3, 1 days) trigger alerts. DockPanel auto-renews Let's Encrypt certificates. The dashboard helps you spot custom certificates that need manual renewal.
+The certificate dashboard shows the SSL certificates on your sites with their expiry
+dates. Certificates expiring within the configured warning window (default: 30, 14, 7,
+3, 1 days) trigger alerts.
+
+**A status of `Unknown` means the panel does not know when the certificate expires**,
+not that it is healthy. That happens for certificates installed before v2.139.0 through
+**SSL → Upload certificate**, which recorded only that SSL was enabled; re-uploading the
+certificate records its expiry.
+
+**DockPanel renews only the Let's Encrypt certificates it issued itself.** Its ACME
+client can produce nothing else, so a certificate from any other issuer — a commercial
+wildcard, a Cloudflare Origin CA certificate, a corporate PKI — is left alone by the
+automatic renewal loops, and the Renew button refuses it with the issuer named. Renew
+those wherever they were issued and upload the replacement. (Before v2.139.0 the weekly
+security scan replaced them instead, which is why this is stated so plainly.)
+
+### All certificates on this server (administrators)
+
+Administrators get an **All certificates on this server** switch. It lists every site's
+certificate on the current server together with its owner, and — because the agent scans
+the host, not the database — the certificates the machine holds that belong to no site
+at all: DNS-01 wildcards, certificates issued for Docker apps, anything installed by
+hand. Those appear as **Not a site** and offer no Renew or Delete control, because both
+act on a site record and there is none.
+
+This exists because the diagnostics scanner reports findings about the whole host, so an
+administrator could be told a certificate was expiring and then find it on no screen.
+If the server's agent is older than the panel it cannot enumerate certificates, and the
+page says so rather than presenting a partial list as a complete one.
 
 ## API Reference
 

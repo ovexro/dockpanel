@@ -545,6 +545,46 @@ pub async fn get_cert_status(domain: &str) -> CertStatus {
     }
 }
 
+/// Every certificate this host actually holds, whether the panel issued it or not.
+///
+/// The diagnostics scanner has always walked this directory — that is where
+/// "SSL certificate expiring soon: {domain}" comes from — but nothing else could
+/// enumerate it, so the panel could raise a finding about a certificate it was
+/// unable to list anywhere. An administrator was told to fix something no screen
+/// could show them.
+///
+/// Deliberately reports what is on DISK and nothing else: whether a certificate
+/// belongs to a site, who owns it, and whether it can be renewed here are all
+/// questions the agent has no database to answer. It lists; the panel decides.
+pub async fn list_cert_status() -> Vec<CertStatus> {
+    let mut out = Vec::new();
+
+    let mut entries = match tokio::fs::read_dir(SSL_DIR).await {
+        Ok(e) => e,
+        // No directory means no certificates, which is an empty list and not an
+        // error — a fresh box has never issued one.
+        Err(_) => return out,
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if !entry.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let domain = entry.file_name().to_string_lossy().to_string();
+        // The ACME account material lives beside the certificates and is not one.
+        if domain.starts_with('.') {
+            continue;
+        }
+        let status = get_cert_status(&domain).await;
+        if status.has_cert {
+            out.push(status);
+        }
+    }
+
+    out.sort_by(|a, b| a.domain.cmp(&b.domain));
+    out
+}
+
 /// Regenerate nginx config with SSL enabled and reload.
 /// Switch a site's vhost to the HTTPS template and, if it is a WordPress site
 /// still advertising plain HTTP, move its canonical URL across with it.

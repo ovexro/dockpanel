@@ -223,11 +223,30 @@ Each action is logged in the activity log. Ensure you have an SSH key configured
 
 ## Auto-Fix
 
-The security scanner identifies findings that can be fixed automatically. Click **Fix** next to any auto-fixable finding to apply the remediation. Examples include:
+Two screens offer a one-click **Fix**, and they remediate different things. Each
+list below is the complete set — a finding without a Fix button is one neither
+screen can act on, and it will tell you what to do instead rather than offering a
+button that cannot work.
 
-- Renewing an expiring SSL certificate
-- Fixing file permissions on config files
-- Disabling debug mode in web applications
+**Security** > **Scan** fixes findings about the machine's own posture:
+
+- Blocking an unexpected open port
+- Disabling SSH password authentication
+- Disabling SSH root login
+- Quarantining or deleting a file the malware scan flagged
+
+**System** > **Diagnostics** fixes findings about the panel's own housekeeping:
+
+- Restarting a service that is installed but not running
+- Creating a site's document root when it is missing
+- Clearing rotated logs, `/tmp`, or a site's FastCGI cache
+- Reclaiming unmanaged Docker images, containers and build cache
+- **Renewing an expiring SSL certificate.** This one is applied by the panel
+  rather than by the agent, because renewal needs the site's runtime, document
+  root, PHP version and ACME contact — all of which live in the panel's database.
+  A certificate under `/etc/dockpanel/ssl` with no matching site (a DNS-01
+  wildcard, or one installed by hand) is not renewable here, and the panel says
+  so rather than failing: whatever installed it is what renews it.
 
 Each fix is logged in the activity log with the fix type and target.
 

@@ -801,6 +801,21 @@ async fn auto_renew_ssl(pool: &PgPool, agents: &AgentRegistry) {
             }
         };
 
+        // ⛔ A renewal is a REPLACEMENT — see the same guard in `security_scanner`.
+        // The agent writes the new certificate over `fullchain.pem`, which is the
+        // file an uploaded certificate occupies too, so aiming ACME at a
+        // certificate DockPanel did not issue destroys a paid asset. Asked before
+        // the ARI dance and before any order, so the wasted work is skipped with
+        // it. `None` means "not proven foreign" and must still renew: refusing on
+        // doubt lets a real certificate lapse.
+        if let Some(issuer) = crate::helpers::foreign_cert_issuer(&agent, domain).await {
+            tracing::info!(
+                "Auto-heal: NOT renewing {domain} — the installed certificate was issued \
+                 by {issuer}, not by DockPanel. Renewing would replace it."
+            );
+            continue;
+        }
+
         let mut ssl_renewal_at = *ssl_renewal_at_initial;
         let owner_email: String = match sqlx::query_scalar(
             "SELECT email FROM users WHERE id = $1",

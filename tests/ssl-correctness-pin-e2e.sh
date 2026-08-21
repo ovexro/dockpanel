@@ -425,8 +425,14 @@ fi
 # code, the count moves.
 check "auto-healer alerts when a renewal cannot be attempted" \
   "$(code_count "$HEALER" -F -e 'ssl_renewal_blocked(')" "3"
+# Five since v2.139.0. The fifth is a renewal deliberately NOT attempted: the
+# installed certificate was issued by someone other than Let's Encrypt, so it is
+# not one DockPanel can renew — and renewing anyway would have replaced it, which
+# is what this loop used to do to commercial and Origin-CA certificates every
+# week. A skip that only logs is indistinguishable from a certificate nobody is
+# watching, which is the whole subject of this section, so the skip announces.
 check "the scanner alerts on every renewal outcome it can see" \
-  "$(code_count "$SCAN" -F -e 'ssl_renewal_alert(')" "4"
+  "$(code_count "$SCAN" -F -e 'ssl_renewal_alert(')" "5"
 
 # Both loops touch the same certificate; neither may alert unconditionally.
 if has_code "$HEALER" -F -e 'fire_alert_deduped' && has_code "$SCAN" -F -e 'fire_alert_deduped'; then
