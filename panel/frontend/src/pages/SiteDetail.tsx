@@ -213,6 +213,10 @@ export default function SiteDetail() {
   const [phpExtsLoading, setPhpExtsLoading] = useState(false);
   const [showPhpExts, setShowPhpExts] = useState(false);
   const [installingExt, setInstallingExt] = useState<string | null>(null);
+  // Rendered beside the extension list rather than reusing `phpMessage`, which
+  // paints ~1500 lines higher up next to the PHP VERSION control. A message the
+  // operator has to scroll to find is the defect #120 was filed for.
+  const [extMessage, setExtMessage] = useState("");
 
   // Environment Variables
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
@@ -2407,16 +2411,23 @@ export default function SiteDetail() {
                   {phpExts.available.filter(e => !phpExts.installed.includes(e)).map(ext => (
                     <button key={ext} disabled={installingExt === ext} onClick={async () => {
                       setInstallingExt(ext);
+                      setExtMessage("");
                       try {
                         await api.post("/php/extensions/install", { version: site?.php_version, extension: ext });
                         loadPhpExtensions();
-                      } catch {}
+                      } catch (e) {
+                        // Without this the spinner simply stopped and the
+                        // extension stayed in "Available" — the operator's only
+                        // clue that anything had gone wrong.
+                        setExtMessage(e instanceof Error ? e.message : `Could not install ${ext}`);
+                      }
                       finally { setInstallingExt(null); }
                     }} className="px-2 py-0.5 bg-dark-700 text-dark-200 rounded text-xs font-mono hover:bg-dark-600 disabled:opacity-50">
                       {installingExt === ext ? "..." : ext}
                     </button>
                   ))}
                 </div>
+                {extMessage && <p className="text-xs text-danger-400 mt-2">{extMessage}</p>}
               </div>
             </div>
           )}

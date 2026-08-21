@@ -13,24 +13,25 @@ This guide says plainly what it can and cannot do, and what to use instead.
 | Move a whole site from another panel | The Migration wizard |
 | Let a customer upload their own site | **Not available yet** — see the end |
 
-## The file manager's real limit is about 1.5 MB per file
+## The file manager's limit is 1.5 MB per file
 
-Not 2 MB, and the number is worth explaining because the code contains several
-larger numbers that do not apply.
+The number is worth explaining, because it is derived rather than chosen.
 
 An upload is base64-encoded and sent inside a JSON request. The request body is
-capped at 2 MiB, and base64 costs a third in overhead, so **the file itself can be
-about 1.5 MB** (2 MiB × ¾ ≈ 1,572,864 bytes). The same 2 MiB cap applies again on
-the hop between the panel and the agent, so both would have to change together.
+capped at 2 MiB, and base64 costs a third in overhead, so **the file itself can
+be about 1.5 MB** (2 MiB × ¾ ≈ 1,572,864 bytes, published and enforced as
+1,500,000 to leave room for the path and filename, which travel in the same
+body). The same 2 MiB cap applies again on the hop between the panel and the
+agent, so both would have to change together.
 
-Two larger checks exist in the code — 100 MB in the panel, 50 MB in the agent —
-and **neither is reachable**, because the body limit rejects the request first.
-Do not go by them.
-
-**There is no warning before you hit this.** The browser does not check the size,
-and the failure reason is discarded: a batch reports only `N uploaded, M failed`,
-with no indication that size was the problem. If uploads are failing and the
-files are over ~1.5 MB, that is why.
+**You are told before you spend the upload.** Since v2.137.0 the browser checks
+the size first and names the limit, and if a request does reach the server
+oversize the server answers with the same sentence instead of an unreadable
+`413`. Two larger numbers used to sit in the code — 100 MB in the panel, 50 MB
+in the agent — and neither could ever fire, so the panel advertised a limit
+forty times the one it enforced and then refused in silence. That was
+[issue #121](https://github.com/ovexro/dockpanel/issues/121); both numbers now
+read 1.5 MB.
 
 ## Other upload limits, and which is which
 
@@ -42,6 +43,9 @@ Four different numbers govern four different things. Confusing them is easy:
 | 2 MB exactly | **Opening** a file in the panel's editor | fixed |
 | `max_upload_mb` | What **visitors** can upload to the site (PHP + nginx) | 64 MB |
 | nginx body size | The panel's own front door | 100 MB on a standard install |
+
+(The public demo is the exception: it fronts the panel with a 10 MB nginx body
+limit, so a demo upload can be refused by nginx before any of the above applies.)
 
 So a visitor uploading media to a WordPress site gets 64 MB, while the operator
 using the file manager gets about 1.5 MB. That asymmetry is not intentional

@@ -303,10 +303,16 @@ export default function Dns() {
     } else if (type === "bulk-delete" && selectedZone) {
       setBulkDeleting(true);
       let deleted = 0;
+      let firstError = "";
       for (const recordId of selectedRecords) {
-        try { await api.delete(`/dns/zones/${selectedZone.id}/records/${recordId}`); deleted++; } catch {}
+        try { await api.delete(`/dns/zones/${selectedZone.id}/records/${recordId}`); deleted++; }
+        catch (e) { if (!firstError) firstError = e instanceof Error ? e.message : "Delete failed"; }
       }
-      setMessage({ text: `Deleted ${deleted} records`, type: "success" });
+      // A per-record catch that swallows leaves a green "Deleted N records"
+      // standing over records that are still there. Report the shortfall.
+      setMessage(deleted < selectedRecords.size
+        ? { text: `Deleted ${deleted} of ${selectedRecords.size} records — ${firstError}`, type: "error" }
+        : { text: `Deleted ${deleted} records`, type: "success" });
       setSelectedRecords(new Set());
       setBulkDeleting(false);
       selectZone(selectedZone);
@@ -417,10 +423,16 @@ export default function Dns() {
 
     const recs = templates[template] || [];
     let created = 0;
+    let firstError = "";
     for (const r of recs) {
-      try { await api.post(`/dns/zones/${selectedZone.id}/records`, r); created++; } catch {}
+      try { await api.post(`/dns/zones/${selectedZone.id}/records`, r); created++; }
+      catch (e) { if (!firstError) firstError = e instanceof Error ? e.message : "Create failed"; }
     }
-    setMessage({ text: `Created ${created} record${created !== 1 ? 's' : ''} from template`, type: 'success' });
+    // Same shape as the bulk delete above: without this, a template that
+    // created nothing at all still reported success.
+    setMessage(created < recs.length
+      ? { text: `Created ${created} of ${recs.length} records — ${firstError}`, type: 'error' }
+      : { text: `Created ${created} record${created !== 1 ? 's' : ''} from template`, type: 'success' });
     setShowTemplates(false);
     selectZone(selectedZone);
   };

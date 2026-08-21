@@ -44,6 +44,19 @@ pub const CODE_REAUTH_REQUIRED: &str = "reauth_required";
 /// [`AuthUser`]: crate::auth::AuthUser
 pub const CODE_SESSION_INVALID: &str = "session_invalid";
 
+/// Stable machine-readable marker for "what you sent will not fit through the
+/// panel".
+///
+/// It exists because the framework's own refusal cannot be rendered. An
+/// oversize body is rejected by axum's request-body limit before any handler
+/// runs, as `413` with the plain-text sentence "Failed to buffer the request
+/// body: length limit exceeded" — which `api.ts` correctly degrades to
+/// "Request failed (413)", a sentence that tells an operator nothing. Issue
+/// #121 was filed because a 33 MB upload produced no explanation at all.
+/// Handlers that can be handed an oversize body take the rejection instead of
+/// letting it short-circuit, and answer with this code and a real sentence.
+pub const CODE_PAYLOAD_TOO_LARGE: &str = "payload_too_large";
+
 /// Longest agent-authored message passed through to a client.
 const MAX_AGENT_MSG: usize = 400;
 

@@ -1,14 +1,96 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{rejection::JsonRejection, Path, Query, State},
     http::StatusCode,
     Json,
 };
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::error::{err, agent_error, ApiError};
+use crate::error::{err, err_coded, agent_error, ApiError, CODE_PAYLOAD_TOO_LARGE};
 use crate::routes::is_safe_relative_path;
 use crate::AppState;
+
+/// The largest file the file manager accepts, in bytes.
+///
+/// This is a DERIVED number, not a policy choice, and the derivation is the
+/// reason the panel used to advertise a limit forty times larger than the one
+/// it enforced. An upload is base64-encoded into a JSON body; that body is
+/// capped at axum's 2 MiB default (`DEFAULT_LIMIT` in `axum-core`), on this
+/// hop AND again on the panel to agent hop, which is a second axum service
+/// with the same default. Base64 costs a third, so 2 MiB of body carries about
+/// 1.57 MB of file — and the path and filename travel in the same body, so the
+/// advertised number leaves room for them.
+///
+/// ⚠ RAISING THIS IS NOT A ONE-LINE CHANGE, and the original author's warning
+/// here was right even though the tracker it pointed at never existed. Three
+/// things have to be true first:
+///
+///  1. Both hops' body limits go up, and **per-route** — never with `.layer()`
+///     on the root router, which would hand every unauthenticated caller,
+///     `/login` and the public webhook doors included, a buffered allocation of
+///     the same size.
+///  2. There is a per-site disk quota. There is none today: `max_disk_mb` on a
+///     reseller plan is an account-level figure, mail quotas are Dovecot's, and
+///     disk accounting is server-wide, so a tenant filling shared `/var/www`
+///     cannot even be MEASURED, let alone stopped.
+///  3. The transport stops being base64-in-JSON. The whole payload is buffered
+///     in RAM here and again in the agent, so a large envelope costs multiples
+///     of the file per concurrent upload on a panel documented at ~49 MB.
+///
+/// Which is why the honest answer for genuinely large files is streaming
+/// intake, and why `docs/guides/file-uploads.md` points at rsync instead.
+///
+/// Every surface that states a size MUST state this one: the guide, the two
+/// upload pages, and the agent's own check. `upload-refusal-pin-e2e.sh` pins
+/// that they agree.
+pub const UPLOAD_MAX_FILE_BYTES: usize = 1_500_000;
+
+/// The sentence an operator gets when a file will not fit through the panel.
+///
+/// One sentence, used by both refusals — the body-limit rejection that fires
+/// before this handler and the decoded-size check inside it — so the operator
+/// cannot receive two different accounts of the same limit.
+fn upload_too_large() -> ApiError {
+    err_coded(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        &format!(
+            "File is too large for the file manager (limit {:.1} MB). Copy it \
+             with rsync or scp over the server's own SSH, or use the Migration \
+             wizard to move a whole site.",
+            UPLOAD_MAX_FILE_BYTES as f64 / 1_000_000.0
+        ),
+        CODE_PAYLOAD_TOO_LARGE,
+    )
+}
+
+/// Whether a base64 payload carries more than the file manager accepts.
+///
+/// Split out as a pure function so the boundary can be judged without a
+/// request, a socket or a running panel — the same reason `url_authority` was
+/// split out of the URL guard one release ago.
+///
+/// The estimate is deliberately an UPPER bound. Four base64 characters carry
+/// three bytes, and padding means the true decoded length can be up to two
+/// bytes less than this returns, so a payload within two bytes of the limit is
+/// refused. Rounding against the uploader by two bytes is the safe direction
+/// for a limit; rounding the other way is how a check ends up not enforcing the
+/// number it prints.
+pub fn exceeds_upload_limit(content: &str) -> bool {
+    content.len() / 4 * 3 > UPLOAD_MAX_FILE_BYTES
+}
+
+/// Turn an extractor rejection into an answer the operator can act on.
+///
+/// Keyed on the rejection's STATUS rather than its variant shape: the composite
+/// enum is a dependency detail that has changed between axum releases, while
+/// "the body was too big" has been a 413 throughout.
+fn upload_rejection(e: JsonRejection) -> ApiError {
+    if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        upload_too_large()
+    } else {
+        err(StatusCode::BAD_REQUEST, &format!("Invalid upload request: {e}"))
+    }
+}
 
 #[derive(serde::Deserialize)]
 pub struct UploadBody {
@@ -268,8 +350,16 @@ pub async fn upload_file(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
-    Json(body): Json<UploadBody>,
+    body: Result<Json<UploadBody>, JsonRejection>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Taking the REJECTION rather than letting the extractor short-circuit is
+    // the whole point of this signature. The request-body limit refuses an
+    // oversize upload before this handler would ever run, and it refuses in
+    // plain text no client of ours can render, so the operator was told
+    // nothing at all (#121). Everything below is unchanged; it simply now runs
+    // for requests that fit, and the ones that do not get a sentence.
+    let Json(body) = body.map_err(upload_rejection)?;
+
     if body.path.contains("..") || body.path.starts_with('/') {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid path"));
     }
@@ -279,17 +369,16 @@ pub async fn upload_file(
         }
     }
 
-    // NOTE: the EFFECTIVE cap is axum's ~2MB default request-body limit (no
-    // DefaultBodyLimit override is set), which rejects larger bodies before this
-    // handler runs — so this 100MB check is a secondary guard, not the real limit.
-    // Raising the body limit to allow genuinely large uploads must land together
-    // with a per-tenant disk quota + rate limit (tracked in tech_debt) or it opens a
-    // shared-/var/www exhaustion vector.
-    let content_size = body.content.len();
-    let max_upload_bytes: usize = 100 * 1024 * 1024; // 100MB
-    if content_size > max_upload_bytes {
-        return Err(err(StatusCode::PAYLOAD_TOO_LARGE,
-            &format!("File too large: {}MB (max 100MB)", content_size / (1024 * 1024))));
+    // The payload is bounded twice: by the request-body limit that rejects
+    // before this handler runs, and here, on the DECODED size — which is the
+    // number the operator actually thinks in. Both refusals share one sentence.
+    //
+    // This check used to read 100 MB and could never fire, because the body
+    // limit is ~2 MiB; the panel advertised a limit forty times the one it
+    // enforced and refused in silence. It now states the truth, and
+    // `UPLOAD_MAX_FILE_BYTES` carries the derivation.
+    if exceeds_upload_limit(&body.content) {
+        return Err(upload_too_large());
     }
 
     // Advisory hygiene only — NOT a security boundary. Tenant code isolation is the
@@ -320,4 +409,49 @@ pub async fn upload_file(
         .map_err(|e| agent_error("File upload", e))?;
 
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Base64 length for `n` bytes: four characters per three bytes, padded up.
+    fn b64_len(n: usize) -> usize {
+        n.div_ceil(3) * 4
+    }
+
+    #[test]
+    fn a_payload_at_the_limit_is_accepted() {
+        let at = "A".repeat(b64_len(UPLOAD_MAX_FILE_BYTES));
+        assert!(!exceeds_upload_limit(&at), "a file of exactly the advertised limit must upload");
+    }
+
+    #[test]
+    fn a_payload_over_the_limit_is_refused() {
+        let over = "A".repeat(b64_len(UPLOAD_MAX_FILE_BYTES + 1));
+        assert!(exceeds_upload_limit(&over), "one byte over the advertised limit must be refused");
+    }
+
+    #[test]
+    fn an_empty_payload_is_not_too_large() {
+        assert!(!exceeds_upload_limit(""));
+    }
+
+    /// The guard that matters most, and the one the old code failed.
+    ///
+    /// The advertised limit has to fit INSIDE the request-body envelope that
+    /// rejects before this module runs. When it does not — as when this file
+    /// advertised 100 MB against a 2 MiB envelope — the check becomes
+    /// unreachable and the product refuses in silence. `DEFAULT_LIMIT` in
+    /// `axum-core` is 2 MiB; base64 costs a third of that.
+    #[test]
+    fn the_advertised_limit_fits_inside_the_body_envelope() {
+        const AXUM_DEFAULT_BODY_LIMIT: usize = 2 * 1024 * 1024;
+        let carryable = AXUM_DEFAULT_BODY_LIMIT / 4 * 3;
+        assert!(
+            UPLOAD_MAX_FILE_BYTES <= carryable,
+            "advertised {UPLOAD_MAX_FILE_BYTES} exceeds the {carryable} bytes a \
+             {AXUM_DEFAULT_BODY_LIMIT}-byte body can carry — the check would be unreachable"
+        );
+    }
 }

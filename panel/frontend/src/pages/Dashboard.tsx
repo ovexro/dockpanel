@@ -836,9 +836,17 @@ export default function Dashboard() {
                   setActionMessage({ text: action === "nginx" ? "Nginx restarted" : "PHP-FPM restarted", type: "success" });
                   setTimeout(() => setActionMessage(null), 3000);
                 }
-              } catch {
-                setActionMessage({ text: `Failed to ${action === "reboot" ? "reboot server" : `restart ${action === "nginx" ? "Nginx" : "PHP-FPM"}`}`, type: "error" });
-                setTimeout(() => setActionMessage(null), 3000);
+              } catch (err) {
+                // The agent authors a real sentence for these — nginx's own
+                // "[emerg] invalid parameter" is what tells the operator which
+                // line of which vhost to fix — and `error.rs::agent_error`
+                // passes a 4xx through intact precisely so it survives. Bare
+                // catching it here deleted the useful half and left "Failed to
+                // restart Nginx", which is the #90/#91/#92 class all over again.
+                const what = action === "reboot" ? "reboot the server" : `restart ${action === "nginx" ? "Nginx" : "PHP-FPM"}`;
+                const why = err instanceof Error ? err.message : "";
+                setActionMessage({ text: why ? `Could not ${what}: ${why}` : `Could not ${what}`, type: "error" });
+                setTimeout(() => setActionMessage(null), 10000);
               }
             }} className="px-3 py-1.5 bg-danger-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-danger-600 transition-colors">
               Confirm

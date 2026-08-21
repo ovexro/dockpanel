@@ -1,5 +1,5 @@
 use axum::{
-    extract::Path,
+    extract::{rejection::JsonRejection, Path},
     http::StatusCode,
     routing::{get, post, delete},
     Json, Router,
@@ -18,6 +18,34 @@ fn err(status: StatusCode, msg: &str) -> ApiErr {
 
 fn ok(msg: &str) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "ok": true, "message": msg }))
+}
+
+/// The largest file this endpoint accepts, in DECODED bytes.
+///
+/// ⛔ This number must equal `UPLOAD_MAX_FILE_BYTES` in the panel's
+/// `routes/files.rs`. The two are separate crates, so nothing but a pin can
+/// hold them together — `upload-refusal-pin-e2e.sh` compares them, along with
+/// the figure published in `docs/guides/file-uploads.md`.
+///
+/// It used to read 50 MB, and like the panel's 100 MB it could never fire: this
+/// is a second axum service with the same 2 MiB default request-body limit, so
+/// an oversize upload was refused by the framework, in plain text, before this
+/// handler ran. Two services, two unreachable numbers, one silent failure.
+const UPLOAD_MAX_FILE_BYTES: usize = 1_500_000;
+
+/// The refusal, worded as the panel words it — an agent 4xx is passed through
+/// to the operator verbatim by `error.rs::agent_error`, so this sentence is
+/// read by a human and must say what to do instead.
+fn upload_too_large() -> ApiErr {
+    err(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        &format!(
+            "File is too large for the file manager (limit {:.1} MB). Copy it \
+             with rsync or scp over the server's own SSH, or use the Migration \
+             wizard to move a whole site.",
+            UPLOAD_MAX_FILE_BYTES as f64 / 1_000_000.0
+        ),
+    )
 }
 
 pub fn router() -> Router<AppState> {
@@ -50,10 +78,21 @@ pub struct UploadRequest {
 
 async fn file_upload(
     Path(domain): Path<String>,
-    Json(body): Json<UploadRequest>,
+    body: Result<Json<UploadRequest>, JsonRejection>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
     use base64::Engine as _;
     use crate::services::files as file_svc;
+
+    // Take the rejection rather than letting it short-circuit — see the panel's
+    // `upload_file`. Without this the body limit answers in plain text the
+    // panel then relays as an unexplained 413.
+    let Json(body) = body.map_err(|e| {
+        if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            upload_too_large()
+        } else {
+            err(StatusCode::BAD_REQUEST, &format!("Invalid upload request: {e}"))
+        }
+    })?;
 
     // Validate domain
     if !super::is_valid_domain(&domain) {
@@ -65,9 +104,9 @@ async fn file_upload(
         .decode(&body.content)
         .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid base64 content"))?;
 
-    // Enforce 50MB size limit for all uploads
-    if bytes.len() > 50 * 1024 * 1024 {
-        return Err(err(StatusCode::PAYLOAD_TOO_LARGE, "File too large (max 50MB)"));
+    // Enforce the same limit the panel enforces, on the decoded bytes.
+    if bytes.len() > UPLOAD_MAX_FILE_BYTES {
+        return Err(upload_too_large());
     }
 
     // Resolve the target relative path. When a filename is provided we treat

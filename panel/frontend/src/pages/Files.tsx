@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api } from "../api";
+import { UPLOAD_MAX_FILE_BYTES, uploadTooLargeMessage } from "../constants";
 
 interface FileEntry {
   name: string;
@@ -217,7 +218,18 @@ export default function Files() {
                 setUploadMessage("");
                 let success = 0;
                 let failed = 0;
+                let firstError = "";
                 for (const file of Array.from(files)) {
+                  // Refuse an oversize file HERE, before spending the upload.
+                  // The server refuses it too, but only after the whole body
+                  // has travelled — and its refusal used to be discarded by the
+                  // bare catch below, which is exactly what #121 reported: a
+                  // 33 MB upload that failed with no message of any kind.
+                  if (file.size > UPLOAD_MAX_FILE_BYTES) {
+                    failed++;
+                    if (!firstError) firstError = uploadTooLargeMessage(file.name, file.size);
+                    continue;
+                  }
                   try {
                     const base64 = await new Promise<string>((resolve, reject) => {
                       const reader = new FileReader();
@@ -231,19 +243,28 @@ export default function Files() {
                       content: base64,
                     });
                     success++;
-                  } catch {
+                  } catch (err) {
                     failed++;
+                    if (!firstError) {
+                      firstError = err instanceof Error ? err.message : `Could not upload ${file.name}`;
+                    }
                   }
                 }
                 setUploading(false);
                 if (failed > 0) {
-                  setUploadMessage(`${success} uploaded, ${failed} failed`);
+                  // A count is not a reason. Carry the first failure's sentence
+                  // — it is the only part that says what to do next.
+                  setUploadMessage(
+                    success > 0 ? `${success} uploaded, ${failed} failed — ${firstError}` : firstError
+                  );
                 } else {
                   setUploadMessage(`${success} file(s) uploaded`);
                 }
                 loadDir(currentPath);
                 e.target.value = "";
-                setTimeout(() => setUploadMessage(""), 3000);
+                // Success may erase itself; a failure must not. Three seconds
+                // is not reading time for a sentence the operator has to act on.
+                if (failed === 0) setTimeout(() => setUploadMessage(""), 3000);
               }}
             />
           </label>

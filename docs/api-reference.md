@@ -114,7 +114,7 @@ Delete site and all associated resources (database containers, nginx config, SSL
 | POST | `/api/sites/{id}/files/create` | `{ "path": "dir", "is_dir": true }` |
 | POST | `/api/sites/{id}/files/rename` | `{ "from": "old.txt", "to": "new.txt" }` |
 | DELETE | `/api/sites/{id}/files?path=file.txt` | Delete file |
-| POST | `/api/sites/{id}/files/upload` | Multipart file upload |
+| POST | `/api/sites/{id}/files/upload` | Upload a file — JSON body, `content` base64-encoded, 1.5 MB limit |
 | GET | `/api/sites/{id}/files/download?path=file.txt` | Download file |
 
 ### Backups

@@ -4,6 +4,69 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.137.0]
+
+### Fixed — the file manager refused a file and would not say why
+
+Uploading anything larger than about 1.5 MB failed, and the panel gave no reason.
+A batch reported `0 uploaded, 1 failed` and erased that after three seconds. No
+size was named, no limit was named, and nothing distinguished a file that was too
+big from a server that was down. Reported as
+[#121](https://github.com/ovexro/dockpanel/issues/121) against a 33 MB upload.
+
+Two separate faults, and the fix needed both.
+
+**The number the panel advertised was one it could not enforce.** An upload is
+base64-encoded into a JSON request body, and that body is capped at 2 MiB by the
+web framework — at the panel, and again on the hop to the agent, which is a
+second service with the same default. Neither had ever raised it. Meanwhile the
+panel's own handler carried a 100 MB check and the agent's a 50 MB check, both
+sitting *below* the framework's rejection where they could never run. So the
+product named two limits, forty and thirty times too large, and enforced a third
+one silently. Both now read the real figure, 1.5 MB, which is what the request
+envelope actually carries once base64 has taken its third.
+
+**The refusal was thrown away on the way out.** The framework answers an oversize
+body with a `413` in plain text, which the API client correctly turns into a real
+error — and the upload page then discarded it in a `catch` that kept no reference
+to it. The reason existed at every step until the last one.
+
+Uploads are now checked in the browser *before* the upload is spent, and are
+refused with the file's size, the limit, and what to use instead. If a request
+does reach the server oversize, the server answers with the same sentence and a
+machine-readable marker rather than an unreadable framework page.
+
+### Fixed — six more controls that failed without saying why
+
+The upload page was not alone; the same `catch` shape was swallowing the reason
+on every one of these, so the class was fixed rather than the instance.
+
+- **Restarting nginx or PHP-FPM from the dashboard** discarded the agent's own
+  sentence. nginx refusing a bad configuration file — the message that names the
+  file and the line — was rendered as "Failed to restart Nginx". The panel keeps
+  a deliberate path for passing an agent's 4xx through intact; this control was
+  dropping it at the last step. The same class as #90, #91 and #92.
+- **Bulk-deleting DNS records** reported `Deleted N records` as a success even
+  when records failed to delete, because each failure was swallowed inside the
+  loop. It now reports the shortfall and the reason.
+- **Applying a DNS template** had the same shape: a template that created nothing
+  at all still reported success.
+- **The automatic security updates toggle** slid back with no explanation when the
+  change failed — which, on host families where `unattended-upgrades` is not the
+  mechanism, is the only outcome it can have.
+- **Installing a PHP extension** ended its spinner and left the extension in the
+  "available" list, with no message anywhere.
+
+Each of these now shows its failure next to the control that caused it, rather
+than in a banner elsewhere on the page.
+
+### Documentation
+
+`docs/guides/file-uploads.md` already described this behaviour accurately,
+including the unreachable checks — it is updated to reflect that the product now
+tells you itself, and to note that the public demo fronts the panel with a
+smaller nginx limit than a standard install.
+
 ## [2.136.0]
 
 ### Security — a monitor could read services it was never meant to reach

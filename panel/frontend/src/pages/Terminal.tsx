@@ -5,6 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import { api, ApiError } from "../api";
+import { UPLOAD_MAX_FILE_BYTES, uploadTooLargeMessage } from "../constants";
 import { useAuth } from "../context/AuthContext";
 
 interface Site {
@@ -754,6 +755,11 @@ export default function Terminal() {
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (!file || !selectedSite) return;
+                    if (file.size > UPLOAD_MAX_FILE_BYTES) {
+                      setError(uploadTooLargeMessage(file.name, file.size));
+                      e.target.value = "";
+                      return;
+                    }
                     const reader = new FileReader();
                     reader.onload = async () => {
                       const base64 = (reader.result as string).split(",")[1];
@@ -775,8 +781,8 @@ export default function Terminal() {
                         }
                         setStatus(`Uploaded: ${file.name}`);
                         setTimeout(() => setStatus(""), 3000);
-                      } catch {
-                        setError(`Upload failed: ${file.name}`);
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : `Upload failed: ${file.name}`);
                       }
                     };
                     reader.readAsDataURL(file);
