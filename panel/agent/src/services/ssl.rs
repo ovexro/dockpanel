@@ -168,6 +168,21 @@ pub async fn load_or_create_account(email: &str) -> Result<Account, String> {
 /// every future error to the operator as though the CA had spoken.
 pub const CA_DECLINED: &str = "[ca] ";
 
+/// The same idea for the OTHER party the DNS-01 door talks to.
+///
+/// `provision_cert_dns01` has three ways to fail, not two: the CA can decline,
+/// this machine can break, and — uniquely on this door — the DNS provider can
+/// refuse. A token without `DNS:Edit` is the commonest real failure here, and it
+/// is the operator's to fix, so hiding it behind an incident id wastes the one
+/// sentence that would have helped. But it is NOT something the CA said, and
+/// marking it `CA_DECLINED` would make the panel attribute Cloudflare's refusal
+/// to Let's Encrypt — a lie about who declined, in a message written to be
+/// trusted.
+///
+/// ⚠ Marked POSITIVELY, exactly like [`CA_DECLINED`]: an arm added below with no
+/// marker defaults to "this machine's fault" and keeps its incident id.
+pub const DNS_PROVIDER_DECLINED: &str = "[dns] ";
+
 pub async fn provision_cert(
     account: &Account,
     domain: &str,
@@ -335,11 +350,11 @@ pub async fn provision_cert_dns01(
     let mut order = account
         .new_order(&new_order)
         .await
-        .map_err(|e| format!("ACME order: {e}"))?;
+        .map_err(|e| format!("{CA_DECLINED}The CA refused the certificate order: {e}"))?;
 
     let state = order.state();
     if !matches!(state.status, OrderStatus::Pending | OrderStatus::Ready) {
-        return Err(format!("Unexpected order status: {:?}", state.status));
+        return Err(format!("{CA_DECLINED}The CA returned an unexpected order status: {:?}", state.status));
     }
 
     // Build Cloudflare client
@@ -350,12 +365,24 @@ pub async fn provision_cert_dns01(
     let cf_api = "https://api.cloudflare.com/client/v4";
     let mut headers = reqwest::header::HeaderMap::new();
     if let Some(email) = cf_api_email {
-        headers.insert("X-Auth-Email", email.parse().map_err(|_| "Invalid CF email")?);
-        headers.insert("X-Auth-Key", cf_api_token.parse().map_err(|_| "Invalid CF token")?);
+        headers.insert(
+            "X-Auth-Email",
+            email.parse().map_err(|_| {
+                format!("{DNS_PROVIDER_DECLINED}The Cloudflare account email for this zone is not a usable header value")
+            })?,
+        );
+        headers.insert(
+            "X-Auth-Key",
+            cf_api_token.parse().map_err(|_| {
+                format!("{DNS_PROVIDER_DECLINED}The Cloudflare API key for this zone is not a usable header value")
+            })?,
+        );
     } else {
         headers.insert(
             "Authorization",
-            format!("Bearer {cf_api_token}").parse().map_err(|_| "Invalid CF token")?,
+            format!("Bearer {cf_api_token}").parse().map_err(|_| {
+                format!("{DNS_PROVIDER_DECLINED}The Cloudflare API token for this zone is not a usable header value")
+            })?,
         );
     }
 
@@ -368,7 +395,7 @@ pub async fn provision_cert_dns01(
                 Ok(a) => a,
                 Err(e) => {
                     cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-                    return Err(format!("Authorization: {e}"));
+                    return Err(format!("{CA_DECLINED}The CA would not return an authorization: {e}"));
                 }
             };
 
@@ -377,7 +404,7 @@ pub async fn provision_cert_dns01(
                 AuthorizationStatus::Pending => {}
                 status => {
                     cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-                    return Err(format!("Auth status: {status:?}"));
+                    return Err(format!("{CA_DECLINED}The CA returned an unexpected authorization status: {status:?}"));
                 }
             }
 
@@ -385,9 +412,9 @@ pub async fn provision_cert_dns01(
                 Some(c) => c,
                 None => {
                     cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-                    return Err(
-                        "No DNS-01 challenge (Let's Encrypt may require HTTP-01 for this domain)".to_string(),
-                    );
+                    return Err(format!(
+                        "{CA_DECLINED}The CA offered no DNS-01 challenge for this domain"
+                    ));
                 }
             };
 
@@ -413,7 +440,7 @@ pub async fn provision_cert_dns01(
                 Ok(r) => r,
                 Err(e) => {
                     cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-                    return Err(format!("CF create TXT: {e}"));
+                    return Err(format!("{DNS_PROVIDER_DECLINED}Cloudflare could not be reached to publish the challenge record: {e}"));
                 }
             };
 
@@ -421,14 +448,14 @@ pub async fn provision_cert_dns01(
                 Ok(j) => j,
                 Err(e) => {
                     cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-                    return Err(format!("CF parse: {e}"));
+                    return Err(format!("{DNS_PROVIDER_DECLINED}Cloudflare returned a response that could not be read: {e}"));
                 }
             };
 
             if resp_json.get("success").and_then(|v| v.as_bool()) != Some(true) {
                 cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
                 let errs = resp_json.get("errors").cloned().unwrap_or_default();
-                return Err(format!("CF TXT create failed: {errs}"));
+                return Err(format!("{DNS_PROVIDER_DECLINED}Cloudflare refused to create the challenge record: {errs}"));
             }
 
             if let Some(rid) = resp_json.pointer("/result/id").and_then(|v| v.as_str()) {
@@ -440,7 +467,7 @@ pub async fn provision_cert_dns01(
 
             if let Err(e) = challenge.set_ready().await {
                 cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
-                return Err(format!("Challenge ready: {e}"));
+                return Err(format!("{CA_DECLINED}The CA would not accept the challenge as ready: {e}"));
             }
         }
     }
@@ -453,18 +480,18 @@ pub async fn provision_cert_dns01(
     // Always clean up TXT records
     cleanup_cf_records(&client, cf_api, cf_zone_id, &headers, &created_records).await;
 
-    poll_result.map_err(|e| format!("Order not ready: {e}"))?;
+    poll_result.map_err(|e| format!("{CA_DECLINED}The CA did not validate the DNS-01 challenge: {e}"))?;
 
     // Finalize
     let private_key_pem = order
         .finalize()
         .await
-        .map_err(|e| format!("Finalize: {e}"))?;
+        .map_err(|e| format!("{CA_DECLINED}The CA would not finalize the order: {e}"))?;
 
     let cert_chain_pem = order
         .poll_certificate(&RetryPolicy::new().timeout(timeout))
         .await
-        .map_err(|e| format!("Certificate fetch: {e}"))?;
+        .map_err(|e| format!("{CA_DECLINED}The CA would not hand back the certificate: {e}"))?;
 
     // Save cert (use base domain for directory)
     let cert_dir = format!("{SSL_DIR}/{domain}");

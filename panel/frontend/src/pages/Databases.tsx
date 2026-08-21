@@ -1171,10 +1171,11 @@ export default function Databases() {
                 onChange={(e) => setDbName(e.target.value)}
                 required
                 placeholder="my_database"
-                pattern="[a-zA-Z0-9_]+"
+                pattern="[a-zA-Z0-9][a-zA-Z0-9_]*"
+                title="Letters, numbers and underscores. Must start with a letter or a number."
                 className="w-full px-3 py-2.5 border border-dark-500 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none text-sm"
               />
-              <p className="text-xs text-dark-300 mt-1">Name for your database instance</p>
+              <p className="text-xs text-dark-300 mt-1">Letters, numbers and underscores — must start with a letter or a number</p>
             </div>
             <div>
               <label htmlFor="db-engine" className="block text-sm font-medium text-dark-100 mb-1">

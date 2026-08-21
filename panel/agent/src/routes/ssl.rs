@@ -11,8 +11,8 @@ use super::{is_valid_domain, AppState};
 use crate::routes::nginx::SiteConfig;
 use crate::services::ssl;
 
-/// Split a certificate-issuance failure into "the CA said so" and "this machine
-/// broke", and label only the first.
+/// Split a certificate-issuance failure into "the CA said so", "the DNS provider
+/// said so" and "this machine broke", and label only the first two.
 ///
 /// Both come back from the same call as a 500, and the panel is right to hide a
 /// 500 behind an incident id — an operator can do nothing with an unwritable
@@ -25,17 +25,29 @@ use crate::services::ssl;
 /// unmarked — including any arm added later — stays an internal fault. That is
 /// the safe default: a missing label costs a reference number, a wrong one sends
 /// somebody to check their DNS while their disk is full.
+///
+/// The DNS-01 door adds a THIRD party. Cloudflare refusing to publish the
+/// challenge record — almost always a token without `DNS:Edit` — is the
+/// operator's to fix and deserves its sentence, but attributing it to the CA
+/// would name the wrong party in a message written to be trusted. It gets its
+/// own marker and its own code, and the panel keeps them apart.
 fn ca_or_internal(e: String) -> (StatusCode, Json<serde_json::Value>) {
-    match e.strip_prefix(ssl::CA_DECLINED) {
-        Some(reason) => (
+    if let Some(reason) = e.strip_prefix(ssl::CA_DECLINED) {
+        return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": reason, "code": "acme_order_failed" })),
-        ),
-        None => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        ),
+        );
     }
+    if let Some(reason) = e.strip_prefix(ssl::DNS_PROVIDER_DECLINED) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": reason, "code": "dns_provider_failed" })),
+        );
+    }
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": e })),
+    )
 }
 
 #[derive(Deserialize)]
@@ -551,9 +563,11 @@ async fn provision_dns01(
         Some(&opts),
     )
     .await
-    .map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e })))
-    })?;
+    // The third issuance door, and the one an operator reaches precisely BECAUSE
+    // HTTP-01 cannot work for them. It answered every failure with a reference
+    // number until now, including the two the operator could have fixed in a
+    // minute: a declined order and a Cloudflare token missing `DNS:Edit`.
+    .map_err(|e| ca_or_internal(e))?;
 
     // If NOT wildcard, enable SSL in nginx for this domain
     // (wildcard certs are applied per-site by the backend)

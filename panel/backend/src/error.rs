@@ -69,6 +69,15 @@ const MAX_AGENT_MSG: usize = 400;
 /// returns every failed order to an incident id, with nothing red.
 const ACME_ORDER_FAILED_CODE: &str = "acme_order_failed";
 
+/// The label the agent puts on a DNS-01 challenge the DNS PROVIDER refused.
+///
+/// The third party on the third door. A Cloudflare token without `DNS:Edit`
+/// cannot publish `_acme-challenge`, and that is the operator's to fix — but it
+/// is not something the certificate authority said, so it may not borrow
+/// [`ACME_ORDER_FAILED_CODE`]'s sentence, which names the CA. Same severed-pair
+/// caveat as its sibling, same cross-tree pin.
+const DNS_PROVIDER_FAILED_CODE: &str = "dns_provider_failed";
+
 /// The renewal route's wrapper around the same failure, carried by every agent
 /// ever shipped. Recognising it is what lets an install nobody has updated get
 /// the honest answer today. Same severed-pair caveat, same pin.
@@ -113,6 +122,40 @@ fn agent_message(body: &str) -> String {
     }
 }
 
+/// The stable `code` an agent attached to an error body, if it attached one.
+///
+/// Shared by the two label readers so the extraction lives once — a second
+/// hand-rolled copy is how one of them silently stops matching.
+fn agent_code(body: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(String::from))
+}
+
+/// The sentence a DNS provider's refusal should reach the operator as, or `None`
+/// when this failure is not one.
+///
+/// The label is the ONLY proof accepted here, and deliberately so. Its sibling
+/// [`acme_order_failure`] has a second one — the renewal route's wrapper, carried
+/// by every agent ever shipped — which is what lets an un-updated install get the
+/// honest answer today. The DNS-01 door never had such a wrapper, so there is no
+/// legacy shape to recognise, and inventing one out of the agent's old message
+/// prefixes would be guessing at text this very change rewrites. An agent older
+/// than this panel keeps its incident id here, which is what it is.
+pub fn dns_provider_failure(e: &AgentError) -> Option<String> {
+    let AgentError::Status(code, body) = e else {
+        return None;
+    };
+    if !(500..600).contains(code) {
+        return None;
+    }
+    if agent_code(body).is_some_and(|c| c == DNS_PROVIDER_FAILED_CODE) {
+        Some(agent_message(body).trim().to_string())
+    } else {
+        None
+    }
+}
+
 /// The sentence an agent's failed ACME order should reach the operator as, or
 /// `None` when this failure is not one.
 ///
@@ -145,10 +188,7 @@ pub fn acme_order_failure(e: &AgentError) -> Option<String> {
     if !(500..600).contains(code) {
         return None;
     }
-    let labelled = serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(String::from))
-        .is_some_and(|c| c == ACME_ORDER_FAILED_CODE);
+    let labelled = agent_code(body).is_some_and(|c| c == ACME_ORDER_FAILED_CODE);
 
     let msg = agent_message(body);
     if labelled || msg.starts_with(RENEWAL_FAILURE_PREFIX) {
@@ -488,6 +528,61 @@ mod tests {
         // logging users out again.
         let e = err(StatusCode::UNAUTHORIZED, "Current password is incorrect");
         assert!(body_of(&e).get("code").is_none());
+    }
+
+    #[test]
+    fn a_dns_provider_refusal_is_recognised_by_its_own_label() {
+        // The fixture carries the provider label and NOTHING else — no renewal
+        // wrapper, no ACME label — so exactly one branch can explain it (#666).
+        let e = AgentError::Status(
+            500,
+            r#"{"error":"Cloudflare refused to create the challenge record: [{\"code\":10000}]","code":"dns_provider_failed"}"#.into(),
+        );
+        assert_eq!(
+            dns_provider_failure(&e).as_deref(),
+            Some("Cloudflare refused to create the challenge record: [{\"code\":10000}]")
+        );
+        // ⭐ THE ASSERTION THAT MATTERS: the CA reader must NOT claim it. If it
+        // did, the panel would tell an operator Let's Encrypt declined when what
+        // actually happened is their API token cannot write DNS.
+        assert!(acme_order_failure(&e).is_none());
+    }
+
+    #[test]
+    fn a_declined_order_is_not_a_provider_refusal() {
+        // The mirror of the above, and the reason both are here: a classifier
+        // proved only in one direction cannot be shown to discriminate.
+        let e = AgentError::Status(
+            500,
+            r#"{"error":"The CA did not validate the DNS-01 challenge: incorrect TXT value","code":"acme_order_failed"}"#.into(),
+        );
+        assert!(dns_provider_failure(&e).is_none());
+        assert!(acme_order_failure(&e).is_some());
+    }
+
+    #[test]
+    fn the_renewal_wrapper_is_not_a_provider_refusal() {
+        // The compatibility path belongs to the CA reader alone. The provider
+        // reader takes the label and nothing else, so an un-updated agent keeps
+        // its incident id here rather than being guessed at.
+        let e = AgentError::Status(
+            500,
+            r#"{"error":"Renewal failed: challenge did not validate"}"#.into(),
+        );
+        assert!(dns_provider_failure(&e).is_none());
+    }
+
+    #[test]
+    fn an_unlabelled_dns01_fault_is_still_only_an_incident_id() {
+        // A fault raised INSIDE the labelled call — the certificate write, not
+        // the account load above it — so it is a fault that COULD have carried a
+        // label and deliberately does not.
+        let e = AgentError::Status(
+            500,
+            r#"{"error":"Write cert: No space left on device (os error 28)"}"#.into(),
+        );
+        assert!(dns_provider_failure(&e).is_none());
+        assert!(acme_order_failure(&e).is_none());
     }
 
     #[test]

@@ -51,6 +51,14 @@ G=/usr/bin/grep
 # THE SUBJECT: comments removed, then whitespace and the `\` continuing a Rust
 # string literal, so a multi-line statement flattens to the token it compiles to.
 subj() { sed -E -e 's://.*$::' -e 's:^[[:space:]]*--.*$::' "$1" | tr -d ' \n\\'; }
+subjin() { sed -E -e 's://.*$::' -e 's:^[[:space:]]*--.*$::' | tr -d ' \n\\'; }
+# ⛔ ONE FUNCTION'S BODY, not the file. An arm about a fall-through CANNOT be
+# written against the whole file: `(StatusCode::INTERNAL_SERVER_ERROR,
+# Json(json!({"error": e})),)` is what every unremarkable map_err in a route file
+# looks like, so a file-scoped arm is satisfied by its own siblings and cannot
+# fail however the classifier is rewritten. Found by mutation: inverting the
+# default left SIX other occurrences standing and the arm stayed green.
+fnbody() { awk -v p="$2" 'index($0,p){f=1} f{print} f && /^}$/{exit}' "$1"; }
 occ()  { printf '%s' "$1" | $G -oF -- "$2" | wc -l | tr -d ' '; }
 
 ERR=panel/backend/src/error.rs
@@ -63,8 +71,11 @@ DBR=panel/backend/src/routes/databases.rs
 ADBS=panel/agent/src/services/database_backup.rs
 ADBR=panel/agent/src/routes/database_backup.rs
 AMOD=panel/agent/src/routes/mod.rs
+DASH=panel/frontend/src/pages/Dashboard.tsx
+DBTSX=panel/frontend/src/pages/Databases.tsx
 
-for f in "$ERR" "$BSSL" "$ASSL" "$ASSLR" "$AGENT" "$SITES" "$DBR" "$ADBS" "$ADBR" "$AMOD"; do
+for f in "$ERR" "$BSSL" "$ASSL" "$ASSLR" "$AGENT" "$SITES" "$DBR" "$ADBS" "$ADBR" "$AMOD" \
+         "$DASH" "$DBTSX"; do
   [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
 done
 
@@ -72,7 +83,8 @@ done
 # and stripping can itself eat a file (the s1093 blocks-vs-lines trap), so each
 # subject is floored on its POST-strip size before anything reads it.
 for pair in "$ERR:6000" "$BSSL:10000" "$ASSL:8000" "$ASSLR:5000" "$AGENT:20000" \
-            "$SITES:60000" "$DBR:20000" "$ADBS:8000" "$ADBR:4000" "$AMOD:2000"; do
+            "$SITES:60000" "$DBR:20000" "$ADBS:8000" "$ADBR:4000" "$AMOD:2000" \
+            "$DASH:40000" "$DBTSX:30000"; do
   f=${pair%:*}; min=${pair##*:}
   n=$(subj "$f" | wc -c)
   [ "$n" -ge "$min" ] || { bad "SETUP" "$f has $n chars of code, expected >= $min"; exit 1; }
@@ -83,10 +95,14 @@ F_ASSL=$(subj "$ASSL")
 F_AGENT=$(subj "$AGENT"); F_SITES=$(subj "$SITES")
 F_DBR=$(subj "$DBR");   F_ADBS=$(subj "$ADBS"); F_ADBR=$(subj "$ADBR")
 F_AMOD=$(subj "$AMOD")
+F_DASH=$(subj "$DASH"); F_DBTSX=$(subj "$DBTSX")
 
 echo "── §A  a failed order is identified POSITIVELY, never by status alone"
 has "A1 the translator exists" "$F_ERR" "pubfnacme_order_failure(e:&AgentError)->Option<String>"
-has "A2 it is bounded to 5xx" "$F_ERR" "if!(500..600).contains(code){returnNone;}"
+F_ACMEREAD=$(fnbody "$ERR" "pub fn acme_order_failure(" | subjin)
+F_DNSREAD=$(fnbody "$ERR" "pub fn dns_provider_failure(" | subjin)
+has "A2 it is bounded to 5xx" "$F_ACMEREAD" "if!(500..600).contains(code){returnNone;}"
+has "A2b and so is the provider reader beside it" "$F_DNSREAD" "if!(500..600).contains(code){returnNone;}"
 # ⭐ THE ARM THAT MATTERS. Widening to any 5xx would reclassify an unreadable ACME
 # account — a fault the operator cannot act on — as their problem to fix. The
 # label and the legacy wording are the only two admissible proofs.
@@ -99,19 +115,55 @@ hasnt "A5 and status alone is NOT a proof" "$F_ERR" "iftrue{"
 LABEL='"acme_order_failed"'
 eq "A6 the panel declares the label once" "$(occ "$F_ERR" "constACME_ORDER_FAILED_CODE:&str=$LABEL;")" 1
 eq "A7 the agent labels in exactly one place" "$(occ "$F_ASSLR" "$LABEL")" 1
-eq "A8 both doors go through that one classifier" "$(occ "$F_ASSLR" "ca_or_internal(e)")" 2
+eq "A8 all THREE doors go through that one classifier" "$(occ "$F_ASSLR" "ca_or_internal(e)")" 3
 # ⛔ POSITIVE IDENTIFICATION, and the direction is the whole safety of it. The
 # marker is applied where the CA spoke; everything unmarked — including an arm
 # added later — stays an internal fault and keeps its incident id. Inverting this
 # default would hand every future error to the operator as though the CA said it.
-has "A9a the classifier keys on the CA marker" "$F_ASSLR" "matche.strip_prefix(ssl::CA_DECLINED)"
-has "A9b and an unmarked error carries no label" "$F_ASSLR" 'None=>(StatusCode::INTERNAL_SERVER_ERROR,Json(serde_json::json!({"error":e})),)'
+F_CLASSIFIER=$(fnbody "$ASSLR" "fn ca_or_internal(" | subjin)
+[ "$(printf '%s' "$F_CLASSIFIER" | wc -c)" -ge 200 ] || { bad "SETUP" "ca_or_internal body not found — every hasnt below would pass vacuously"; exit 1; }
+has "A9a the classifier keys on the CA marker" "$F_CLASSIFIER" "ifletSome(reason)=e.strip_prefix(ssl::CA_DECLINED)"
+has "A9c and on the provider marker, separately" "$F_CLASSIFIER" "ifletSome(reason)=e.strip_prefix(ssl::DNS_PROVIDER_DECLINED)"
+# ⛔ THE PAIRING, not the presence. Counting each label once each is satisfied by
+# a SWAP — both literals still appear exactly once while the CA marker emits the
+# provider's code and vice-versa, which would make the panel tell an operator
+# Let'"'"'s Encrypt declined when their API token is what refused. Neither the
+# cross-tree counts nor the panel'"'"'s own unit tests can see that: the tests use
+# hand-written fixtures and never read the agent. Only the pairing catches it.
+has "A9d the CA marker emits the CA code" "$F_CLASSIFIER" \
+    'e.strip_prefix(ssl::CA_DECLINED){return(StatusCode::INTERNAL_SERVER_ERROR,Json(serde_json::json!({"error":reason,"code":"acme_order_failed"}))'
+has "A9e the provider marker emits the provider code" "$F_CLASSIFIER" \
+    'e.strip_prefix(ssl::DNS_PROVIDER_DECLINED){return(StatusCode::INTERNAL_SERVER_ERROR,Json(serde_json::json!({"error":reason,"code":"dns_provider_failed"}))'
+# ⛔ THE FALL-THROUGH. Neither marker matched, so no code is attached and the panel
+# keeps its incident id. Inverting this default — labelling by absence — is the one
+# change that would hand every future arm to the operator as though the CA spoke.
+eq "A9b and an unmarked error carries no label" "$(occ "$F_CLASSIFIER" 'json!({"error":e})')" 1
+hasnt "A9b2 the fall-through attaches no code of any kind" "$F_CLASSIFIER" 'json!({"error":e,"code"' 
 # The marker is the OTHER severed pair — declared in the service, consumed in the
 # route, and worth counting because the count is what a silent unmarking moves.
 eq "A10 the marker is declared once" "$(occ "$F_ASSL" 'pubconstCA_DECLINED:&str="[ca]";')" 1
-eq "A11 and marks the eight arms where the CA actually spoke" "$(occ "$F_ASSL" '{CA_DECLINED}')" 8
+eq "A11 and marks the seventeen arms where the CA actually spoke" "$(occ "$F_ASSL" '{CA_DECLINED}')" 17
+# ⛔ THE SECOND SEVERED PAIR, added when the DNS-01 door joined. Cloudflare
+# refusing to publish `_acme-challenge` is the operator's to fix and earns a
+# sentence, but it is NOT something the CA said — attributing it to the CA would
+# name the wrong party in a message written to be trusted. Counted on both sides
+# for the same reason as the first: a silent unmarking is what the count moves.
+eq "A6b the panel declares the provider label once" "$(occ "$F_ERR" 'constDNS_PROVIDER_FAILED_CODE:&str="dns_provider_failed";')" 1
+eq "A7b the agent labels a provider refusal in one place" "$(occ "$F_ASSLR" '"dns_provider_failed"')" 1
+eq "A10b the provider marker is declared once" "$(occ "$F_ASSL" 'pubconstDNS_PROVIDER_DECLINED:&str="[dns]";')" 1
+eq "A11b and marks the six arms where the provider refused" "$(occ "$F_ASSL" '{DNS_PROVIDER_DECLINED}')" 6
 # ⚠ The wrapper every agent ever shipped. A panel newer than its agent recognises
 # a renewal by it alone, so removing it would silently strip the compatibility path.
+# ⛔ THE PAIRING IN THE SERVICE. A11/A11b count the two markers, and a COUNT cannot
+# see a swap: mark one CA arm `[dns]` and one Cloudflare arm `[ca]` and both totals
+# are unchanged, while the panel then tells an operator Let's Encrypt declined when
+# their API token is what refused — the precise outcome the three-party split exists
+# to prevent. Pin representative arms of each class to their own marker, and forbid
+# the crossed forms outright.
+has "A11c a CA arm carries the CA marker" "$F_ASSL" '{CA_DECLINED}TheCAdidnotvalidatetheDNS-01challenge:'
+has "A11d a Cloudflare arm carries the provider marker" "$F_ASSL" '{DNS_PROVIDER_DECLINED}Cloudflarerefusedtocreatethechallengerecord:'
+hasnt "A11e no CA sentence wears the provider marker" "$F_ASSL" '{DNS_PROVIDER_DECLINED}TheCA'
+hasnt "A11f no Cloudflare sentence wears the CA marker" "$F_ASSL" '{CA_DECLINED}Cloudflare'
 eq "A12 the renewal wrapper survives the rewrite" "$(occ "$F_ASSLR" 'format!("Renewalfailed:{msg}")')" 1
 
 echo "── §B  BOTH SSL doors, not the one the register named"
@@ -121,16 +173,47 @@ has "B3 provisioning is one of them" "$F_BSSL" 'acme_failure_or(&site.domain,"SS
 has "B4 renewal is the other" "$F_BSSL" 'acme_failure_or(&site.domain,"SSLrenewal",e))?;'
 has "B5 it answers 422, not a passthrough" "$F_BSSL" \
     'returnerr(StatusCode::UNPROCESSABLE_ENTITY,&format!("Acertificatefor{domain}couldnotbeissued:'
-# Both 422s must survive: s386's foreign-issuer refusal is the other one.
-eq "B5b and s386's refusal keeps its own" "$(occ "$F_BSSL" "StatusCode::UNPROCESSABLE_ENTITY,")" 2
+# All four 422s must survive: s386's foreign-issuer refusal, s387's declined
+# order, and the DNS-01 door's two — a provider refusal and a declined order,
+# which are different sentences because they are different parties.
+eq "B5b and every refusal that earns a 422 keeps one" "$(occ "$F_BSSL" "StatusCode::UNPROCESSABLE_ENTITY,")" 4
 # ⛔ #662. The compatibility path puts this sentence in front of a local agent
 # fault too, so it must name no cause — and must never say "try again", which on
 # a rate-limited order is the one instruction that makes it worse.
 hasnt "B5c the sentence asserts no cause" "$F_BSSL" "LetsEncryptcouldnotissue"
 hasnt "B5d and never tells the operator to retry" "$F_BSSL" "thentryagain"
-has  "B5e the hint is conditional" "$F_BSSL" "Ifthatisavalidationfailure,"
+F_HTTP01MSG=$(fnbody "$BSSL" "fn acme_failure_or(" | subjin)
+F_DNS01MSG=$(fnbody "$BSSL" "fn dns01_failure_or(" | subjin)
+[ "$(printf '%s' "$F_DNS01MSG" | wc -c)" -ge 400 ] || { bad "SETUP" "dns01_failure_or body not found — B9f would pass vacuously"; exit 1; }
+has  "B5e the hint is conditional" "$F_HTTP01MSG" "Ifthatisavalidationfailure,"
 # Anything not positively identified must still reach the old path untouched.
 has "B6 everything else still goes to the generic mapper" "$F_BSSL" "agent_error(context,e)"
+# ⛔ THE THIRD DOOR, and it must NOT share the sentence above. An operator is on
+# the DNS-01 door precisely BECAUSE port 80 cannot be reached, so the sibling's
+# "check that port 80 is reachable" is false by construction here. It gets its own
+# translator naming the two things this door can actually fix.
+has "B7 the third door has its own translator" "$F_BSSL" "fndns01_failure_or("
+has "B8 and the third door is wired to it" "$F_BSSL" "dns01_failure_or(provision_domain,&zone.domain,wildcard,e))?;"
+has "B9a the provider hint names the token scope" "$F_DNS01MSG" "ascopedtokenneedstheDNS:Editpermission."
+has "B9b the CA hint names the challenge record" "$F_DNS01MSG" "the_acme-challengeTXTrecordfor{subject}"
+# ⛔ THE ZONE, NOT THE ORDERED NAME. The zone lookup exists to match a site against
+# its PARENT zone, so on the ordinary subdomain site these differ — and telling an
+# operator to look in the `blog.example.com` zone sends them after something that is
+# not in their Cloudflare account. Both hints must spell the resolved zone.
+eq "B9d both hints name the resolved zone" "$(occ "$F_DNS01MSG" 'inthe{zone}zone')" 1
+eq "B9e and the provider hint too" "$(occ "$F_DNS01MSG" 'forthe{zone}zone')" 1
+hasnt "B9f and neither names the ordered name as a zone" "$F_DNS01MSG" "the{ordered}zone"
+# ⛔ #663 — BOTH hints, which is what this arm's name has always claimed. The CA
+# branch fires on a rate limit too, where publishing a TXT record fixes nothing, so
+# an unconditional imperative there is the exact defect #663 was written about.
+has "B9c the provider hint is conditional" "$F_DNS01MSG" "IfCloudflarerejectedthechange,"
+has "B9c2 and so is the CA hint beside it" "$F_DNS01MSG" "Ifthatisavalidationfailure,"
+# ⚠ NOT a text count. This file's own tests assert the ABSENCE of the port-80
+# sentence, so their assertions carry the literal and a count would be satisfied
+# by the very test meant to prove it — the source-pin prose trap. The behaviour is
+# proved at RUNTIME; what a pin can honestly assert is that the proof still exists.
+has "B10 and a runtime test proves it never repeats the port-80 advice" "$F_BSSL" \
+    "fna_provider_refusal_names_the_token_and_never_port_80()"
 
 echo "── §C  every remote long operation takes the LONG pool"
 # ⛔ DERIVED, NOT LISTED. The register named two of these; there are three, and the
@@ -213,6 +296,46 @@ has "G14 and a shared name is not purged" "$F_DBR" "ifshared{"
 # dumped, which is why its directory was never what went missing.
 eq "G15 every dump-directory door shares one predicate" \
    "$(occ "$F_ADBR" "database_backup::is_db_dir_name(")" 6
+
+echo "── §H  the two fixes that rode along, and the control/reader pair"
+# ⛔ The AGENT is the authority on a database name and demands an alphanumeric first
+# character; the panel accepted `_mydata`, forwarded it, and handed back the agent's
+# raw refusal. Pin the rule on BOTH surfaces — a fix on one is the divergence again.
+has "H1 the panel enforces the first-character rule" "$F_DBR" \
+    ".next().is_some_and(|c|c.is_ascii_alphanumeric())"
+has "H2 and the form states it rather than discovering it" "$F_DBTSX" \
+    'pattern="[a-zA-Z0-9][a-zA-Z0-9_]*"'
+# ⚠ The 63 is NOT the agent's 64 and must not be "aligned": a PostgreSQL identifier
+# is 63 bytes, so the stricter side is the correct one and refuses in our own words.
+has "H3 the length cap stays at the PostgreSQL identifier limit" "$F_DBR" "body.name.len()>63"
+
+# ⛔ DERIVED, NOT LISTED. Every id offered as a checkbox must have a render guard
+# that reads it. Three did not: two controlled nothing at all, and the certificate
+# countdown was governed by the UNRELATED "Active Issues" switch — so turning off
+# Active Issues silently took the SSL panel with it. An arm hard-coding today's
+# fourteen ids could not see a fifteenth arrive inert.
+WIDGET_IDS=$(awk '/Dashboard Widgets/{f=1} f&&/\{ id: "/{print} f&&/\].filter\(w =>/{exit}' "$DASH" \
+             | sed -n 's/.*{ id: "\([a-z_]*\)".*/\1/p')
+WN=$(printf '%s\n' "$WIDGET_IDS" | grep -c .)
+if [ "$WN" -lt 10 ]; then
+  bad "H4 dashboard widget registry" "enumerated only $WN ids — implausible, so H5 would prove nothing"
+else
+  ok "H4 enumerated $WN dashboard widget ids from the registry itself"
+  INERT=""
+  for wid in $WIDGET_IDS; do
+    case "$F_DASH" in *"isVisible(\"$wid\")"*) ;; *) INERT="$INERT $wid" ;; esac
+  done
+  [ -z "$INERT" ] && ok "H5 every widget checkbox has a render guard that reads it" \
+                  || bad "H5 every widget checkbox has a render guard that reads it" "inert:$INERT"
+fi
+# The SSL countdown must not go back to riding the Active Issues switch.
+# ⚠ COUNTED, not merely present — and the count is 2 on purpose. The outer gate
+# that decides whether the row renders at all carries the SAME condition as the
+# inner render guard, so a `has` here is satisfied by the outer one while the inner
+# guard is deleted. That is the sibling-satisfaction trap this suite hit twice
+# already today; an `eq` is what makes either deletion go red.
+eq "H6 the certificate countdown reads its own switch, at both its gates" \
+   "$(occ "$F_DASH" 'isVisible("ssl_countdown")&&intel.ssl_countdowns.length>0')" 2
 
 echo
 echo "─────────────────────────────────────────────"

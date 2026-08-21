@@ -4,6 +4,79 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.141.0]
+
+### Fixed — the wildcard certificate door still answered "Operation failed"
+
+v2.140.0 made a declined certificate order explain itself at both HTTP-01 doors,
+and said in this file that the DNS-01 door — the only way a wildcard certificate
+is issued — would get its own message separately. This is that message.
+
+The door matters more than its share of traffic suggests, because of *who* reaches
+it: you choose DNS-01 precisely when HTTP-01 cannot work for you. Until now it
+spent up to three minutes and then said `Operation failed. Reference: <uuid>`,
+including for the two failures you could have fixed in a minute.
+
+It could not simply reuse the sentence the other two doors share. That one offers
+"check that the domain resolves here and that port 80 is reachable" — advice this
+door's own button contradicts, since it exists for people whose port 80 is not
+reachable. Repeating it would have sent you to open a port that had nothing to do
+with the failure.
+
+There are also three parties here rather than two, and they are now told apart:
+
+- **Let's Encrypt declined.** Answered with the CA's own reason, plus a
+  conditional note about the `_acme-challenge` TXT record.
+- **Cloudflare refused.** Almost always an API token without the `DNS:Edit`
+  permission — yours to fix, and now named as such. Attributing this to Let's
+  Encrypt would have blamed the wrong party.
+- **Something on the server broke.** Unchanged: a reference number, which is what
+  an unwritable directory is.
+
+As before the classification is positive — the agent marks what the CA and the DNS
+provider actually said, and anything unmarked stays a server fault and keeps its
+reference number, including any failure added later. On a wildcard the message
+names the certificate that was actually ordered (`*.your-zone`), not the site you
+happened to be looking at, because the order is placed against the zone.
+
+**Still not fixed, and worth stating plainly:** *renewal* of a DNS-01 certificate
+does not run over DNS-01 at all — every renewal path uses HTTP-01, which cannot work
+for the sites that needed DNS-01 in the first place. Nothing records which
+challenge issued a certificate, so that needs a schema change and is not in this
+release. Certificate *issuance* now explains itself at all three doors; renewal
+still does not.
+
+This half lives in the agent, which is installed together with the panel by the
+normal update. If you run additional servers, their agents need to update too
+before their DNS-01 failures start explaining themselves.
+
+### Fixed — a database name the panel accepted and the machine then refused
+
+The create form and the panel both accepted a name beginning with an underscore
+(`_mydata`). The agent, which actually creates the database, requires the first
+character to be a letter or a number — so the form validated your input, the panel
+forwarded it, and you got a raw refusal back from a machine.
+
+No database survived in that state — the record is written first to claim its port,
+and the agent's refusal rolls it straight back — so this was a confusing failure
+rather than a corrupting one. The form now states the rule and refuses the name
+itself, before anything is written at all. The 63-character limit is unchanged and
+is deliberate: a PostgreSQL identifier is 63 bytes.
+
+### Fixed — three dashboard checkboxes that controlled nothing
+
+*Customize* on the dashboard offered switches for **SSL Countdown**, **Disk I/O**
+and **Health Indicator**. None of the three was read by anything: ticking or
+unticking them changed nothing at all.
+
+Worse, the SSL certificate countdown was actually governed by the **Active Issues**
+switch, so turning off Active Issues silently took the certificate expiry panel
+with it — one control hiding a panel it did not name, while the control that did
+name it sat inert.
+
+All three now do what they say, and the certificate countdown is independent of
+Active Issues.
+
 ## [2.140.0]
 
 ### Fixed — an SSL certificate that could not be issued said only "Operation failed"

@@ -690,13 +690,15 @@ export default function Dashboard() {
           </span>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {intel && (
+          {intel && isVisible("health_banner") && (
             <Link to={overallStatus.to} title={overallStatus.title} className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium hover:opacity-80 transition-opacity ${overallStatus.color}`}>
               <span className={`w-1.5 h-1.5 rounded-full ${overallStatus.dot} ${overallStatus.dot === "bg-rust-500" ? "animate-pulse" : ""}`} />
               {overallStatus.label}
             </Link>
           )}
-          <div className="h-4 w-px bg-dark-600 hidden sm:block" />
+          {intel && isVisible("health_banner") && (
+            <div className="h-4 w-px bg-dark-600 hidden sm:block" />
+          )}
           <button onClick={() => setShowWidgetConfig(!showWidgetConfig)}
             className="px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs transition-colors">
             {showWidgetConfig ? "Done" : "Customize"}
@@ -1164,7 +1166,7 @@ export default function Dashboard() {
               </div>
             )}
             {/* Disk I/O */}
-            {diskIo && <>
+            {diskIo && isVisible("disk_io") && <>
               <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Disk Read</span>
                 <span className="text-sm text-dark-50 font-medium font-mono">{formatRate(diskIo.read_bytes_sec)}</span>
@@ -1261,9 +1263,9 @@ export default function Dashboard() {
           )}
 
           {/* Active Issues + SSL — side by side */}
-          {isVisible("issues") && intel && (intel.top_issues.length > 0 || intel.ssl_countdowns.length > 0) && (
+          {intel && ((isVisible("issues") && intel.top_issues.length > 0) || (isVisible("ssl_countdown") && intel.ssl_countdowns.length > 0)) && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-              {intel.top_issues.length > 0 && (
+              {isVisible("issues") && intel.top_issues.length > 0 && (
                 <div className="border border-dark-500 bg-dark-800 rounded-lg p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-xs text-dark-300 uppercase tracking-widest">Active Issues</h3>
@@ -1282,7 +1284,7 @@ export default function Dashboard() {
                   </div>
                 </div>
               )}
-              {intel.ssl_countdowns.length > 0 && (
+              {isVisible("ssl_countdown") && intel.ssl_countdowns.length > 0 && (
                 <div className="border border-dark-500 bg-dark-800 rounded-lg p-4">
                   <h3 className="text-xs text-dark-300 uppercase tracking-widest mb-3">SSL Certificates</h3>
                   <div className="space-y-2">

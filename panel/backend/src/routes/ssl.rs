@@ -7,7 +7,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser, ServerScope};
-use crate::error::{acme_order_failure, internal_error, err, agent_error, ApiError};
+use crate::error::{acme_order_failure, dns_provider_failure, internal_error, err, agent_error, ApiError};
 use crate::models::Site;
 use crate::AppState;
 use crate::services::activity;
@@ -59,6 +59,69 @@ fn acme_failure_or(
     }
     agent_error(context, e)
 }
+
+/// Answer a failed DNS-01 order with the reason, and everything else the way it
+/// was answered before.
+///
+/// The THIRD ACME door, and it must not borrow the sentence the other two share.
+/// That one offers "check that the domain resolves here and that port 80 is
+/// reachable" — advice this door's own button contradicts, because an operator
+/// chooses DNS-01 precisely WHEN port 80 cannot be reached. Repeating it here
+/// would send somebody to open a port that has nothing to do with the failure.
+///
+/// Three parties can fail on this door and the panel keeps them apart, most
+/// specific first. The DNS provider refusing to publish `_acme-challenge` is the
+/// commonest real failure and almost always a token missing `DNS:Edit`; the CA
+/// declining is the same class the sibling handles; anything unlabelled is this
+/// machine's fault and keeps its incident id.
+///
+/// ⚠ Both hints are CONDITIONAL and neither says "try again". A declined order
+/// arrives here for a rate limit too, and on a rate limit "try again" is the one
+/// instruction that makes it worse (#663).
+fn dns01_failure_or(
+    ordered: &str,
+    zone: &str,
+    wildcard: bool,
+    e: crate::services::agent::AgentError,
+) -> ApiError {
+    // What was actually ORDERED, which on a wildcard is not the site the operator
+    // is looking at: the order is placed against the ZONE apex. Naming the site
+    // here would describe a certificate nobody asked for.
+    let subject = if wildcard {
+        format!("*.{ordered}")
+    } else {
+        ordered.to_string()
+    };
+
+    if let Some(reason) = dns_provider_failure(&e) {
+        tracing::warn!(domain = %ordered, reason = %reason, "DNS-01 SSL was refused by the DNS provider");
+        let reason = reason.trim_end_matches(['.', ' ']);
+        return err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!(
+                "The DNS-01 challenge for {subject} could not be completed: {reason}. If \
+                 Cloudflare rejected the change, check that the credentials for the {zone} \
+                 zone may edit its DNS records — a scoped token needs the DNS:Edit permission."
+            ),
+        );
+    }
+
+    if let Some(reason) = acme_order_failure(&e) {
+        tracing::warn!(domain = %ordered, reason = %reason, "DNS-01 SSL was declined");
+        let reason = reason.trim_end_matches(['.', ' ']);
+        return err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!(
+                "A certificate for {subject} could not be issued: {reason}. If that is a \
+                 validation failure, check that the _acme-challenge TXT record for {subject} \
+                 can be published in the {zone} zone."
+            ),
+        );
+    }
+
+    agent_error("DNS-01 SSL", e)
+}
+
 
 /// After an SSL provision/renew, re-render the FULL nginx vhost from the site's
 /// current DB config. The agent's SSL provision/renew only renders a SUBSET
@@ -404,7 +467,7 @@ pub async fn provision_dns01(
             180,
         )
         .await
-        .map_err(|e| agent_error("DNS-01 SSL", e))?;
+        .map_err(|e| dns01_failure_or(provision_domain, &zone.domain, wildcard, e))?;
 
     // Parse response
     let ssl_expiry = result
@@ -1062,4 +1125,112 @@ pub(crate) async fn resolve_profile(
     .ok()
     .flatten()
     .filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod dns01_message_tests {
+    use super::*;
+    use crate::services::agent::AgentError;
+
+    fn message(e: ApiError) -> String {
+        e.1 .0["error"].as_str().unwrap_or_default().to_string()
+    }
+
+    fn labelled(code: &str, reason: &str) -> AgentError {
+        AgentError::Status(
+            500,
+            serde_json::json!({ "error": reason, "code": code }).to_string(),
+        )
+    }
+
+    #[test]
+    fn a_provider_refusal_names_the_token_and_never_port_80() {
+        // ⚠ A SUBDOMAIN site, deliberately. The zone lookup exists to match a site
+        // against a PARENT zone, so site == zone is the case that cannot see a
+        // site/zone confusion at all — every fixture here keeps them distinct.
+        let e = dns01_failure_or(
+            "blog.example.com",
+            "example.com",
+            false,
+            labelled("dns_provider_failed", "Cloudflare refused to create the challenge record"),
+        );
+        assert_eq!(e.0.as_u16(), 422);
+        let m = message(e);
+        assert!(m.contains("DNS:Edit"), "{m}");
+        // The zone the operator actually has in Cloudflare — never the site FQDN,
+        // which is not a zone and will not be found by anyone who goes looking.
+        assert!(m.contains("the example.com zone"), "{m}");
+        assert!(!m.contains("the blog.example.com zone"), "{m}");
+        // ⭐ THE POINT OF THE WHOLE UNIT. The sibling door's sentence offers
+        // port-80 advice; an operator is on THIS door precisely because port 80
+        // cannot be reached, so repeating it would send them to open a port that
+        // has nothing to do with the failure.
+        assert!(!m.contains("port 80"), "{m}");
+        assert!(!m.contains("try again"), "{m}");
+    }
+
+    #[test]
+    fn a_declined_order_names_the_challenge_record_and_never_port_80() {
+        let e = dns01_failure_or(
+            "blog.example.com",
+            "example.com",
+            false,
+            labelled("acme_order_failed", "The CA did not validate the DNS-01 challenge"),
+        );
+        assert_eq!(e.0.as_u16(), 422);
+        let m = message(e);
+        assert!(m.contains("_acme-challenge"), "{m}");
+        assert!(m.contains("the example.com zone"), "{m}");
+        assert!(!m.contains("the blog.example.com zone"), "{m}");
+        // #663: this branch also fires on a rate limit, where publishing a TXT
+        // record fixes nothing — so the advice must stay conditional.
+        assert!(m.contains("If that is a validation failure"), "{m}");
+        assert!(!m.contains("port 80"), "{m}");
+        assert!(!m.contains("try again"), "{m}");
+    }
+
+    #[test]
+    fn a_wildcard_names_the_certificate_that_was_actually_ordered() {
+        // The order is placed against the ZONE, not the site. Naming the site
+        // here would describe a certificate nobody asked for.
+        let e = dns01_failure_or(
+            "example.com",
+            "example.com",
+            true,
+            labelled("acme_order_failed", "The CA refused the certificate order"),
+        );
+        let m = message(e);
+        assert!(m.contains("*.example.com"), "{m}");
+    }
+
+    #[test]
+    fn a_wildcard_provider_refusal_also_names_the_wildcard() {
+        // ⭐ THE BUSIEST PATH ON THIS DOOR and it had no test: DNS-01 is the wildcard
+        // door, and a token without DNS:Edit is the commonest real failure on it.
+        let e = dns01_failure_or(
+            "example.com",
+            "example.com",
+            true,
+            labelled("dns_provider_failed", "Cloudflare refused to create the challenge record"),
+        );
+        assert_eq!(e.0.as_u16(), 422);
+        let m = message(e);
+        assert!(m.contains("*.example.com"), "{m}");
+        assert!(m.contains("DNS:Edit"), "{m}");
+        assert!(!m.contains("port 80"), "{m}");
+    }
+
+    #[test]
+    fn an_unlabelled_fault_keeps_its_incident_id() {
+        // Neither label, so neither sentence — this is a 502 with a reference,
+        // which is what an unwritable directory is.
+        let e = dns01_failure_or(
+            "blog.example.com",
+            "example.com",
+            false,
+            AgentError::Status(500, r#"{"error":"Create cert dir: Permission denied"}"#.into()),
+        );
+        assert_eq!(e.0.as_u16(), 502);
+        assert!(message(e).contains("Reference:"));
+    }
 }

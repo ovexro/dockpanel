@@ -163,6 +163,28 @@ pub async fn create(
             "Database name must be alphanumeric with underscores",
         ));
     }
+    // ⛔ The AGENT is the authority on this name — it is what creates the
+    // container — and its `is_valid_name` demands an alphanumeric FIRST
+    // character. Without this clause the panel accepted `_mydata`, called the
+    // agent, and handed the operator the agent's own refusal: a form the product
+    // had just validated, answered by a machine. The rule belongs where the
+    // person typing it can read it.
+    //
+    // ⚠ The 63 above is NOT the same divergence and must not be "aligned" to the
+    // agent's 64: a PostgreSQL identifier is 63 bytes, so 63 is the cross-engine
+    // cap and the stricter side is the correct one. It refuses in the panel's own
+    // words, which is the behaviour this clause exists to produce.
+    if !body
+        .name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+    {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Database name must start with a letter or a number",
+        ));
+    }
 
     if is_reserved_db_name(&body.name) {
         return Err(err(

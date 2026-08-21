@@ -417,8 +417,8 @@ eq "F9 the healer stops rather than renewing" \
 # number that is correct and a third would be a question worth asking.
 eq "F10 the manual door refuses with a 4xx naming the issuer" \
    "$(occ "$F_SSL" 'StatusCode::UNPROCESSABLE_ENTITY,&format!("Thecertificateon{}wasnotissuedbyDockPanel(issuer:{})')" "1"
-eq "F10b and this file holds exactly the two refusals that earn one" \
-   "$(occ "$F_SSL" 'StatusCode::UNPROCESSABLE_ENTITY,')" "2"
+eq "F10b and this file holds exactly the four refusals that earn one" \
+   "$(occ "$F_SSL" 'StatusCode::UNPROCESSABLE_ENTITY,')" "4"
 # The operator has to LEARN about a declined renewal, or a protected certificate
 # and a forgotten one look identical from the panel. Counts the CALL, so deleting
 # the alert while keeping the `continue` — a silent skip, which is what a
