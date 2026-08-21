@@ -411,13 +411,27 @@ eq "F9 the healer stops rather than renewing" \
    "$(occ "$F_HEAL" 'Auto-heal:NOTrenewing{domain}')" "1"
 eq "F10 the manual door refuses with a 4xx naming the issuer" \
    "$(occ "$F_SSL" 'StatusCode::UNPROCESSABLE_ENTITY,')" "1"
-# The operator has to LEARN about a skipped renewal, or a protected certificate
-# and a forgotten one look identical from the panel.
-# Five: the four pre-existing blocked-renewal reasons, plus the new one. This
-# counts the CALLS, so deleting the new alert while keeping the `continue` — a
-# silent skip, which is what a protected certificate must never be — goes red.
-eq "F11 the skipped renewal raises the existing alert" \
-   "$(occ "$F_SCAN" 'ssl_renewal_alert(')" "5"
+# The operator has to LEARN about a declined renewal, or a protected certificate
+# and a forgotten one look identical from the panel. Counts the CALL, so deleting
+# the alert while keeping the `continue` — a silent skip, which is what a
+# protected certificate must never be — goes red.
+eq "F11 the declined renewal raises an alert" \
+   "$(occ "$F_SCAN" 'ssl_renewal_declined_alert(pool,user_id,site_id,domain,&issuer)')" "1"
+# ⚠ and it must NOT borrow the failure helper's words. That helper says "SSL
+# renewal failed", "could not renew it automatically" and `critical` — three
+# statements that are all false when the panel declined ON PURPOSE. Paging an
+# operator about a failure that did not happen is this release's own defect class
+# one layer out, and it trains them to ignore the alert that means a site really
+# is about to go dark.
+eq "F12 the declined case has its own helper" \
+   "$(occ "$F_SCAN" 'asyncfnssl_renewal_declined_alert(')" "1"
+eq "F13 worded as the operator's job, at warning severity" \
+   "$([ "$(occ "$F_SCAN" '"ssl_renewal_failure","","warning",')" = 1 ] && \
+      [ "$(occ "$F_SCAN" 'SSLcertificatefor{domain}needsrenewingbyyou')" = 1 ] && echo yes || echo no)" "yes"
+# The four genuine failure paths keep the helper that names a failure — the split
+# is the point, so both counts are pinned.
+eq "F14 the real failure paths still alert as failures" \
+   "$(occ "$F_SCAN" 'ssl_renewal_alert(')" "4"
 
 echo "── G. The admin can see what the admin is told to fix ───────────────────────"
 

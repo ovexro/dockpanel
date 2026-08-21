@@ -251,6 +251,47 @@ async fn run_scan(pool: &PgPool, member: &FleetMember) {
 /// Raise an alert when a certificate this scanner found to be expiring cannot be
 /// renewed. Deduped per site so the six-hourly scan cannot stack up duplicates
 /// alongside the auto-healer's own alert for the same certificate.
+/// A renewal DockPanel deliberately did not perform, because the certificate is
+/// not one it issued.
+///
+/// Deliberately NOT `ssl_renewal_alert`. That helper's words are
+/// "SSL renewal failed", "could not renew it automatically" and severity
+/// `critical` — three statements that are all false here. Nothing failed and
+/// nothing was prevented: the panel declined, correctly, to overwrite somebody
+/// else's certificate. Sending that operator a critical page about a failure
+/// would be the same defect this release exists to remove, one layer further
+/// out — and it would train them to ignore the alert that means their site is
+/// about to go dark.
+///
+/// The `alert_type` is unchanged so routing, dedupe and every notification lane
+/// behave exactly as before; only the wording and the severity differ.
+async fn ssl_renewal_declined_alert(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    site_id: uuid::Uuid,
+    domain: &str,
+    issuer: &str,
+) {
+    notifications::fire_alert_deduped(
+        pool,
+        user_id,
+        None,
+        Some(site_id),
+        "ssl_renewal_failure",
+        "",
+        "warning",
+        &format!("SSL certificate for {domain} needs renewing by you"),
+        &format!(
+            "The certificate for {domain} is expiring, and DockPanel did not renew it \
+             because it did not issue it: it was issued by {issuer}. Renewing here would \
+             have replaced your certificate with a Let's Encrypt one. Renew it wherever it \
+             was issued and upload the replacement under the site's SSL tab."
+        ),
+        12,
+    )
+    .await;
+}
+
 async fn ssl_renewal_alert(
     pool: &PgPool,
     user_id: uuid::Uuid,
@@ -399,18 +440,7 @@ async fn auto_fix_safe_findings(
                         "Auto-fix: NOT renewing {domain} — the installed certificate was \
                          issued by {issuer}, not by DockPanel. Renewing would replace it."
                     );
-                    ssl_renewal_alert(
-                        pool,
-                        user_id,
-                        site_id,
-                        domain,
-                        &format!(
-                            "the installed certificate was issued by {issuer}, not by DockPanel. \
-                             DockPanel will not replace it — renew it wherever it was issued, or \
-                             upload the replacement under the site's SSL tab"
-                        ),
-                    )
-                    .await;
+                    ssl_renewal_declined_alert(pool, user_id, site_id, domain, &issuer).await;
                     continue;
                 }
 

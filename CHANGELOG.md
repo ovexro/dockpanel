@@ -4,6 +4,26 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.139.1]
+
+### Fixed — a certificate DockPanel deliberately left alone was reported as a failure
+
+2.139.0 stopped the automatic renewal from replacing certificates it did not
+issue, and told you about the skip by reusing the alert that already existed for
+renewals that go wrong. That alert says **"SSL renewal failed"**, explains that
+DockPanel *could not* renew the certificate, and pages at **critical** severity.
+
+All three are untrue when the panel declined on purpose. Nothing failed, nothing
+was prevented, and the situation is not an emergency — it is a certificate you
+manage, which you will renew where you bought it. Paging you about a failure that
+did not happen is the same defect this release exists to remove, one layer
+further out, and it is exactly how an operator learns to ignore the alert that
+means a site really is about to go dark.
+
+That case now has its own message — *"SSL certificate for example.com needs
+renewing by you"*, at warning severity, naming the issuer and saying where to
+renew it. Genuine renewal failures are unchanged.
+
 ## [2.139.0]
 
 ### Fixed — a renewal is a replacement, and nothing was checking whose certificate it was

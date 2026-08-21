@@ -425,14 +425,18 @@ fi
 # code, the count moves.
 check "auto-healer alerts when a renewal cannot be attempted" \
   "$(code_count "$HEALER" -F -e 'ssl_renewal_blocked(')" "3"
-# Five since v2.139.0. The fifth is a renewal deliberately NOT attempted: the
-# installed certificate was issued by someone other than Let's Encrypt, so it is
-# not one DockPanel can renew — and renewing anyway would have replaced it, which
-# is what this loop used to do to commercial and Origin-CA certificates every
-# week. A skip that only logs is indistinguishable from a certificate nobody is
-# watching, which is the whole subject of this section, so the skip announces.
+# Still four, and the count is load-bearing in a new way since v2.139.0. A fifth
+# outcome exists — a renewal deliberately NOT attempted, because the installed
+# certificate was issued by someone other than Let's Encrypt and renewing would
+# have REPLACED it — but it announces through `ssl_renewal_declined_alert`, not
+# this helper. That split is deliberate: this helper says "SSL renewal failed"
+# and pages at `critical`, and neither is true of a refusal the panel made on
+# purpose. If this count reaches five, check whether a declined renewal has been
+# wired into the failure wording again.
 check "the scanner alerts on every renewal outcome it can see" \
-  "$(code_count "$SCAN" -F -e 'ssl_renewal_alert(')" "5"
+  "$(code_count "$SCAN" -F -e 'ssl_renewal_alert(')" "4"
+check "and a DECLINED renewal announces without claiming a failure" \
+  "$(code_count "$SCAN" -F -e 'ssl_renewal_declined_alert(')" "2"
 
 # Both loops touch the same certificate; neither may alert unconditionally.
 if has_code "$HEALER" -F -e 'fire_alert_deduped' && has_code "$SCAN" -F -e 'fire_alert_deduped'; then
