@@ -1,6 +1,6 @@
 # API Reference
 
-DockPanel exposes 828 REST endpoints (540 backend + 288 agent) across 50+ categories — the figure derived from the two routers in `FEATURES.md` §Verified Metrics, which owns it. The tables below document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
+DockPanel exposes 830 REST endpoints (542 backend + 288 agent) across 50+ categories — the figure derived from the two routers in `FEATURES.md` §Verified Metrics, which owns it. The tables below document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
 
 ## Authentication
 
@@ -167,7 +167,7 @@ Delete site and all associated resources (database containers, nginx config, SSL
 
 ---
 
-## Databases (7 endpoints)
+## Databases (14 endpoints)
 
 ### `POST /api/databases`
 Create a MySQL or PostgreSQL database in a Docker container.
@@ -200,6 +200,13 @@ Execute SQL query.
 | GET | `/api/databases/{id}/credentials` | Connection string |
 | GET | `/api/databases/{id}/tables` | List tables |
 | GET | `/api/databases/{id}/tables/{table}` | Table schema |
+| GET | `/api/databases/{id}/indexes/{table}` | Table indexes |
+| GET | `/api/databases/{id}/foreign-keys` | Foreign-key map |
+| GET | `/api/databases/{id}/schema-overview` | Tables + relationships in one call |
+| GET/PUT | `/api/databases/{id}/pitr` | Read/store a PITR retention preference. Point-in-time recovery is **not implemented** — nothing is archived and `POST /pitr/restore` answers 501 |
+| POST | `/api/databases/{id}/reset-password` | Rotate the database password |
+| GET | `/api/databases/{id}/dumps` | **Admin only.** List dumps the operator placed in this database's backup directory, including files that cannot be imported and why |
+| POST | `/api/databases/{id}/import` | **Admin only.** Import one of those dumps. Body: `{"filename": "mydb-20260821-120000.sql.gz"}`. Answers `504` with an explanation if the import outlasts the panel's 270s wait — that is not a failure |
 
 ---
 

@@ -10,6 +10,7 @@ This guide says plainly what it can and cannot do, and what to use instead.
 | Fix a line in `wp-config.php` | The file manager |
 | Upload a handful of small files | The file manager |
 | Move thousands of files | `rsync` or `scp` over the server's own SSH |
+| Load a database dump into a database | `scp` it to the server, then **Databases → Import** |
 | Move a whole site from another panel | The Migration wizard |
 | Let a customer upload their own site | **Not available yet** — see the end |
 
@@ -99,6 +100,11 @@ above. (The web terminal does print the site directory when you open it.)
 
 The **Migration** wizard imports from cPanel, Plesk and HestiaCP, and moves
 **sites and databases**. It is administrator-only.
+
+If all you have is a `.sql` dump rather than a whole panel backup, you do not
+need the wizard — see [Importing a dump you already have](databases.md#importing-a-dump-you-already-have).
+It takes the same shape: you put the file on the server, the panel takes its
+name, and the upload limit above never enters into it.
 
 **Mail accounts are not migrated.** For cPanel archives the wizard lists the mail
 accounts it found so you know what to recreate, and for Plesk and HestiaCP it does

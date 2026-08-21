@@ -169,15 +169,28 @@ pub async fn cmd_db_backup_list(token: &str, db_name: &str, output: &str) -> Res
 
     println!("\x1b[1m{:<50} {:<12} {:<20}\x1b[0m", "FILENAME", "SIZE", "CREATED");
 
+    let mut unusable = 0;
     for b in backups {
         let filename = b["filename"].as_str().unwrap_or("-");
         let size = b["size_bytes"].as_u64().unwrap_or(0);
         let size_mb = size as f64 / 1_048_576.0;
         let created = b["created_at"].as_str().unwrap_or("-");
         println!("{:<50} {:<12} {:<20}", filename, format!("{size_mb:.1} MB"), created);
+        // A file the agent cannot import is now REPORTED rather than dropped from the
+        // listing, so print the reason where the operator is already looking. Printing the
+        // row and swallowing the reason would be the same defect one layer up.
+        if let Some(reason) = b["unsupported"].as_str() {
+            unusable += 1;
+            println!("\x1b[33m  ↳ cannot be imported: {reason}\x1b[0m");
+        }
     }
 
-    println!("\n{} backup(s)", backups.len());
+    let total = backups.len();
+    if unusable > 0 {
+        println!("\n{total} file(s), {unusable} of which cannot be imported");
+    } else {
+        println!("\n{total} backup(s)");
+    }
     Ok(())
 }
 

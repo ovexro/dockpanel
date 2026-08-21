@@ -256,6 +256,16 @@ pub struct BackupInfo {
     /// Databases the panel asked for that are NOT in the archive.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub databases_failed: Vec<DbFailure>,
+    /// Why a file sitting in a backup directory cannot be used, and how to fix it.
+    ///
+    /// `None` for every real backup, and omitted from the JSON when absent, so the
+    /// site- and volume-backup responses — which share this struct — are byte-identical
+    /// to what they were before this field existed. Only the database listing sets it,
+    /// and only for a file it would otherwise have dropped on the floor: an operator who
+    /// copies a dump into the directory and gets an empty list back has been told
+    /// nothing, which is the failure this whole release is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsupported: Option<String>,
 }
 
 /// What a restore actually did. `ok()` is the only thing callers should treat
@@ -485,6 +495,7 @@ pub async fn create_backup(domain: &str, databases: &[DbSpec]) -> Result<BackupI
         sha256,
         databases_included,
         databases_failed,
+        ..Default::default()
     })
 }
 
@@ -536,6 +547,7 @@ pub fn list_backups(domain: &str) -> Result<Vec<BackupInfo>, String> {
             sha256: None,
             databases_included: Vec::new(),
             databases_failed: Vec::new(),
+            ..Default::default()
         });
     }
 

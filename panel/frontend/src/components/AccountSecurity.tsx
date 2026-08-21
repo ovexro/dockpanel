@@ -686,7 +686,7 @@ export function SessionsCard() {
               <p className="text-sm text-dark-100 flex items-center gap-2">
                 <span className="font-mono">{s.ip_address || "unknown"}</span>
                 {s.is_current && (
-                  <span className="px-1.5 py-0.5 bg-ok-500/10 text-ok-400 rounded text-[10px] font-medium uppercase tracking-wider">
+                  <span className="px-1.5 py-0.5 bg-rust-500/10 text-rust-400 rounded text-[10px] font-medium uppercase tracking-wider">
                     This device
                   </span>
                 )}

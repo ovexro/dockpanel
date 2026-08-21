@@ -4,6 +4,114 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.138.0]
+
+### Added — import a database dump you already have
+
+**Databases → Import** loads a `.sql.gz` into an existing database. It is the
+other half of [#121](https://github.com/ovexro/dockpanel/issues/121), which asked
+for database import alongside the upload failure fixed in 2.137.0.
+
+The panel does not take the dump through the browser, and that is a decision
+rather than a shortfall. An upload travels base64-encoded inside a JSON body
+capped at 2 MiB — about 1.5 MB of file — and almost no real dump fits inside that.
+So import uses the shape the Migration wizard has always used: **you place the
+file on the server, the panel takes its name.** A 40 GB archive already moves
+through this product that way.
+
+That choice is also what makes the feature small and safe. The panel never accepts
+a path: it lists one directory per database, the agent pins that directory, and the
+door refuses any name outside the character set backup files use. The importer itself
+is not new. It already streamed `.sql.gz` into the database container for the migration
+wizard, validating every identifier it puts on a command line, passing the password by
+environment rather than argv, and reading the child's exit status instead of treating
+end-of-file as success. What was missing was the door.
+
+**Import is administrator-only**, which is a security boundary and not a policy choice.
+The dump directory is named after the database, and names are reusable: deleting a
+database removes its container but not its dumps, and `databases.name` is unique only
+per site. A tenant-reachable listing would therefore let whoever next took a freed name
+read — and load — the previous holder's leftover dumps. Row-scoping cannot close that,
+because files with no backup row are exactly what this door exists for. Restricting it
+to administrators costs nothing real: putting a file in that directory requires root, and
+an administrator can already read `/var/backups` directly.
+
+**A file that is listed but cannot be used says why, and is never offered.** Encrypted
+panel backups (restore those from Backup Manager, which holds the key), MongoDB archives
+on a SQL database, dumps that were never gzipped, and filenames carrying a character
+backup files cannot use — `scp "my dump.sql.gz"` produces one — are each shown with the
+reason and, where there is one, the exact command that fixes it. The rule the listing
+displays is the same call the import door enforces, so a request that skips the UI gets
+the same sentence rather than a failure from inside a decompression pipe.
+
+**A file you copy in but cannot import is now listed and explained.** The listing
+used to skip anything that was not `.sql.gz`, so an operator who copied `dump.sql`
+into the directory saw an empty list with no explanation anywhere in the product.
+Such files now appear greyed out with the reason and the exact `gzip` command that
+fixes it — in the panel and in `dockpanel backup db-list` alike. Only gzipped
+dumps can be imported, because the restore path streams through `gunzip`; the
+answer to that was to say so, not to widen the gate.
+
+### Fixed — a database restore reported failure while it was succeeding
+
+Restoring a database from Backup Manager waited 60 seconds and then reported
+`agent request timed out after 60s`, which the panel turned into a bare incident
+reference. The restore itself carried on and completed — the agent gives it ten
+minutes — so the operator was told that disaster recovery had failed at the exact
+moment it was working. Both restore paths now wait 270 seconds, which is
+deliberately just under the panel's own 300-second request ceiling so that the
+panel's explanation reaches you instead of a bodyless gateway timeout.
+
+And when that ceiling *is* reached, it is no longer reported as a failure. A
+timeout here means the panel stopped watching, not that the import stopped: it now
+says so in as many words and tells you not to run it again, because retrying an
+import on top of a database that is still being written to is the one genuinely
+destructive thing an operator could do with that information. The panel takes that
+timing itself rather than inferring it from the error it gets back — the two agent
+transports report a timeout differently, and on a multi-server install the difference
+would have reported a healthy import as an offline agent. Cloudflare's own 100-second
+cut is recognised as the same situation.
+
+### Fixed — a failed database restore no longer hides the reason it failed
+
+Every way a restore can fail is a fact about the file: truncated, never gzipped, meant
+for a different engine, or containing SQL the database rejects. All of them were reported
+as internal errors, so the panel replaced the database's own message with an incident
+reference — `psql`'s "relation already exists", the one line that says what to do next,
+was minted into a UUID and discarded. Restores now answer with the database's message,
+on this path and on Backup Manager's.
+
+### Fixed — three UI elements that were styled with colours the theme does not define
+
+`warning-500` and `ok-500` were used in three places and defined nowhere. Tailwind
+emits nothing for an undefined colour and warns about nothing, so the source read
+as styled and the pixels were not:
+
+- **"Save this token — it won't be shown again"**, the one-shot API-token warning
+  in Settings, rendered as ordinary grey text with no border and no background.
+- **The "this device" marker** in the active-sessions list — the badge that tells
+  you which session is your own, on the screen where you revoke sessions —
+  rendered with no colour at all.
+
+Both now use the theme's real families. A regression pin derives the palette from
+the stylesheet and the usage from the pages, so any future page asking for a
+colour that does not exist fails the build instead of rendering invisibly.
+
+### Fixed — smaller honesty defects found while reviewing the above
+
+- **"Nothing here to import"** was rendered underneath the error banner when the dump
+  listing could not be read at all — a positive claim about a directory nobody had
+  managed to look in. It now stays quiet unless a read succeeded.
+- **`database.imported`** is now in the Extensions event list. Firing an event that is
+  absent from the subscription checkboxes delivers it to nobody, with no way to fix that
+  from the UI.
+- **The import's audit row records which server it ran on.** On a fleet, two databases
+  may share a name, and a row that does not name the machine cannot answer the only
+  question anyone asks after a bad import.
+- **A test assertion in the SSL alerting engine could not fail.** `A || (d == 0 && A)`
+  is just `A`; the second half looked like extra coverage of the `d == 0` rung and was
+  the same comparison written twice.
+
 ## [2.137.0]
 
 ### Fixed — the file manager refused a file and would not say why

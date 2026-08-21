@@ -173,7 +173,15 @@ async fn restore(
         std::fs::remove_file(&restore_path).ok();
     }
 
-    result.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+    // ⛔ 422, not 500, and the difference is the whole diagnosis. Everything that fails
+    // here fails because of the FILE the caller named — a dump that is truncated, was
+    // never gzipped, targets a different engine, or contains SQL the database rejects.
+    // That is a caller-fixable answer, and the panel only preserves an agent's sentence
+    // for 4xx (`error.rs`'s `agent_error`): a 5xx is replaced with "Operation failed.
+    // Reference: {uuid}". Returning 500 here meant psql's "relation already exists" —
+    // the one line that says what to do next — was minted into an incident id and
+    // thrown away, on both this route's callers.
+    result.map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
 
     Ok(Json(serde_json::json!({
         "success": true,

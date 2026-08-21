@@ -984,6 +984,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/databases/{id}/pitr", get(databases::pitr_config).put(databases::update_pitr_config))
         .route("/api/databases/{id}/pitr/restore", post(databases::pitr_restore))
         .route("/api/databases/{id}/reset-password", post(databases::reset_password))
+        .route("/api/databases/{id}/dumps", get(databases::dumps))
+        .route("/api/databases/{id}/import", post(databases::import))
         // Compose Stacks
         .route("/api/stacks", get(stacks::list).post(stacks::create))
         .route("/api/stacks/{id}", get(stacks::get_one).put(stacks::update).delete(stacks::remove))

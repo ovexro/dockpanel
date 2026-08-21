@@ -2064,8 +2064,14 @@ mod tests {
     fn expired_sentinel_is_tighter_than_every_configurable_rung() {
         // Guarantees the expired page dedupes: once last_warned_day is -1, no
         // rung (all >= 0) can satisfy `warn_day < last_warned_day` again.
+        // ⚠ The `|| d == 0 && SSL_EXPIRED_WARN_DAY < d` this used to carry was the
+        // SAME comparison twice: `A || (d == 0 && A)` is just `A`, so the second
+        // clause could never change the verdict and the `d == 0` rung it looked
+        // like it was covering was in fact covered by the first. Clippy calls it a
+        // logic bug and it is right — an assertion whose extra half cannot fail
+        // reads as more coverage than it has.
         for d in parse_ssl_warning_days("30,14,7,3,1,0") {
-            assert!(SSL_EXPIRED_WARN_DAY < d || d == 0 && SSL_EXPIRED_WARN_DAY < d);
+            assert!(SSL_EXPIRED_WARN_DAY < d, "rung {d} must stay above the expired sentinel");
         }
         assert!(SSL_EXPIRED_WARN_DAY < SSL_NEVER_WARNED);
     }

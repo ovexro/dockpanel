@@ -6,7 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, ServerScope};
-use crate::error::{internal_error, err, agent_error, paginate, ApiError};
+use crate::error::{internal_error, err, agent_error, paginate, require_admin, ApiError};
 use crate::services::agent::AgentError;
 use crate::AppState;
 
@@ -1037,6 +1037,218 @@ pub async fn reset_password(
         "ok": true,
         "password": new_password,
     })))
+}
+
+/// GET /api/databases/{id}/dumps — What is sitting in this database's dump directory.
+///
+/// The intake pattern here is the migration wizard's, not the file manager's: the
+/// operator puts the dump on the server themselves and the panel takes it by NAME. That
+/// is deliberate. A dump travels as base64-in-JSON through two axum services with a 2 MiB
+/// body limit each, so the file manager tops out around 1.5 MB — and a `.sql` under
+/// 1.5 MB is close to a rounding error. `Migration.tsx` has told operators to SFTP the
+/// archive up and hand the panel a path since the wizard shipped, and a 40 GB cPanel
+/// backup already moves through this product that way.
+///
+/// ⛔ ADMIN ONLY, and this is a security boundary rather than a tidiness rule. The
+/// directory is keyed by DATABASE NAME, and a name is reusable: deleting a database
+/// removes its container and CASCADE-deletes its `database_backups` rows, but nothing
+/// removes the dumps on disk, and `databases.name` is unique only per SITE (the global
+/// constraint was dropped in `20260312000000_data_integrity.sql`). So a tenant who
+/// creates a database with a name a previous tenant used would, under a
+/// tenant-reachable listing, see and be able to import that tenant's leftover dumps —
+/// which are unencrypted for ad-hoc backups. Row-scoping (what
+/// `/api/backup-orchestrator/db-backups` does) cannot fix it, because the whole point of
+/// this door is files that have no row. `require_admin` can, and costs nothing real:
+/// putting a file in this directory needs root on the box, there is no per-site SFTP,
+/// and an admin can already read `/var/backups` directly.
+pub async fn dumps(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let (name, engine, _password, _port, site_server_id) =
+        get_db_info(&state, id, claims.sub).await?;
+    let agent = crate::helpers::agent_for_site_server(&state, site_server_id, &name).await?;
+
+    let listing = agent
+        .get(&format!("/db-backups/{name}/list"))
+        .await
+        .map_err(|e| agent_error("Database dump listing", e))?;
+
+    // The agent answers "is this a backup at all". Whether a given backup can go into
+    // THIS database is a second question it cannot answer, because it does not know the
+    // engine — so it is answered here and annotated onto each entry, and the import
+    // handler enforces the identical rule below. Annotating without enforcing would be a
+    // UI that merely asks nicely.
+    let mut entries = match listing {
+        serde_json::Value::Array(a) => a,
+        // A shape we do not recognise is not an empty directory, and must not render as
+        // one — the empty state is a positive claim about the disk.
+        other => return Ok(Json(other)),
+    };
+    for entry in &mut entries {
+        let filename = entry.get("filename").and_then(|f| f.as_str()).unwrap_or("").to_string();
+        if entry.get("unsupported").and_then(|u| u.as_str()).is_some() {
+            continue; // Already explained: not a backup file at all.
+        }
+        if let Some(reason) = import_blocked_reason(&filename, &engine) {
+            entry["import_blocked"] = serde_json::Value::String(reason);
+        }
+    }
+
+    Ok(Json(serde_json::Value::Array(entries)))
+}
+
+/// Why a real backup still cannot be imported into THIS database, if it cannot.
+///
+/// Split out as a pure function so the boundary is judgeable with no request, no agent
+/// and no database — the `exceeds_upload_limit` shape from v2.137.0 — and so the
+/// listing and the import door cannot drift apart: they are the same call.
+fn import_blocked_reason(filename: &str, engine: &str) -> Option<String> {
+    if filename.ends_with(".enc") {
+        // Not an operator mistake. This is a backup the PANEL took and encrypted with a
+        // key derived from the panel's own secret; the import door has no key to offer,
+        // so the agent would answer "Encryption key required" every single time. Naming
+        // the door that CAN open it is the difference between a dead end and an answer.
+        return Some(
+            "Encrypted panel backup. Restore it from Backup Manager, which holds the key."
+                .to_string(),
+        );
+    }
+    // `.archive.gz` is MongoDB's dump format — `dump_mongo` is its only producer. Fed to
+    // a postgres or mariadb restore it becomes a BSON stream piped into `psql`, which
+    // fails deep inside the pipe on content rather than at the door.
+    let is_mongo = matches!(engine, "mongo" | "mongodb");
+    if filename.ends_with(".archive.gz") && !is_mongo {
+        return Some(format!(
+            "MongoDB archive format. This database is {engine}, which reads .sql.gz."
+        ));
+    }
+    if filename.ends_with(".sql.gz") && is_mongo {
+        return Some("SQL dump. This database is MongoDB, which reads .archive.gz.".to_string());
+    }
+    None
+}
+
+#[derive(serde::Deserialize)]
+pub struct ImportDbRequest {
+    pub filename: String,
+}
+
+/// POST /api/databases/{id}/import — Import a dump the operator placed on the server.
+///
+/// Answers the half of issue #121 that v2.137.0 left open. The importer itself is not new
+/// and is not written here: the agent's `POST /db-backups/{db}/restore/{filename}` already
+/// pins the path per database, validates every identifier it puts on an argv, passes the
+/// password by environment rather than command line, and reads the child's exit status
+/// instead of treating EOF as success. What did not exist was a door onto it for a dump the
+/// operator brought themselves — only for one the panel had taken.
+///
+/// ⛔ Admin only, for the reason documented on [`dumps`] above.
+pub async fn import(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ImportDbRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let filename = body.filename.trim();
+    // The agent's `is_safe_filename` is the real gate, but this name is about to be
+    // interpolated into an HTTP request line, and a character that is merely UNUSUAL
+    // rather than dangerous breaks that far from anything that can explain it: a single
+    // space makes `Request::builder().uri(...)` fail, which surfaced as a transport error
+    // and not as "that filename cannot be used". So the charset is checked HERE, where
+    // the answer can still be a sentence about the file.
+    let charset_ok = !filename.is_empty()
+        && filename.len() <= 255
+        && !filename.contains("..")
+        && filename
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+    if !charset_ok {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "That filename cannot be used. Backup names may contain letters, digits, \
+             dash, underscore and dot only — rename the file on the server and try again.",
+        ));
+    }
+
+    let (name, engine, password, _port, site_server_id) =
+        get_db_info(&state, id, claims.sub).await?;
+
+    // The same rule the listing shows, ENFORCED. A caller that posts a filename the UI
+    // greyed out gets the same sentence the UI displayed, rather than a failure from
+    // inside a decompression pipe.
+    if let Some(reason) = import_blocked_reason(filename, &engine) {
+        return Err(err(StatusCode::BAD_REQUEST, &reason));
+    }
+
+    // Same rule as `reset_password` and for the same reason: the host comes from the
+    // site's row, never from the caller's scope. `dockpanel-db-{name}` is unique only per
+    // machine, and this call hands the tenant's decrypted password to whichever agent
+    // answers.
+    let agent = crate::helpers::agent_for_site_server(&state, site_server_id, &name).await?;
+
+    let agent_body = serde_json::json!({
+        "container_name": format!("dockpanel-db-{name}"),
+        "db_type": engine,
+        "user": name,
+        "password": password,
+    });
+
+    // ⛔ The timeout is taken HERE rather than read off the error that comes back, and
+    // that is not a style choice. `AgentError::Request` is minted for a URI that would
+    // not build and for a connection that dropped mid-flight as well as for a timeout,
+    // and the REMOTE client does not mint it for a timeout at all — it maps every
+    // failure, timeouts included, to `AgentError::Connection`. So matching on the variant
+    // told fleet operators their agent was offline while the import ran fine, and told
+    // local operators an import was "still running" when nothing had ever been sent.
+    // `Elapsed` here is unambiguous on both transports. The inner budget is deliberately
+    // larger so the inner clock can never be the one that fires.
+    let budget = crate::services::agent::DB_RESTORE_TIMEOUT_SECS;
+    let agent_path = format!("/db-backups/{name}/restore/{filename}");
+    let call = agent.post_long(&agent_path, Some(agent_body), budget + 60);
+
+    let result = match tokio::time::timeout(std::time::Duration::from_secs(budget), call).await {
+        Ok(inner) => inner.map_err(|e| agent_error("Database import", e))?,
+        Err(_elapsed) => {
+            tracing::warn!(
+                database = %name, filename = %filename,
+                "import outlasted the panel's request timeout; the agent is still running it"
+            );
+            // Deliberately NOT reported as a failure. The import is still running inside
+            // the container, and the operator's natural response to "failed" is to run it
+            // again — on top of a database that is mid-write, which is the one genuinely
+            // destructive thing this information could cause.
+            return Err(err(
+                StatusCode::GATEWAY_TIMEOUT,
+                &format!(
+                    "The import is still running on the server — it was NOT cancelled and \
+                     must not be started again. A dump that takes longer than {budget}s \
+                     outlasts the panel's request timeout, so there is nothing left here to \
+                     watch it with. Browse the tables in a few minutes to see it finish."
+                ),
+            ));
+        }
+    };
+
+    crate::services::activity::log_activity_on_server(
+        &state.db, claims.sub, &claims.email, "database.import",
+        Some("database"), Some(&name), Some(filename), None, site_server_id,
+    ).await;
+
+    crate::services::extensions::fire_event(&state.db, "database.imported", serde_json::json!({
+        "database": &name,
+        "database_id": id.to_string(),
+        "filename": filename,
+    }));
+
+    tracing::info!("Database import completed: {name} from {filename}");
+
+    Ok(Json(result))
 }
 
 #[cfg(test)]

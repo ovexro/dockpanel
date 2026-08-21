@@ -28,6 +28,23 @@ const MAX_LONG_CONNECTIONS: usize = 5;
 /// Maximum response size from agent (50MB).
 const MAX_RESPONSE_SIZE: usize = 50 * 1024 * 1024;
 
+/// How long a database restore/import may occupy a request before the panel stops waiting.
+///
+/// Deliberately BELOW the server's own ceiling rather than matched to the agent's work
+/// budget, and the gap is the whole point. The agent gives a restore 600s
+/// (`agent/src/services/database_backup.rs`), but `main.rs` wraps every route in a 300s
+/// `TimeoutLayer` and the generated nginx vhost sets `proxy_read_timeout 300s` — so a
+/// handler that waited 600s would be cut off by its own server at 300 and answer a
+/// bodyless 504 that no client can explain. Waiting slightly less means the timeout is
+/// OURS, which is what lets the handler say something true about it: a timeout here does
+/// not mean the import failed, it means we stopped watching. `agent_error` cannot make
+/// that distinction — `AgentError::Request` falls to the arm that mints an incident id —
+/// so the callers of this constant handle that variant themselves.
+///
+/// ⚠ A panel behind Cloudflare's proxy is cut at 100s regardless of any of this; the
+/// same caveat is recorded at `routes/migration.rs` for the migration importer.
+pub const DB_RESTORE_TIMEOUT_SECS: u64 = 270;
+
 /// Effectively-disabled total timeout for streamed remote requests.
 ///
 /// reqwest only offers a *total* per-request timeout, and the client default

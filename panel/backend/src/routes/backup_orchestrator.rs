@@ -1125,7 +1125,16 @@ pub async fn restore_db_backup(
     }
 
     let agent_path = format!("/db-backups/{}/restore/{}", backup.db_name, backup.filename);
-    let result = agent.post(&agent_path, Some(body)).await
+    // `post` and not `post_long` was a 60-second budget on an operation the agent gives
+    // 600 (agent/src/services/database_backup.rs), on both transports — the local client
+    // times out at 60s and the remote reqwest client defaults to the same. Any restore of
+    // a database bigger than a toy therefore reported `agent request timed out after 60s`,
+    // which `agent_error` turns into a bare incident id, WHILE THE RESTORE CARRIED ON
+    // SUCCEEDING inside the container. The operator was told their restore failed, on a
+    // path whose whole purpose is disaster recovery.
+    let result = agent
+        .post_long(&agent_path, Some(body), crate::services::agent::DB_RESTORE_TIMEOUT_SECS)
+        .await
         .map_err(|e| agent_error("Database restore", e))?;
 
     activity::log_activity(

@@ -117,6 +117,82 @@ SQL browser through this route.
 Managed databases are included in the backup system, and a database can be backed
 up on its own from **Backup Manager**. Restoring replaces the database's contents.
 
+## Importing a dump you already have
+
+**Databases → Import** loads a `.sql.gz` you put on the server yourself. It replaces
+data in the target database, so it asks before it runs.
+
+**It is administrator-only**, and that is a security boundary rather than a policy
+preference. The dump directory is named after the database, and a database name can be
+reused: deleting a database removes its container but not its dumps, so a directory can
+outlive the database that filled it. Restricting the door to administrators means a
+tenant who creates a database with a previously-used name cannot read what the previous
+holder left behind. It costs nothing in practice — placing a file in that directory needs
+root on the server, and an administrator can already read `/var/backups` directly.
+
+The panel does not accept the dump through the browser, and that is deliberate
+rather than an omission. An upload travels base64-encoded inside a JSON request
+body capped at 2 MiB, which works out to about 1.5 MB of file — see
+[Getting files onto a site](file-uploads.md). Almost no real dump fits inside
+that, so the panel uses the same shape the Migration wizard has always used:
+**you place the file, the panel takes its name.**
+
+Copy it into the database's own backup directory, over SSH, as root:
+
+```bash
+mkdir -p /var/backups/dockpanel/databases/mydb
+scp mydb.sql.gz root@server:/var/backups/dockpanel/databases/mydb/
+chmod 600 /var/backups/dockpanel/databases/mydb/mydb.sql.gz
+```
+
+Then open **Databases → Import** and pick it from the list.
+
+A few things that are easy to get wrong, and what the panel does about each:
+
+- **The directory may not exist yet.** It is created the first time a database is
+  backed up, so for a database that has never been backed up you have to
+  `mkdir -p` it. It is root-owned and re-tightened to `0700` every time the agent
+  starts, so a file placed there by a non-root account will not be readable.
+- **`/tmp` will not work.** The agent runs with a private `/tmp` and cannot see
+  the host's — the same constraint the Migration wizard documents.
+- **The dump must be gzipped.** A SQL database imports `.sql.gz` and nothing else,
+  because the restore path streams the file through `gunzip` straight into the
+  database container. A plain `.sql` is **listed anyway**, greyed out, with the exact
+  `gzip` command that fixes it — it is not silently ignored, which is what used to
+  happen.
+- **Encrypted panel backups are not imported here.** A `.enc` file in that
+  directory is one the panel took and encrypted with a key derived from its own
+  secret, so **Backup Manager** is the door that can restore it. Import lists them
+  and says so rather than offering a button that could only fail.
+- **`.archive.gz` is MongoDB's format.** On a PostgreSQL or MariaDB database it is
+  listed but not offered, because feeding it to `psql` fails deep inside a
+  decompression pipe rather than at the door.
+- **A name with a space in it will not work.** `scp "my dump.sql.gz" …` produces one,
+  and backup filenames may contain letters, digits, dash, underscore and dot only. Such
+  a file is listed with the exact `mv` command that renames it.
+- **Do not import a file that is still being copied.** `scp` writes to the final name
+  as it goes, so a half-copied dump looks complete in the listing. Wait for the copy to
+  finish before you press Import.
+- **A large import can outlast the page.** The panel stops waiting after 270
+  seconds, because its own request timeout is 300. If that happens it says so and
+  tells you the import is still running — it does **not** report a failure, and
+  you should not start it again. Watch the tables to see it finish. Behind
+  Cloudflare's proxy the cut comes earlier, at 100 seconds; the panel recognises that
+  case too and says the same thing.
+
+The import streams the file into the container and never buffers it in memory, so
+size is a matter of time rather than RAM.
+
+If the import itself fails — a truncated dump, a dump for a different engine, SQL the
+database rejects — you get the database's own error message, not an incident reference.
+That is worth stating because it was not true of the restore path before v2.138.0.
+
+The same door is available on the command line:
+
+```bash
+dockpanel backup db-list mydb        # shows importable dumps, and rejected ones with the reason
+```
+
 ## What is not built
 
 Being explicit, so you do not go looking:

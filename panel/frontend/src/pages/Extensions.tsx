@@ -36,6 +36,7 @@ const EVENT_TYPES = [
   "app.deployed", "app.removed",
   "auth.login_failed",
   "ssl.provisioned",
+  "database.imported",
 ];
 
 const API_SCOPES = ["sites:read", "metrics:read", "monitors:read"];

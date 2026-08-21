@@ -3216,8 +3216,8 @@ function PrometheusSettings({ setMessage }: { setMessage: (m: { text: string; ty
               </div>
 
               {newToken && (
-                <div className="border border-warning-500/30 bg-warning-500/5 rounded p-3">
-                  <div className="text-[10px] font-medium text-warning-400 uppercase tracking-wider mb-1">Save this token — it won't be shown again</div>
+                <div className="border border-warn-500/30 bg-warn-500/5 rounded p-3">
+                  <div className="text-[10px] font-medium text-warn-400 uppercase tracking-wider mb-1">Save this token — it won't be shown again</div>
                   <div className="flex items-center gap-2">
                     <code className="flex-1 text-xs font-mono text-dark-50 break-all">{newToken}</code>
                     <button

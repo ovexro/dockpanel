@@ -578,12 +578,31 @@ pub fn list_db_backups(db_name: &str) -> Result<Vec<BackupInfo>, String> {
     let mut backups = Vec::new();
     for entry in std::fs::read_dir(&dir).map_err(|e| format!("Read dir error: {e}"))? {
         let entry = entry.map_err(|e| format!("Entry error: {e}"))?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !name.ends_with(".sql.gz") && !name.ends_with(".archive.gz")
-            && !name.ends_with(".sql.gz.enc") && !name.ends_with(".archive.gz.enc")
-        {
+        // A stray subdirectory is not a dump and must not be reported as a rejected one.
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }
+        let name = entry.file_name().to_string_lossy().to_string();
+        // Anything the restore path cannot OPEN is REPORTED, not skipped. This loop used
+        // to `continue` here, which is why an operator could copy a dump into this
+        // directory, see an empty list, and have nowhere to learn why.
+        //
+        // The test is `is_safe_filename` itself — the same predicate `get_backup_path`
+        // enforces — so this listing cannot offer a name the opener would refuse. That
+        // matters for more than tidiness: a filename with a space passes every check the
+        // panel makes and then fails when it is put on a request line, which produced a
+        // failure the panel could not describe.
+        //
+        // ⚠ This says only "is this a backup file at all". Whether a given backup can be
+        // imported into a given DATABASE is a different question with a different answer
+        // per engine and per encryption state, and it is decided by the panel, which
+        // knows both. Encoding it here would mislabel every encrypted backup as broken in
+        // `dockpanel backup db-list`, which is a backup listing, not an import listing.
+        let unsupported = if is_safe_filename(&name) {
+            None
+        } else {
+            Some(unusable_reason(db_name, &name))
+        };
         let meta = entry.metadata().ok();
         let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
         let created = meta
@@ -600,12 +619,78 @@ pub fn list_db_backups(db_name: &str) -> Result<Vec<BackupInfo>, String> {
             size_bytes: size,
             created_at: created,
             sha256: None,
-        ..Default::default()
-    });
+            unsupported,
+            ..Default::default()
+        });
     }
 
     backups.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     Ok(backups)
+}
+
+/// What to tell an operator about a file that is in the directory but is not a backup
+/// this agent can open.
+///
+/// A dump that is not gzipped is by far the likeliest thing to find here — plain
+/// `mysqldump > dump.sql` produces one, and it is exactly what someone reaching for
+/// database import already has. `restore_mysql` and `restore_postgres` pipe through
+/// `gunzip -c` unconditionally (and never capture gunzip's stderr), so the honest answer
+/// is to compress it rather than to widen the gate and find out at the end of a pipe.
+///
+/// The second case is subtler and cost a real diagnosis: a name that LOOKS fine but
+/// carries a character `is_safe_filename` refuses — a space, most often, because
+/// `scp "my dump.sql.gz" …` is a natural thing to type. Such a name used to be listed
+/// as importable and then failed while the HTTP request line was being built, which is
+/// about as far from the operator's action as a failure can happen.
+///
+/// ⚠ This answers "is this a backup at all", NOT "can it go into this database". The
+/// second question depends on the engine and on whether the file is encrypted, and it
+/// is answered by the panel, which knows both.
+fn unusable_reason(db_name: &str, name: &str) -> String {
+    let full = format!("{BACKUP_DIR}/{db_name}/{name}");
+    let ext_ok = name.ends_with(".sql.gz")
+        || name.ends_with(".archive.gz")
+        || name.ends_with(".sql.gz.enc")
+        || name.ends_with(".archive.gz.enc");
+
+    if ext_ok {
+        // The extension is right, so it was the charset that failed.
+        format!(
+            "The name contains a character backups cannot use — spaces most often. \
+             Rename it with: mv '{full}' {BACKUP_DIR}/{db_name}/{}",
+            sanitise_suggestion(name)
+        )
+    } else if name.ends_with(".sql") || name.ends_with(".archive") || name.ends_with(".dump") {
+        format!(
+            "Not compressed. Backups are read as .sql.gz — compress it in place with: gzip {full}"
+        )
+    } else if name.ends_with(".zip") {
+        format!(
+            "ZIP is not supported. Unpack it and gzip the .sql inside: unzip {full} && gzip <name>.sql"
+        )
+    } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") || name.ends_with(".tar") {
+        "This looks like a site archive, not a database dump. A full cPanel/Plesk archive \
+         goes through Migration instead."
+            .to_string()
+    } else {
+        "Not a database dump. Backups are read as .sql.gz or .archive.gz.".to_string()
+    }
+}
+
+/// A pasteable replacement for a name the charset refuses.
+///
+/// Only ever embedded in advice — nothing opens the result — but it is built with the
+/// same charset `is_safe_filename` enforces, so following the advice actually works.
+fn sanitise_suggestion(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Delete a database backup file.
@@ -667,5 +752,67 @@ mod tests {
         assert!(!is_safe_filename("dump.txt"));
         assert!(is_safe_filename("wordpress-20260722-120000.sql.gz"));
         assert!(is_safe_filename("db-20260722-120000.archive.gz.enc"));
+    }
+
+    /// The listing must offer exactly what `get_backup_path` will open — no more, or
+    /// it advertises a file the opener refuses; no less, or a real backup disappears.
+    #[test]
+    fn the_listing_offers_exactly_what_the_opener_accepts() {
+        for ok in [
+            "wordpress-20260722-120000.sql.gz",
+            "wordpress-20260722-120000.archive.gz",
+            "wordpress-20260722-120000.sql.gz.enc",
+            "wordpress-20260722-120000.archive.gz.enc",
+        ] {
+            assert!(is_safe_filename(ok), "{ok} must be listed and openable");
+        }
+        for bad in ["dump.sql", "dump.zip", "backup.tar.gz", "notes.txt", "dump"] {
+            assert!(!is_safe_filename(bad), "{bad} must not be listed as a backup");
+        }
+    }
+
+    /// ⛔ The bug this predicate was widened to catch. `scp "my dump.sql.gz" …` is a
+    /// natural thing to type, and the name it produces has the right extension. It used
+    /// to be listed as importable and then failed while the HTTP request line was being
+    /// built — a failure with no explanation available anywhere near the operator.
+    #[test]
+    fn a_name_with_a_space_is_reported_rather_than_offered() {
+        let name = "my dump.sql.gz";
+        assert!(!is_safe_filename(name), "a space must keep it out of the listing");
+        let why = unusable_reason("wordpress", name);
+        assert!(why.contains("character"), "must say it is the NAME that is wrong: {why}");
+        assert!(why.contains("my_dump.sql.gz"), "must offer a pasteable fix: {why}");
+        // The advice has to be advice that works.
+        assert!(
+            is_safe_filename(&sanitise_suggestion(name)),
+            "the suggested name must itself be acceptable"
+        );
+    }
+
+    /// The point of the reason string is that the operator can act on it without
+    /// leaving the page, so it has to name the file and the command.
+    #[test]
+    fn unusable_reason_names_the_file_and_the_fix() {
+        let plain = unusable_reason("wordpress", "dump.sql");
+        assert!(plain.contains("gzip"), "a plain .sql must be told to gzip: {plain}");
+        assert!(
+            plain.contains("/var/backups/dockpanel/databases/wordpress/dump.sql"),
+            "the fix must name the full path so it can be pasted: {plain}"
+        );
+
+        let zip = unusable_reason("wordpress", "backup.zip");
+        assert!(zip.contains("unzip"), "a .zip must be told to unpack: {zip}");
+
+        // A site archive is a different product surface, and "gzip it" would send the
+        // operator down a road that ends in a failed import.
+        let archive = unusable_reason("wordpress", "cpanel-full.tar.gz");
+        assert!(archive.contains("Migration"), "must route to Migration: {archive}");
+        assert!(!archive.contains("gzip "), "must not say gzip: {archive}");
+
+        let other = unusable_reason("wordpress", "notes.txt");
+        assert!(other.contains(".sql.gz"), "must name the accepted form: {other}");
+        // ⚠ It must NOT claim .enc forms are importable — the panel refuses those, and
+        // two sentences on one screen disagreeing is worse than either alone.
+        assert!(!other.contains(".enc"), "must not advertise .enc as importable: {other}");
     }
 }
