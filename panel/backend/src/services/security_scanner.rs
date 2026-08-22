@@ -362,8 +362,10 @@ async fn auto_fix_safe_findings(
                     Option<String>,
                     Option<String>,
                     uuid::Uuid,
+                    Option<String>,
                 )> = sqlx::query_as(
-                    "SELECT s.id, s.runtime, s.proxy_port, s.php_version, s.root_path, s.user_id \
+                    "SELECT s.id, s.runtime, s.proxy_port, s.php_version, s.root_path, s.user_id, \
+                            s.ssl_profile \
                      FROM sites s WHERE s.domain = $1 AND s.server_id = $2 AND s.ssl_enabled = TRUE",
                 )
                 .bind(domain)
@@ -372,7 +374,8 @@ async fn auto_fix_safe_findings(
                 .await
                 .unwrap_or(None);
 
-                let Some((site_id, runtime, proxy_port, php_version, root_path, user_id)) = site
+                let Some((site_id, runtime, proxy_port, php_version, root_path, user_id, ssl_profile)) =
+                    site
                 else {
                     continue;
                 };
@@ -459,6 +462,18 @@ async fn auto_fix_safe_findings(
                 }
                 if let Some(root) = &root_path {
                     agent_body["root"] = serde_json::json!(root);
+                }
+                // The site's chosen certificate profile travels with the renewal,
+                // exactly as it does on the two hand-driven paths. Omitting it does
+                // not fail: the CA quietly issues its DEFAULT profile instead, so a
+                // site the operator put on `shortlived` or `tlsserver` comes back on
+                // the default one while the column still names the retired choice —
+                // and the cooldown and margin helpers keep reading that stale column,
+                // applying a short-lived certificate's renewal margin to a 90-day one.
+                // This is the ONLY automatic renewal on a stock install, so the
+                // downgrade is silent, permanent and unattended.
+                if let Some(profile) = ssl_profile.as_deref() {
+                    agent_body["profile"] = serde_json::json!(profile);
                 }
 
                 match agent

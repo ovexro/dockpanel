@@ -4,6 +4,61 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.143.0]
+
+### Fixed — a first install could abort telling the operator their password was wrong, and offer to destroy their data
+
+The installer waited for PostgreSQL with `pg_isready` and no host. That answers
+over the container's own unix socket — and the official Postgres image runs a
+**socket-only temporary server** for the whole of `initdb`, before it starts the
+real one. So the wait cleared while nothing was listening on TCP yet.
+
+The password check directly below it cannot use that socket. The image's
+`pg_hba` trusts local connections, so a socket probe accepts *any* password,
+including the wrong one the check exists to detect; it has to go over the
+container's bridge address to land on the rule that demands a password. Reaching
+a server that has not started listening, it got a refused connection — and a
+refused connection is indistinguishable from a rejected password. The installer
+took that as a mismatch and did one of two things to a database that was
+perfectly healthy: reconciled a password that never needed reconciling, or, when
+the repair landed in the same window, failed and aborted the whole install with
+*"The panel cannot start"* and an instruction to delete the data volume.
+
+The window is the gap between those two servers. Measured here it was about a
+second on an idle machine and over twenty seconds on a loaded one, against a
+two-second poll — so it is a lottery a busy or slow box loses far more often
+than a fast one, and it is the very first thing a new user meets.
+
+The wait now polls the same transport the check uses, which closes the window by
+construction: the temporary server is started with an empty `listen_addresses`
+and *cannot* answer over TCP. A container with no bridge address — host
+networking — still installs; the loop falls through to a socket check after its
+budget, which is also the only case where the password check itself cannot run.
+The budget went from 30 to 60 seconds while we were here, because a slow disk
+legitimately needs longer than 30 to finish `initdb`.
+
+**The failure message was fixed too, and it was the worse half.** It told the
+operator to recover by hand using the password in `api.env` — a file this
+installer does not write until several steps *later*. On a first install that
+aborts here, it does not exist. So the only instruction a new user could actually
+follow was the last one: destroy the container and the volume. It now leads with
+re-running the installer, which is safe and resolves this on its own, and only
+mentions the by-hand recovery when `api.env` is actually there.
+
+### Fixed — the only unattended certificate renewal quietly downgraded the certificate profile
+
+Auto-healing is off on a fresh install, which makes the weekly security scan the
+only renewal that runs unattended — what the product does by default. Both
+renewal paths a human can trigger send the site's chosen certificate profile with
+the order. This one never asked the database for it.
+
+Omitting it does not fail. The CA simply issues its **default** profile instead,
+so a site an operator had deliberately moved to `shortlived` or `tlsserver` came
+back on the default one, permanently, with nothing reporting the change — while
+the database still named the retired choice, and the cooldown and renewal-margin
+helpers went on reading that stale column. A short-lived certificate's margin was
+being applied to a ninety-day one.
+
 ## [2.142.0]
 
 ### Fixed — renaming a site left every one of its backups behind

@@ -808,12 +808,45 @@ setup_database() {
         log "PostgreSQL container created (port $DB_PORT)"
     fi
 
-    # Wait for PostgreSQL to be ready
+    # Wait for PostgreSQL to be ready — ON THE TRANSPORT THE PROBE BELOW USES.
+    #
+    # ⚠ A readiness poll that omits the host answers over the container's own
+    # unix socket, and the official image runs a SOCKET-ONLY temporary server
+    # for the duration of initdb (started with an empty listen_addresses) before
+    # it execs the real one. So a socket poll reports the database ready while
+    # nothing is listening on TCP yet — measured at ~1.0-1.1s on an idle box and
+    # over 20s on a loaded one, against a 2s poll grid — and the password probe
+    # directly below, which MUST use the bridge address to land on the
+    # scram-sha-256 rule, is then refused at the transport layer.
+    #
+    # The installer cannot tell a refused connection from a rejected password, so
+    # it reads that as a mismatch and takes one of two wrong branches on a
+    # database that is perfectly healthy: it prints "Database rejects this
+    # install's password" and reconciles for no reason, or the ALTER lands in the
+    # same window, fails, and the whole install aborts telling a brand-new
+    # operator to destroy their volume. Polling the same transport the consumer
+    # uses closes the window by construction — the temporary server cannot answer
+    # over TCP at all.
+    #
+    # The trailing socket check is the no-bridge-address escape hatch: a
+    # container on host networking has no address for the loop to poll, and the
+    # password probe below cannot run against it either (it degrades to the
+    # reconcile). Reaching it costs a full minute of waiting, which is why it is
+    # placed AFTER the loop rather than inside it — an in-loop fallback would
+    # fire on any box where the address is momentarily absent and silently
+    # restore the very race this closes.
     if run "Waiting for PostgreSQL to accept connections" bash -c \
-        "for i in \$(seq 1 15); do docker exec $DB_CONTAINER pg_isready -U dockpanel && exit 0; sleep 2; done; exit 1"; then
+        "for i in \$(seq 1 30); do
+             h=\$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $DB_CONTAINER 2>/dev/null | awk '{print \$1}')
+             [ -n \"\$h\" ] && docker exec $DB_CONTAINER pg_isready -h \"\$h\" -U dockpanel && exit 0
+             sleep 2
+         done
+         echo 'no TCP listener after 60s — falling back to a socket check (container has no bridge address?)'
+         docker exec $DB_CONTAINER pg_isready -U dockpanel && exit 0
+         exit 1"; then
         log "PostgreSQL ready"
     else
-        error "PostgreSQL did not become ready within 30s"
+        error "PostgreSQL did not become ready within 60s"
         exit 1
     fi
 
@@ -872,10 +905,28 @@ setup_database() {
         else
             error "The database will not accept this install's password, and the password"
             error "it was created with could not be recovered. The panel cannot start."
-            error "To keep your data, set the role's password by hand:"
-            error "  docker exec -it $DB_CONTAINER psql -U dockpanel -d dockpanel"
-            error "  ALTER USER dockpanel WITH PASSWORD '<the DATABASE_URL password in $CONFIG_DIR/api.env>';"
-            error "To start over and LOSE the data: docker rm -f $DB_CONTAINER && docker volume rm dockpanel-pgdata"
+            error ""
+            error "TRY THIS FIRST — re-run the installer. It is safe, it keeps your data,"
+            error "and it resolves this on its own in the common case:"
+            error "  bash $0"
+            error ""
+            # ⚠ The by-hand recovery is only actionable once api.env EXISTS, and it
+            # is written by create_services — several steps AFTER this function. On a
+            # first install that aborts here the file is absent, so printing it
+            # unconditionally left "destroy your volume" as the only instruction a
+            # brand-new operator could actually follow.
+            if [ -f "$CONFIG_DIR/api.env" ]; then
+                error "Or set the role's password by hand to the one the panel expects:"
+                error "  docker exec -it $DB_CONTAINER psql -U dockpanel -d dockpanel"
+                error "  ALTER USER dockpanel WITH PASSWORD '<the DATABASE_URL password in $CONFIG_DIR/api.env>';"
+                error ""
+                error "Only if neither works, and it LOSES ALL DATABASE DATA:"
+            else
+                error "This install had not yet written $CONFIG_DIR/api.env, so there is no"
+                error "stored password to match by hand. If re-running does not help — and"
+                error "this LOSES ALL DATABASE DATA, which on a first install is none:"
+            fi
+            error "  docker rm -f $DB_CONTAINER && docker volume rm dockpanel-pgdata"
             exit 1
         fi
     fi

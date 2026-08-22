@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.142.0.** The version stamp, the template count and every
+> **Reflects v2.143.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -402,11 +402,11 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Eighty-seven suites, **2975 assertions**, all green at the current commit:
+survivable. Eighty-seven suites, **2981 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
-| `carry-sweep-pin-e2e.sh` | 86 |
+| `carry-sweep-pin-e2e.sh` | 88 |
 | `ssl-controls-pin-e2e.sh` | 88 |
 | `db-import-pin-e2e.sh` | 53 |
 | `mail-smtp-dkim-pin-e2e.sh` | 25 |
@@ -469,7 +469,7 @@ survivable. Eighty-seven suites, **2975 assertions**, all green at the current c
 | `whmcs-config-writable-pin-e2e.sh` | 8 |
 | `system-logs-scope-pin-e2e.sh` | 15 |
 | `pipefail-sigpipe-pin-e2e.sh` | 9 |
-| `install-integrity-pin-e2e.sh` | 54 |
+| `install-integrity-pin-e2e.sh` | 58 |
 | `ship-gate-pin-e2e.sh` | 19 |
 | `app-template-images-pin-e2e.sh` | 13 |
 | `app-volume-ownership-pin-e2e.sh` | 35 |

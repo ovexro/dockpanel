@@ -337,6 +337,31 @@ fi
 eq "H6 the certificate countdown reads its own switch, at both its gates" \
    "$(occ "$F_DASH" 'isVisible("ssl_countdown")&&intel.ssl_countdowns.length>0')" 2
 
+echo "── §J  the only UNATTENDED renewal carries the site's certificate profile"
+# `security_scanner::auto_fix_safe_findings` is reached with no opt-in at all —
+# auto-healing is seeded OFF, so this weekly loop is what the product does by
+# default on a stock install. Both hand-driven renewal paths attach the site's
+# chosen certificate profile; this one selected six columns and never asked for
+# it, so the CA quietly issued its DEFAULT and a site the operator had moved off
+# the default came back on it — permanently, unattended, and with the column
+# still naming the retired choice, which the cooldown and margin helpers go on
+# reading. Nothing anywhere reports the downgrade.
+#
+# ⛔ FUNCTION-SCOPED ON PURPOSE, and the scope IS the arm. Sending the profile is
+# what a correct renewal looks like in two OTHER files, so a tree-wide grep is
+# satisfied by a sibling that was never broken and the arm cannot fail. Verified
+# at s390 by deleting the line from this function alone: J2 goes red while both
+# siblings stand.
+SCAN=panel/backend/src/services/security_scanner.rs
+[ -f "$SCAN" ] || { bad "SETUP" "$SCAN missing"; exit 1; }
+F_SCANFN=$(fnbody "$SCAN" 'async fn auto_fix_safe_findings(' | subjin)
+n=$(printf '%s' "$F_SCANFN" | wc -c)
+[ "$n" -ge 3000 ] || { bad "SETUP" "the scanner's auto-fix body stripped to $n chars, expected >= 3000 — the fnbody anchor has moved and §J is measuring nothing"; exit 1; }
+has "J1 the unattended renewal asks the database for the site's profile" \
+    "$F_SCANFN" "s.ssl_profile"
+has "J2 and sends it with the order, like both hand-driven paths do" \
+    "$F_SCANFN" 'agent_body["profile"]=serde_json::json!(profile)'
+
 echo
 echo "─────────────────────────────────────────────"
 printf 'carry-sweep pins: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m\n' "$PASS" "$FAIL"

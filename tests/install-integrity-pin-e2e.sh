@@ -200,6 +200,47 @@ unresolvable_range_fails_closed() {
   has_code "$1" -E 'RC=\$\?' && has_code "$1" 'refusing to push commits that were never scanned'
 }
 
+# ── s390: the PostgreSQL readiness gate and the password probe below it must
+# agree on TRANSPORT ─────────────────────────────────────────────────────────
+#
+# The probe HAS to use the container's bridge address: the official image's
+# pg_hba trusts the local socket, so a probe over the socket accepts any
+# password at all, including the wrong one the probe exists to catch. That makes
+# a readiness poll over that same socket a defect, because the image runs a
+# SOCKET-ONLY temporary server for the whole of initdb — so the poll clears
+# while nothing is listening on TCP, the probe's connection is refused, and the
+# installer cannot tell a refused connection from a rejected password. It then
+# either reconciles a perfectly healthy database or aborts the install telling a
+# brand-new operator to destroy their volume.
+#
+# ⚠ SCOPED TO THE LOOP, and that scoping is the whole arm. A whole-file test is
+# satisfied by the psql -h a few lines below it, and the gate's own trailing
+# escape hatch is hostless BY DESIGN — it is what keeps a container with no
+# bridge address installable. Only the polling loop is the subject.
+#
+# Measured at s390 before the fix: EIGHT consecutive clean runs on the defective
+# gate unwidened, EIGHT consecutive failures with initdb slowed by six seconds,
+# and eight passes on the fixed gate under that identical widening. The green
+# unwidened run is what a reader would have called proof; it says nothing.
+pg_gate_body() {   # the bash -c argument of the readiness gate, code only
+  code_lines "$1" | sed -n '/run "Waiting for PostgreSQL to accept connections" bash -c/,/"; then$/p'
+}
+pg_gate_loop() {   # the polling loop only — truncated at `done`, one-line form or not
+  pg_gate_body "$1" | awk '
+    /for i in/ { inloop = 1 }
+    inloop {
+      if (match($0, /done/)) { print substr($0, 1, RSTART - 1); inloop = 0; next }
+      print
+    }'
+}
+pg_gate_probes()   { pg_gate_loop "$1" | grep -o 'pg_isready' | grep -c '' || true; }
+pg_gate_hostless() { pg_gate_loop "$1" | grep -o 'pg_isready[^&|;]*' | grep -cv -- ' -h ' || true; }
+gate_polls_tcp() {
+  # Fails CLOSED on a stale extractor: an anchor that no longer matches yields an
+  # empty loop, zero probes, and a false verdict rather than a vacuous green.
+  [ "$(pg_gate_probes "$1")" -ge 1 ] && [ "$(pg_gate_hostless "$1")" -eq 0 ]
+}
+
 echo "── 1. every path that installs a published binary verifies it first ──"
 # Four scripts consume a published release; install-agent.sh is the fifth path
 # that puts our binary on a machine. Three of the five always verified. The
@@ -446,6 +487,20 @@ else
   bad "the pushed range's exit status is still discarded — an unresolvable range is indistinguishable from a clean push"
 fi
 
+echo "── 6b. the readiness gate polls the transport the password probe uses ──"
+# Two arms, because "the extractor found nothing" and "the gate is wrong" are
+# different failures and only one of them is the code's fault.
+if [ -n "$(pg_gate_body scripts/setup.sh)" ] && [ "$(pg_gate_probes scripts/setup.sh)" -ge 1 ]; then
+  ok "the readiness gate is where this arm expects it, with a probe inside its loop"
+else
+  bad "the readiness-gate extractor found no loop with a probe in it — setup.sh was restructured and THIS ARM IS NOW VACUOUS, which is not the same as the gate being correct"
+fi
+if gate_polls_tcp scripts/setup.sh; then
+  ok "every readiness probe inside the gate's loop names a host, so it cannot clear on the socket-only server the image runs during initdb"
+else
+  bad "the gate's loop polls without naming a host: it answers over the container's own socket and clears while nothing is listening on TCP, so the password probe below is refused at the transport layer and the installer reports a password mismatch on a healthy database — or aborts telling the operator to destroy their volume"
+fi
+
 echo "── 7. the pins are mutation-tested against broken copies, on every run ──"
 # A stripped pin is a pin that sees LESS, and both ways of getting it wrong are
 # invisible from a green run: a stripper that misses prose leaves the original
@@ -503,6 +558,24 @@ mutation_arm "mutation: §6 notices the new-branch patch call being commented ou
   "$PREPUSH" 'git log -p' p_newbranch
 mutation_arm "mutation: §6 notices the fail-closed branch being commented out" \
   "$PREPUSH" 'refusing to push commits that were never scanned' p_failclosed
+mutation_arm "mutation: §6b notices the gate's whole probe line being commented out" \
+  scripts/setup.sh 'pg_isready -h' gate_polls_tcp
+
+# §6b's OTHER mutation, and the one that matters. This fix does not get undone by
+# someone commenting out a line — it gets undone by the host flag being edited
+# away, which leaves a live line no stripper can help with and reads, in a diff,
+# like a simplification. A comment-out mutation cannot see that edit at all.
+PGREV=$(scratch scripts/setup.sh)
+sed -i 's/pg_isready -h [^ ]* -U dockpanel/pg_isready -U dockpanel/' "$PGREV"
+if ! gate_polls_tcp "$REPO/scripts/setup.sh"; then
+  bad "mutation: §6b was already unsatisfied on the untouched file, so the mutation proves nothing"
+elif ! mutation_landed "$REPO/scripts/setup.sh" "$PGREV"; then
+  bad "mutation: §6b's hostless revert did not land — the probe's spelling changed and this mutation is now a no-op that scores green"
+elif gate_polls_tcp "$PGREV"; then
+  bad "mutation: §6b is STILL satisfied with the host flag edited out of the loop — the arm cannot see the exact regression it exists for"
+else
+  ok "mutation: §6b notices the host flag being edited out of the gate's polling loop"
+fi
 
 # The mechanism itself, stated once: after that same mutation the wanted symbol
 # is STILL THERE in the raw bytes and gone only from the code stream. This is the
