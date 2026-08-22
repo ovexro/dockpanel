@@ -16,6 +16,7 @@ use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
 use crate::routes::{is_valid_container_id, is_valid_name};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
+use crate::services::expected_stops;
 use crate::services::extensions::fire_event;
 use crate::AppState;
 
@@ -872,25 +873,97 @@ pub async fn deploy_log(
 
 /// GET /api/apps — List deployed Docker apps.
 pub async fn list_apps(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    let result = agent
+    let mut result = agent
         .get("/apps")
         .await
         .map_err(|e| agent_error("Docker apps", e))?;
 
+    // Annotate each container with WHY it is stopped, if the panel stopped it.
+    //
+    // Carried on this already-server-scoped payload rather than exposed as its
+    // own endpoint: `container_expected_stops` is keyed by server, and a
+    // separate global listing would have to be scoped from scratch. Without it
+    // the Apps page calls every stopped container "crashed" — including the ones
+    // the panel itself stopped — and after this release that page is the only
+    // surface still speaking about them.
+    let reasons = expected_stops::reasons_on_server(&state.db, server_id).await;
+    if !reasons.is_empty() {
+        if let Some(arr) = result.as_array_mut() {
+            for app in arr.iter_mut() {
+                let name = app
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if let Some((_, reason)) = reasons.iter().find(|(n, _)| *n == name) {
+                    if let Some(obj) = app.as_object_mut() {
+                        obj.insert(
+                            "expected_stop_reason".to_string(),
+                            serde_json::Value::String(reason.clone()),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     Ok(Json(result))
+}
+
+/// Resolve a caller-supplied container id to the name the agent reports.
+///
+/// `is_valid_container_id` accepts any 1-64 character hex string and Docker
+/// resolves an id PREFIX, so `POST /api/apps/1a2b3c4d5e6f/stop` — the short form
+/// `docker ps` prints — stops the container and returns 200. The alert engine
+/// keys on the full name the agent reports, so writing the caller's string would
+/// record a row nothing can ever match.
+///
+/// Returns `None` when the container is not in the listing, and the caller then
+/// records nothing: a MISSING expectation costs one spurious alert, a MIS-KEYED
+/// one costs permanent silence for that container.
+async fn resolve_container_name(
+    agent: &crate::services::agent::AgentHandle,
+    container_id: &str,
+) -> Option<String> {
+    let apps = agent.get("/apps").await.ok()?;
+    let arr = apps.as_array()?;
+
+    // An exact id wins outright. Otherwise collect every prefix match and accept
+    // it only if it is UNIQUE — an ambiguous prefix must resolve to nothing
+    // rather than to whichever container happens to be listed first.
+    let mut prefix_hits: Vec<&str> = Vec::new();
+    for app in arr {
+        let Some(id) = app.get("container_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(name) = app.get("name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if id == container_id {
+            return Some(name.to_string());
+        }
+        if id.starts_with(container_id) {
+            prefix_hits.push(name);
+        }
+    }
+
+    match prefix_hits.as_slice() {
+        [only] => Some((*only).to_string()),
+        _ => None,
+    }
 }
 
 /// POST /api/apps/{container_id}/stop — Stop an app.
 pub async fn stop_app(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -904,14 +977,34 @@ pub async fn stop_app(
         .await
         .map_err(|e| agent_error("Container stop", e))?;
 
+    // Recorded only AFTER the stop succeeds. Recording it first and having the
+    // agent refuse would mark a container that is still running as expectedly
+    // stopped, and its next genuine crash would be suppressed.
+    if let Some(name) = resolve_container_name(&agent, &container_id).await {
+        expected_stops::record(
+            &state.db,
+            server_id,
+            &name,
+            expected_stops::REASON_OPERATOR_STOP,
+            Some(&claims.email),
+        )
+        .await;
+        expected_stops::resolve_open_container_down(&state.db, server_id, &name).await;
+    }
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "container.stop",
+        Some("container"), Some(&container_id), None, None,
+    ).await;
+
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// POST /api/apps/{container_id}/start — Start an app.
 pub async fn start_app(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -925,14 +1018,27 @@ pub async fn start_app(
         .await
         .map_err(|e| agent_error("Container start", e))?;
 
+    // Immediacy only — the alert engine clears this from its own observation
+    // within a sweep either way. Doing it here as well means the Apps page stops
+    // calling the container "stopped intentionally" the moment it is started,
+    // rather than up to two minutes later.
+    if let Some(name) = resolve_container_name(&agent, &container_id).await {
+        expected_stops::clear(&state.db, server_id, &name).await;
+    }
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "container.start",
+        Some("container"), Some(&container_id), None, None,
+    ).await;
+
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// POST /api/apps/{container_id}/restart — Restart an app.
 pub async fn restart_app(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -945,6 +1051,15 @@ pub async fn restart_app(
         .post(&agent_path, None)
         .await
         .map_err(|e| agent_error("Container restart", e))?;
+
+    if let Some(name) = resolve_container_name(&agent, &container_id).await {
+        expected_stops::clear(&state.db, server_id, &name).await;
+    }
+
+    activity::log_activity(
+        &state.db, claims.sub, &claims.email, "container.restart",
+        Some("container"), Some(&container_id), None, None,
+    ).await;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -2277,7 +2392,7 @@ pub async fn update_sleep_config(
 pub async fn wake_container(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -2300,6 +2415,10 @@ pub async fn wake_container(
     .await
     .ok();
 
+    if let Some(name) = resolve_container_name(&agent, &container_id).await {
+        expected_stops::clear(&state.db, server_id, &name).await;
+    }
+
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "container.wake",
         Some("container"), Some(&container_id), None, None,
@@ -2312,7 +2431,7 @@ pub async fn wake_container(
 pub async fn sleep_container(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
@@ -2332,6 +2451,18 @@ pub async fn sleep_container(
     .execute(&state.db)
     .await
     .ok();
+
+    if let Some(name) = resolve_container_name(&agent, &container_id).await {
+        expected_stops::record(
+            &state.db,
+            server_id,
+            &name,
+            expected_stops::REASON_MANUAL_SLEEP,
+            Some(&claims.email),
+        )
+        .await;
+        expected_stops::resolve_open_container_down(&state.db, server_id, &name).await;
+    }
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "container.manual_sleep",

@@ -6,6 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, Claims, ServerScope};
+use crate::services::expected_stops;
 use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
@@ -737,6 +738,46 @@ async fn stack_action(
         )
         .await
         .map_err(|e| agent_error(&format!("Stack {action}"), e))?;
+
+    // ── Stopping a stack is a deliberate stop, N times over ────────────────
+    //
+    // Compose services carry `dockpanel.managed=true` and
+    // `dockpanel.app.template=compose`, which is exactly what the agent's
+    // `/apps` listing filters on — so every service in a stopped stack is a
+    // full `container_down` subject. One click on a five-service stack produced
+    // five criticals, correlated into ONE public incident titled after whichever
+    // container lost the race.
+    //
+    // The agent answers with a per-container `results[]` carrying the name and
+    // the outcome, so the expectation is recorded per container and only for the
+    // ones that actually stopped — no second round trip, and a service that
+    // failed to stop is still allowed to alert.
+    if let Some(results) = result.get("results").and_then(|v| v.as_array()) {
+        for r in results {
+            let Some(cname) = r.get("name").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            match r.get("status").and_then(|v| v.as_str()) {
+                Some("stopped") => {
+                    expected_stops::record(
+                        &state.db,
+                        server_id,
+                        cname,
+                        expected_stops::REASON_STACK_STOP,
+                        Some(&claims.email),
+                    )
+                    .await;
+                    expected_stops::resolve_open_container_down(&state.db, server_id, cname).await;
+                }
+                // `removed` clears too: the container is gone, and a row left
+                // behind would suppress a future container that reuses the name.
+                Some("started") | Some("restarted") | Some("removed") => {
+                    expected_stops::clear(&state.db, server_id, cname).await;
+                }
+                _ => {}
+            }
+        }
+    }
 
     Ok(Json(result))
 }

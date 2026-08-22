@@ -64,6 +64,11 @@ interface DeployedApp {
   image: string | null;
   volumes: string[];
   stack_id: string | null;
+  // Set by the panel (not the agent) when this container is stopped because
+  // something asked it to be: 'operator_stop' | 'manual_sleep' | 'auto_sleep' |
+  // 'stack_stop'. Absent means the panel has no record of a deliberate stop,
+  // which for an exited container means it went down on its own.
+  expected_stop_reason?: string;
 }
 
 interface StackInfo {
@@ -327,6 +332,24 @@ const appIcons: Record<string, ReactNode> = {
     <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#ff8e20" width="128" height="128"/><rect fill="#fff" x="20" y="24" width="40" height="28" rx="8" opacity=".9"/><rect fill="#fff" x="68" y="48" width="40" height="28" rx="8" opacity=".9"/><rect fill="#fff" x="20" y="76" width="48" height="28" rx="8" opacity=".7"/><path fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" d="M48 52v8l20-4M72 76l-12 8" opacity=".6"/></svg>
   ),
 };
+
+/// What the panel knows about a deliberate stop, in words an operator can act on.
+/// Falls through to a neutral sentence rather than inventing a cause for a reason
+/// string a newer backend might send that this bundle has not heard of.
+function stopReasonLabel(reason?: string): string {
+  switch (reason) {
+    case "operator_stop":
+      return "you stopped it";
+    case "manual_sleep":
+      return "put to sleep";
+    case "auto_sleep":
+      return "auto-slept while idle";
+    case "stack_stop":
+      return "stopped with its stack";
+    default:
+      return "stopped by the panel";
+  }
+}
 
 const statusColors: Record<string, string> = {
   running: "bg-rust-500/15 text-rust-400",
@@ -1287,7 +1310,14 @@ volumes:
   const filteredApps = standaloneApps.filter(a => !tagFilter || appTags[a.container_id] === tagFilter);
 
   // Crashed apps detection (Feature #10)
-  const crashedApps = apps.filter(a => a.status === 'exited' || a.status === 'dead');
+  //
+  // A container the panel itself stopped is not a crash. Calling it one was
+  // always wrong; since v2.144.0 it also matters more, because an expected stop
+  // no longer raises an alert and this page is the only surface that speaks
+  // about it at all.
+  const stoppedApps = apps.filter(a => (a.status === 'exited' || a.status === 'dead'));
+  const crashedApps = stoppedApps.filter(a => !a.expected_stop_reason);
+  const intentionallyStopped = stoppedApps.filter(a => a.expected_stop_reason);
 
   return (
     <div>
@@ -1377,7 +1407,37 @@ volumes:
             {crashedApps.map(a => (
               <div key={a.container_id} className="flex items-center justify-between text-xs">
                 <span className="text-dark-100 font-mono">{a.name} <span className="text-dark-300">({a.status})</span></span>
-                <button onClick={() => handleAction(a.container_id, "start")} className="text-rust-400 hover:text-rust-300 font-medium">Restart</button>
+                <button onClick={() => handleAction(a.container_id, "start")} className="text-rust-400 hover:text-rust-300 font-medium">Start</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Stopped on purpose — not a crash, and deliberately not styled as one */}
+      {intentionallyStopped.length > 0 && (
+        <div className="bg-dark-800/60 border border-dark-600 rounded-lg p-4 mb-4">
+          <div className="flex items-center gap-2">
+            <svg className="w-5 h-5 text-dark-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span className="text-sm text-dark-200 font-medium">
+              {intentionallyStopped.length} container(s) stopped on purpose — not alerting
+            </span>
+          </div>
+          <div className="mt-2 space-y-1">
+            {intentionallyStopped.map(a => (
+              <div key={a.container_id} className="flex items-center justify-between text-xs">
+                <span className="text-dark-100 font-mono">
+                  {a.name}{" "}
+                  <span className="text-dark-300">({stopReasonLabel(a.expected_stop_reason)})</span>
+                </span>
+                <button
+                  onClick={() => handleAction(a.container_id, "start")}
+                  className="text-rust-400 hover:text-rust-300 font-medium"
+                >
+                  Start
+                </button>
               </div>
             ))}
           </div>

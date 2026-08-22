@@ -14,6 +14,7 @@ pub mod drift;
 pub mod drill_scheduler;
 pub mod email;
 pub mod image_scanner;
+pub mod expected_stops;
 pub mod extensions;
 pub mod prerequisites;
 pub mod preview_cleanup;

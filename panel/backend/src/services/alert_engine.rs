@@ -4,6 +4,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::services::agent::{AgentRegistry, FleetMember};
+use crate::services::expected_stops;
 use crate::services::notifications;
 
 /// Background task: checks all alert conditions every 60 seconds.
@@ -1386,6 +1387,11 @@ async fn check_service_health(pool: &PgPool, member: &FleetMember) {
 // ─── GAP 8: Docker Container Health ──────────────────────────────────────
 
 async fn check_container_health(pool: &PgPool, member: &FleetMember) {
+    // Stamped BEFORE the snapshot, because the walk below awaits a database and
+    // notification round-trip per container: an expectation recorded by an
+    // operator mid-walk is NEWER than this evidence and must survive it.
+    let observed_at = chrono::Utc::now();
+
     let containers: Vec<serde_json::Value> = match member.agent.get("/apps").await {
         Ok(val) => {
             if let Some(arr) = val.as_array() {
@@ -1402,6 +1408,11 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
 
     let (server_id, user_id) = (member.id, member.user_id);
 
+    // Containers this host is holding stopped ON PURPOSE. Loaded once per
+    // member rather than queried per container, which would multiply this
+    // sweep's round-trips by the app count.
+    let expected_stopped = expected_stops::expected_on_server(pool, server_id).await;
+
     // Every container this host still reports, whatever its state. Reaching
     // this line means the agent answered with a well-formed array, so a name
     // absent from it is genuinely absent from the host — see the sweep at the
@@ -1416,7 +1427,34 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
         let state = c.get("status").and_then(|v| v.as_str()).unwrap_or("");
         let health = c.get("health").and_then(|v| v.as_str());
 
+        // ── The expectation is cleared from OBSERVATION, above the ladder ──
+        //
+        // Docker running this container is what falsifies "a stop is expected",
+        // and that fact is independent of the healthcheck. The recovery arm
+        // below is `running && health != unhealthy` and sits under the unhealthy
+        // arm, so a container that comes back up with a failing healthcheck —
+        // the ordinary case for something that was stopped BECAUSE it was
+        // misbehaving — would never reach it, keep its expectation for ever, and
+        // be suppressed when it finally died. `restarting`, `paused` and
+        // `created` have no arm at all. So the clear is keyed on the one thing
+        // that matters: this container is not stopped.
+        if state != "exited" && state != "dead" && expected_stopped.contains(name) {
+            expected_stops::clear_if_older_than(pool, server_id, name, observed_at).await;
+        }
+
         if state == "exited" || state == "dead" {
+            // ⛔ A stop the panel carried out is not an outage. Skipping the
+            // WHOLE branch — not just the fire — is deliberate: the `alert_state`
+            // row is written 'firing' immediately above the fire, and the branch
+            // is guarded by `!= Some("firing")`, so stamping the row while
+            // sending nothing would leave this container claiming it had paged
+            // and silently suppress every future `container_down` for that name.
+            // This file's own comment further down records a live instance of
+            // exactly that tombstone, still firing four months later.
+            if expected_stopped.contains(name) {
+                continue;
+            }
+
             // Check if already firing for this container
             let existing: Option<(String,)> = sqlx::query_as(
                 "SELECT current_state FROM alert_state \
@@ -1448,7 +1486,16 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
                     None,
                     "container_down",
                     name,
-                    "critical",
+                    // The severity this product DECLARES for this alert:
+                    // `alert_runbook_defaults.rs` lists container_down under
+                    // "Info", and the runbook attached to every one of these
+                    // notifications says "a planned `docker stop` is normal
+                    // operational use, so we don't page on it" and "Don't page
+                    // on this alone". It was raised at "critical", which is the
+                    // string the incident branch gates on — so a container going
+                    // down opened a CRITICAL incident on the operator's public
+                    // status page, contradicting the runbook in the same email.
+                    "info",
                     &format!("Container '{}' is {}", name, state),
                     &format!(
                         "Docker container '{}' has stopped (state: {}). It may need to be restarted.",

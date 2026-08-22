@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use crate::services::activity;
 use crate::services::agent::AgentRegistry;
+use crate::services::expected_stops;
 use crate::services::notifications;
 
 /// Cumulative count of auto-healer SSL renewal attempts that succeeded.
@@ -443,12 +444,24 @@ async fn auto_restart_services(pool: &PgPool, agents: &AgentRegistry) {
             None => continue,
         };
 
+        // A container the panel stopped on purpose is not something to heal.
+        // Without this the healer restarts the operator's deliberate Stop within
+        // 120s — and, now that the alert is suppressed, it does so SILENTLY,
+        // because the spurious alert used to be the only sign it had happened.
+        // It is also the half that makes auto-sleep work at all: the sleeper and
+        // this loop share one switch and one tick, and this loop runs first.
+        let expected_stopped = expected_stops::expected_on_server(pool, member.id).await;
+
         for c in &arr {
             let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let state = c.get("status").and_then(|v| v.as_str()).unwrap_or("");
             let container_id = c.get("container_id").and_then(|v| v.as_str()).unwrap_or("");
 
             if (state != "exited" && state != "dead") || name.is_empty() || container_id.is_empty() {
+                continue;
+            }
+
+            if expected_stopped.contains(name) {
                 continue;
             }
 
@@ -2193,6 +2206,23 @@ async fn auto_sleep_idle_containers(pool: &PgPool, agents: &AgentRegistry) {
                     .bind(container_id)
                     .execute(pool)
                     .await;
+
+                    // No person initiates an auto-sleep, so the actor is NULL —
+                    // the same reasoning the notification below applies to
+                    // `user_id`. The container's own runbook lists this case
+                    // verbatim as "this is correct behavior".
+                    if let Some(sid) = server_id {
+                        expected_stops::record(
+                            pool,
+                            *sid,
+                            container_name,
+                            expected_stops::REASON_AUTO_SLEEP,
+                            None,
+                        )
+                        .await;
+                        expected_stops::resolve_open_container_down(pool, *sid, container_name)
+                            .await;
+                    }
 
                     // No user initiates an auto-sleep and `container_sleep_config`
                     // names no owner, so this genuinely has no user to name — which

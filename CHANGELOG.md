@@ -4,6 +4,64 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.144.0]
+
+### Fixed — stopping a container published a critical incident on your public status page
+
+Pressing **Stop** on an app, stopping a compose stack, or letting the auto-sleep
+policy park an idle container raised `container_down` at severity `critical`.
+That is the exact string the alert engine gates incident creation on, so the
+panel opened a `managed_incidents` row with `visible_on_status_page` set to TRUE
+— a critical incident, published to your customers, for something you had just
+asked the panel to do. `container_down` is also absent from `is_alert_enabled`'s
+match and falls through to `_ => return true`, so no alert rule could switch it
+off; and the escalation sweep has no severity predicate, so it re-paged every
+thirty minutes for seven days until a human resolved the incident by hand.
+
+The panel had already decided this should not happen, in writing, twice.
+`alert_runbook_defaults.rs` lists `container_down` under **Info**, and the
+runbook attached to every one of those notifications says *"a planned `docker
+stop` is normal operational use, so we don't page on it"* and *"Don't page on
+this alone."* The engine contradicted its own runbook inside the same email.
+
+Two changes:
+
+- **`container_down` is now raised at the severity the product declares** —
+  `info`. It no longer opens an incident on the public status page. Customer-facing
+  outages still page through `service_down` and uptime monitors, which is what
+  the runbook says should carry them.
+- **A stop the panel carried out is now recorded**, so the alert itself stays
+  quiet for it. The Stop button, Sleep, a stack stop and auto-sleep all write to a
+  new `container_expected_stops` table; the alert engine reads it before firing
+  and deletes the row the moment it observes the container in any state that is
+  not `exited`/`dead`. An alert raised *before* the stop is resolved at the same
+  time, and any incident it opened is closed.
+
+The Apps page no longer calls these containers crashed. They are listed
+separately as *"stopped on purpose — not alerting"*, with the reason and who did
+it, and `stop`/`start`/`restart` now write an Activity entry — until now none of
+the three touched the database at all, so nothing recorded who stopped an app.
+
+The auto-healer no longer restarts a container the panel deliberately stopped.
+Its restart leg and the auto-sleep leg share one switch and one tick, restart
+first, and it had no knowledge of sleep state — so it undid the operator's Stop
+within two minutes. That fight was previously visible only through the spurious
+alert this release removes.
+
+### Notes
+
+`is_sleeping` is deliberately untouched. Nothing clears it but `wake_container`,
+and that stuckness is currently the only thing bounding a domainless container —
+whose idle clock nothing refreshes — to one sleep instead of an unbounded
+stop/start loop. The new table is read by the alert engine and the auto-healer
+and by nothing else, which is what makes clearing it from observation safe.
+
+Known bound, stated rather than hidden: a container that is started outside the
+panel and dies again within the same two-minute sweep, having never been observed
+in a non-stopped state, keeps its expectation and stays quiet until it is next
+seen running. Uptime monitors on a stopped app still file their own incident;
+that path is unchanged.
+
 ## [2.143.0]
 
 ### Fixed — a first install could abort telling the operator their password was wrong, and offer to destroy their data
