@@ -52,6 +52,11 @@ const SOURCES = [
   "cron",
   "metrics_collector",
   "security_scanner",
+  // A DNS-01 certificate downgraded to a single name records itself here, and a
+  // source the dropdown does not offer is a row nobody can filter for. Derived,
+  // not typed: `system-logs-scope` S9 re-extracts every source the backend
+  // writes and fails when this list omits one.
+  "ssl",
   "uptime",
 ];
 

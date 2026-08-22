@@ -1043,6 +1043,134 @@ fn strip_zero_offset_seconds(s: &str) -> Option<String> {
     }
 }
 
+/// Days before expiry at which a DNS-01 certificate we cannot re-order over
+/// DNS-01 stops being refused and is deliberately downgraded instead.
+///
+/// Refusing is the right answer while there is still time to fix the cause, and
+/// the WRONG answer at the end. For a zone-apex wildcard, today's silent
+/// downgrade at least leaves the apex serving a valid certificate and breaks
+/// only the siblings — visibly, in a browser, each two clicks from a repair.
+/// Refusing all the way to expiry takes the apex AND every sibling down at the
+/// same moment, so a pure refusal would ENLARGE the blast radius of the very
+/// defect it was written to remove.
+///
+/// Seven days sits under every profile's fallback margin
+/// (`auto_healer::fallback_renewal_margin`: 2 / 15 / 30), so the ladder has
+/// already been climbed by the time this rung is reached.
+pub const DNS01_LAST_RESORT_DAYS: i64 = 7;
+
+/// What a renewal door should DO with a site, decided before any ACME order.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RenewalPlan {
+    /// Renew over HTTP-01 against the site's own domain.
+    ///
+    /// `record_challenge` is true when nothing was recorded and this pass is the
+    /// one degraded attempt that also writes the provenance down. That is what
+    /// makes the rule CONVERGE: an unrecorded row behaves exactly as it does
+    /// today once more, and is correct for ever after. Requiring positive
+    /// evidence of `http-01` rather than absence-of-wildcard-evidence is the
+    /// only formulation that terminates — absence is also what a non-wildcard
+    /// DNS-01 certificate looks like, and that certificate is byte-identical to
+    /// an HTTP-01 one in every field the panel or the agent can read.
+    Http01 { record_challenge: bool },
+    /// Renew over DNS-01, against the name actually ordered.
+    Dns01 {
+        subject: String,
+        wildcard: bool,
+        zone_id: uuid::Uuid,
+    },
+    /// A DNS-01 certificate whose zone we cannot reach, with time still on the
+    /// clock. Refuse and say why; the operator can add the zone or the token.
+    Refuse { reason: String },
+    /// The same certificate, inside [`DNS01_LAST_RESORT_DAYS`]. Downgrade on
+    /// purpose, record it, and say exactly what was lost — never silently.
+    LastResortHttp01 { losing: String },
+}
+
+/// Decide how `site` must be renewed, from what was RECORDED at issuance.
+///
+/// ⚠ This deliberately does not consult `ssl_cert_path`. An earlier draft used
+/// "the certificate directory is not the site's own domain" as proof of a shared
+/// zone certificate. It is not proof: `rename_domain` writes only the domain
+/// while the agent MOVES the certificate directory, so every renamed HTTP-01
+/// site carries a path naming a directory it no longer uses, and in SQL that row
+/// is indistinguishable from a genuine wildcard child. Acting on it would have
+/// refused to renew healthy sites for ever.
+pub async fn renewal_plan(
+    pool: &sqlx::PgPool,
+    site: &crate::models::Site,
+    days_remaining: Option<i64>,
+) -> RenewalPlan {
+    // Positive evidence of HTTP-01, or nothing recorded at all.
+    match site.ssl_challenge.as_deref() {
+        Some("http-01") => return RenewalPlan::Http01 { record_challenge: false },
+        None => return RenewalPlan::Http01 { record_challenge: true },
+        _ => {}
+    }
+
+    let subject = site
+        .ssl_cert_subject
+        .clone()
+        .unwrap_or_else(|| site.domain.clone());
+    let wildcard = site.ssl_wildcard.unwrap_or(false);
+    let names = if wildcard {
+        format!("{subject} and *.{subject}")
+    } else {
+        subject.clone()
+    };
+
+    // The zone that ISSUED it, never a zone re-derived from a text subject.
+    // Re-deriving would let a stale string select a different tenant's
+    // Cloudflare token, and there is no caller-free zone resolver in this tree:
+    // every other `dns_zones` read is scoped `WHERE domain = $1 AND user_id = $2`.
+    let zone_id: Option<uuid::Uuid> = match site.ssl_dns_zone_id {
+        Some(id) => sqlx::query_scalar(
+            "SELECT id FROM dns_zones WHERE id = $1 AND provider = 'cloudflare' \
+             AND cf_zone_id IS NOT NULL AND cf_api_token IS NOT NULL",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten(),
+        // Legacy row: fall back to the SITE OWNER's zones — never the actor's,
+        // never the first admin's, never an unscoped match by domain. An
+        // unattended loop has no actor, and handing one admin's Cloudflare token
+        // to a job renewing another account's site is a credential disclosure,
+        // not a convenience.
+        None => sqlx::query_scalar(
+            "SELECT id FROM dns_zones WHERE user_id = $1 AND provider = 'cloudflare' \
+             AND cf_zone_id IS NOT NULL AND cf_api_token IS NOT NULL AND domain = $2",
+        )
+        .bind(site.user_id)
+        .bind(&subject)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten(),
+    };
+
+    if let Some(zone_id) = zone_id {
+        return RenewalPlan::Dns01 { subject, wildcard, zone_id };
+    }
+
+    // No reachable zone. Refuse while that is still repairable; downgrade
+    // deliberately once it is not.
+    if days_remaining.is_some_and(|d| d <= DNS01_LAST_RESORT_DAYS) {
+        RenewalPlan::LastResortHttp01 { losing: names }
+    } else {
+        RenewalPlan::Refuse {
+            reason: format!(
+                "The certificate for {} was issued over DNS-01 and covers {}. Renewing it \
+                 needs the Cloudflare zone it was issued against, and this site's owner has \
+                 no Cloudflare zone for {} with an API token. Add it under DNS management, \
+                 or install a replacement certificate under the site's SSL tab.",
+                site.domain, names, subject
+            ),
+        }
+    }
+}
+
 /// The issuer of the certificate installed for `domain`, but ONLY when that
 /// issuer proves DockPanel did not put it there.
 ///

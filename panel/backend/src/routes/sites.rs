@@ -879,15 +879,31 @@ pub async fn create(
                             let cert_path = result.get("cert_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
                             let key_path = result.get("key_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-                            // Update site DB record with SSL status
+                            // Update site DB record with SSL status.
+                            //
+                            // ⚠ This statement recorded FOUR columns while the two
+                            // deliberate issuance doors record their provenance too, so a
+                            // site whose certificate arrived automatically at creation
+                            // carried a NULL profile that the cooldown and margin helpers
+                            // then read. The set-comparison pin (ssl-controls C1/C3) exists
+                            // to keep this path and the upload path in step, and it could
+                            // not see the gap because it compares this statement against
+                            // the upload, not against the doors in `routes/ssl.rs`.
+                            //
+                            // This door is always HTTP-01 (`/ssl/provision/{domain}`,
+                            // one identifier), so the subject is the site's own domain and
+                            // it is never a wildcard.
                             let _ = sqlx::query(
                                 "UPDATE sites SET ssl_enabled = true, ssl_cert_path = $1, ssl_key_path = $2, \
-                                 ssl_expiry = $3, updated_at = NOW() WHERE id = $4"
+                                 ssl_expiry = $3, ssl_profile = NULL, \
+                                 ssl_challenge = 'http-01', ssl_cert_subject = $5, ssl_wildcard = FALSE, \
+                                 ssl_dns_zone_id = NULL, updated_at = NOW() WHERE id = $4"
                             )
                             .bind(&cert_path)
                             .bind(&key_path)
                             .bind(ssl_expiry)
                             .bind(site_id)
+                            .bind(&ssl_domain)
                             .execute(&ssl_db)
                             .await;
 
@@ -2892,6 +2908,8 @@ pub async fn upload_ssl(
         "UPDATE sites SET ssl_enabled = true, ssl_cert_path = COALESCE($1, ssl_cert_path), \
          ssl_key_path = COALESCE($2, ssl_key_path), ssl_expiry = COALESCE($3, ssl_expiry), \
          ssl_profile = NULL, \
+         ssl_challenge = NULL, ssl_cert_subject = NULL, ssl_wildcard = NULL, \
+         ssl_dns_zone_id = NULL, \
          ssl_renewal_at = NULL, ssl_renewal_checked_at = NULL, updated_at = NOW() WHERE id = $4",
     )
         .bind(cert_path.as_deref())
@@ -3084,10 +3102,34 @@ pub async fn rename_domain(
         Some(serde_json::json!({ "new_domain": new_domain })),
     ).await.map_err(|e| agent_error("Domain rename", e))?;
 
-    // Update site record
-    sqlx::query("UPDATE sites SET domain = $1, updated_at = NOW() WHERE id = $2")
+    // Update site record.
+    //
+    // ⛔ `ssl_cert_path`/`ssl_key_path` MUST move with the domain. The agent has
+    // just renamed `/etc/dockpanel/ssl/{old}` to `{new}` (or copied it, when the
+    // directory is shared), and this statement used to write the domain alone —
+    // so a renamed site kept a path naming a directory it no longer uses, for
+    // ever, since no renewal door rewrites the column either. That is not
+    // cosmetic: `build_nginx_body` sends `ssl_cert_path` verbatim to the agent on
+    // the next full vhost rebuild, so an unrelated later edit re-pointed nginx at
+    // a directory that is gone.
+    //
+    // ⚠ Scoped to the site's OWN directory on purpose. A site whose certificate
+    // is a DNS-01 wildcard has `ssl_cert_path` naming the ZONE, which the agent
+    // does not touch on rename and which must not be rewritten to the new name —
+    // that path is correct exactly as it stands. The `LIKE` therefore matches
+    // only a path under the OLD domain's own directory.
+    sqlx::query(
+        "UPDATE sites SET domain = $1, \
+         ssl_cert_path = CASE WHEN ssl_cert_path LIKE $3 \
+             THEN '/etc/dockpanel/ssl/' || $1 || '/fullchain.pem' ELSE ssl_cert_path END, \
+         ssl_key_path = CASE WHEN ssl_key_path LIKE $4 \
+             THEN '/etc/dockpanel/ssl/' || $1 || '/privkey.pem' ELSE ssl_key_path END, \
+         updated_at = NOW() WHERE id = $2",
+    )
         .bind(&new_domain)
         .bind(id)
+        .bind(format!("/etc/dockpanel/ssl/{old_domain}/%"))
+        .bind(format!("/etc/dockpanel/ssl/{old_domain}/%"))
         .execute(&state.db)
         .await
         .map_err(|e| internal_error("rename domain", e))?;

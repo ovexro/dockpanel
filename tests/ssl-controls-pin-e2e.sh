@@ -137,8 +137,16 @@ eq "A4 it binds the scanned member, not an arbitrary host" \
 # The signature is what makes the id REACHABLE at all.
 eq "A5 auto_fix_safe_findings receives the member, not just its handle" \
    "$(occ "$F_SCAN" 'asyncfnauto_fix_safe_findings(pool:&PgPool,member:&FleetMember,')" "1"
-eq "A6 the vhost read stays keyed on the resolved id" \
-   "$(occ "$F_SCAN" 'SELECT*FROMsitesWHEREid=$1')" "1"
+# TWO reads by id since v2.145.0, and the arm is about the KEY, not the count:
+# the post-renewal vhost rebuild reads by the id already resolved, and so does
+# the provenance read that decides which challenge renews this certificate.
+# Both must stay keyed on the id — `domain` is unique only per server
+# (`idx_sites_domain_server`), so a lookup on it can hand back another host's row.
+eq "A6 every site re-read in this loop stays keyed on the resolved id" \
+   "$(occ "$F_SCAN" 'SELECT*FROMsitesWHEREid=$1')" "2"
+# …and none of them is keyed on the domain instead.
+eq "A6b and none re-reads the row by domain" \
+   "$(occ "$F_SCAN" 'SELECT*FROMsitesWHEREdomain=')" "0"
 
 # THE CLASS ARM. Not one spelling in one file: every backend query that reads a
 # site and constrains `domain` must also constrain `server_id`. Derived by
@@ -264,8 +272,14 @@ acme_cols=$(printf '%s' "$F_SITES" | $G -oE 'UPDATEsitesSETssl_enabled=true,ssl_
             | $G -oE 'ssl_[a-z_]+' | sort -u | tr '\n' ' ')
 upload_cols=$(printf '%s' "$F_SITES" | $G -oE 'UPDATEsitesSETssl_enabled=true,ssl_cert_path=COALESCE[^"]*' | head -1 \
             | $G -oE 'ssl_[a-z_]+' | sort -u | tr '\n' ' ')
+# v2.145.0 widened this set twice over. `ssl_profile` had ALWAYS been missing
+# from the auto-SSL-on-create statement while both deliberate issuance doors
+# recorded it — a real gap this arm could not see, because it compares this
+# statement against the UPLOAD path rather than against the doors in
+# `routes/ssl.rs`. And the four provenance columns join it, because which
+# challenge issued a certificate is decided here and nowhere else.
 eq "C1 the ACME reference set is non-empty and complete" "$acme_cols" \
-   "ssl_cert_path ssl_enabled ssl_expiry ssl_key_path "
+   "ssl_cert_path ssl_cert_subject ssl_challenge ssl_dns_zone_id ssl_enabled ssl_expiry ssl_key_path ssl_profile ssl_wildcard "
 eq "C2 the upload set is non-empty" \
    "$([ -n "${upload_cols// /}" ] && echo yes || echo no)" "yes"
 eq "C3 the upload path records at least the same ssl_* columns" \
@@ -413,12 +427,16 @@ eq "F9 the healer stops rather than renewing" \
 # count went 1 -> 2 when a SECOND, unrelated 422 landed in this file (a failed
 # ACME order now answers with its reason instead of an incident id), and a count
 # alone could not tell the two apart — the arm's title claims it names the ISSUER,
-# so that is what it now reads. The count is kept beside it, because two is the
-# number that is correct and a third would be a question worth asking.
+# so that is what it now reads.
+# ⚠ THE PROSE HERE WAS STALE: it said "two is the number that is correct" while
+# the arm below already pinned FOUR. Whoever moves that number moves this sentence.
+# Five since v2.145.0 — a DNS-01 renewal that cannot reach its Cloudflare zone
+# answers 422 rather than silently re-ordering the certificate over HTTP-01.
+# ⚠ `carry-sweep` B5b pins this SAME literal in this SAME file. Both move together.
 eq "F10 the manual door refuses with a 4xx naming the issuer" \
    "$(occ "$F_SSL" 'StatusCode::UNPROCESSABLE_ENTITY,&format!("Thecertificateon{}wasnotissuedbyDockPanel(issuer:{})')" "1"
-eq "F10b and this file holds exactly the four refusals that earn one" \
-   "$(occ "$F_SSL" 'StatusCode::UNPROCESSABLE_ENTITY,')" "4"
+eq "F10b and this file holds exactly the five refusals that earn one" \
+   "$(occ "$F_SSL" 'StatusCode::UNPROCESSABLE_ENTITY,')" "5"
 # The operator has to LEARN about a declined renewal, or a protected certificate
 # and a forgotten one look identical from the panel. Counts the CALL, so deleting
 # the alert while keeping the `continue` — a silent skip, which is what a
@@ -433,9 +451,15 @@ eq "F11 the declined renewal raises an alert" \
 # is about to go dark.
 eq "F12 the declined case has its own helper" \
    "$(occ "$F_SCAN" 'asyncfnssl_renewal_declined_alert(')" "1"
-eq "F13 worded as the operator's job, at warning severity" \
-   "$([ "$(occ "$F_SCAN" '"ssl_renewal_failure","","warning",')" = 1 ] && \
-      [ "$(occ "$F_SCAN" 'SSLcertificatefor{domain}needsrenewingbyyou')" = 1 ] && echo yes || echo no)" "yes"
+# TWO declines now, and both are warnings worded as the operator's job: a
+# certificate DockPanel did not issue, and a DNS-01 certificate whose Cloudflare
+# zone it cannot reach. The count is what stops a THIRD outcome being wired into
+# the warning wording without a decision — and `ssl-correctness` guards the other
+# direction, that neither decline borrows the failure helper.
+eq "F13 both declines are worded as the operator's job, at warning severity" \
+   "$([ "$(occ "$F_SCAN" '"ssl_renewal_failure","","warning",')" = 2 ] && \
+      [ "$(occ "$F_SCAN" 'SSLcertificatefor{domain}needsrenewingbyyou')" = 1 ] && \
+      [ "$(occ "$F_SCAN" 'SSLcertificatefor{domain}needsaCloudflarezone')" = 1 ] && echo yes || echo no)" "yes"
 # The four genuine failure paths keep the helper that names a failure — the split
 # is the point, so both counts are pinned.
 eq "F14 the real failure paths still alert as failures" \

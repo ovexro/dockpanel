@@ -126,8 +126,15 @@ eq "C1c both ensure_local_server writers bind the encrypted value" \
 # here so a future reader does not "helpfully" encrypt the hash too.
 eq "C2 for_server decrypts before dialling" \
    "$($G -c 'decrypt_credential_or_legacy(' "$AGENT")" "1"
+# TWO reads of the field since v2.145.0 — `for_server` opens a stored dial-out
+# token, and the accessor hands the same key to the UNATTENDED renewal loops so
+# they can open the Cloudflare token that issued a DNS-01 certificate. Both are
+# struct-field reads, which is what this arm is about; an `std::env::var` here
+# would be the second source of truth the field comment forbids.
 eq "C2b the key is a struct field, not an environment read" \
-   "$($G -c '&self\.jwt_secret' "$AGENT")" "1"
+   "$($G -c '&self\.jwt_secret' "$AGENT")" "2"
+eq "C2b-env the key is never re-read from the environment in the agent registry" \
+   "$($G -c 'env::var("JWT_SECRET")' "$AGENT")" "0"
 eq "C2c the inbound path still authenticates on the HASH" \
    "$($G -c 'hash_agent_token' panel/backend/src/routes/agent_checkin.rs)" "1"
 

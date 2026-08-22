@@ -4,6 +4,88 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.145.0]
+
+### Fixed — renewing a DNS-01 certificate destroyed it
+
+`sites` recorded nothing about which ACME challenge issued a certificate, so
+every renewal door — the Renew button, the Diagnostics **Fix** button, the
+auto-healer, and the weekly security scan — aimed an **HTTP-01, single-name**
+order at the site's own domain. For a certificate issued over DNS-01 that is not
+a renewal at all: it orders a different certificate, for a different set of
+names, and for a wildcard it writes that over the file every site in the zone is
+serving. The panel then reported a successful renewal.
+
+It failed in two opposite directions, and both were silent.
+
+**When the site is the Cloudflare zone apex**, the certificate directory is
+named after the site, so the guard that protects certificates DockPanel did not
+issue finds the wildcard, sees a Let's Encrypt issuer, and returns "not foreign"
+— permission to proceed. A single-name certificate was written over the shared
+`fullchain.pem` in place, and every sibling vhost pointing at that directory
+began serving a certificate that does not cover it. This is reachable on a stock
+install: the auto-fix pass runs on every security scan and needs no opt-in.
+
+**When the site is a subdomain under a zone wildcard**, there is no certificate
+at the site's own path, so that same guard exits before it ever reads an issuer.
+The renewal wrote an orphan certificate nothing served, the panel re-rendered the
+vhost from the stored path and pointed nginx *back* at the un-renewed wildcard,
+and stamped the **new** certificate's 90-day expiry onto the row. The renewal
+window never reopened, and the site went dark at the wildcard's real expiry
+behind a panel showing two months remaining and a "renewed successfully" notice.
+
+The v2.141.0 entry below already disclosed this, including the remedy: *"nothing
+records which challenge issued a certificate."* This release records it.
+
+- **`sites` now carries the provenance** — the challenge, the name actually
+  ordered (for a wildcard that is the **zone**, not the site), whether it is a
+  wildcard, and the Cloudflare zone row that issued it. Renewal uses that zone
+  row rather than re-deriving one from a name, so the credential that renews is
+  provably the credential that issued.
+- **A DNS-01 certificate is renewed over DNS-01**, against the name it was
+  issued for, through the agent route that has existed since v2.6.7. Nothing on
+  your servers needs updating: the fix is entirely in the panel.
+- **Renewing over HTTP-01 now requires positive evidence that HTTP-01 issued the
+  certificate.** A row from before this release behaves exactly as it does today
+  once more, records what it learned, and is correct from then on. The weaker
+  rule — "renew over HTTP-01 unless something looks like a wildcard" — never
+  converges, because a non-wildcard DNS-01 certificate is indistinguishable from
+  an HTTP-01 one in every field the panel can read, and that is precisely the
+  certificate whose owner chose DNS-01 *because port 80 cannot be reached*.
+- **A certificate that cannot be re-ordered over DNS-01 is refused and reported,
+  not silently downgraded** — and refusing is a rung, not the end of the ladder.
+  Inside the last seven days it is downgraded **on purpose**, recorded, and
+  announced at critical severity naming exactly which names stopped being
+  covered. That is never a worse outcome than before; it removes the silence,
+  which was the actual defect.
+- **The renewal timeout was shorter than the work at every door.** Two used a
+  60-second cap and the Renew button used 120, while a wildcard DNS-01 order
+  budgets about 260 seconds inside the agent alone — so a DNS-01 renewal timed
+  out while the agent went on to succeed, and the panel recorded a failure, left
+  the expiry stale and wrote a cooldown. All three now share one budget derived
+  from the agent's own arithmetic.
+
+### Fixed — renaming a site left its certificate path pointing at a directory that had moved
+
+The rename wrote the new domain and nothing else, while the agent renamed the
+certificate directory underneath it. The stored path kept naming the old
+directory for ever, and it is sent verbatim to nginx on the next full vhost
+rebuild — so an unrelated edit weeks later could re-point a site at a directory
+that no longer exists. A wildcard's path, which names the zone rather than the
+site, is deliberately left alone.
+
+### Fixed — a certificate issued automatically at site creation recorded no ACME profile
+
+Both deliberate issuance doors stored the profile they used; the one that fires
+on its own three seconds after a site is created never did, so the renewal
+margin and cooldown helpers read a NULL and applied the wrong schedule.
+
+### Fixed — the system log could not show what it was being told
+
+A downgraded certificate records itself in the system log, and the log's own
+source filter did not offer that source, so the row existed and nothing could
+filter for it.
+
 ## [2.144.0]
 
 ### Fixed — stopping a container published a critical incident on your public status page

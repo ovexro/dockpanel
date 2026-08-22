@@ -315,10 +315,16 @@ pub async fn provision(
         .unwrap_or("")
         .to_string();
 
-    // Update site in DB
+    // Update site in DB. The provenance columns are written HERE, at issuance,
+    // beside `ssl_profile` — the tree's existing provision-time provenance
+    // column — because this is the only moment anything knows which challenge
+    // answered. HTTP-01 orders exactly one identifier, so the subject is the
+    // site's own domain and the certificate is never a wildcard.
     sqlx::query(
         "UPDATE sites SET ssl_enabled = true, ssl_cert_path = $1, ssl_key_path = $2, \
          ssl_expiry = $3, ssl_profile = $4, \
+         ssl_challenge = 'http-01', ssl_cert_subject = $6, ssl_wildcard = FALSE, \
+         ssl_dns_zone_id = NULL, \
          ssl_renewal_at = NULL, ssl_renewal_checked_at = NULL, \
          updated_at = NOW() WHERE id = $5",
     )
@@ -327,6 +333,7 @@ pub async fn provision(
     .bind(ssl_expiry)
     .bind(profile.as_deref())
     .bind(id)
+    .bind(&site.domain)
     .execute(&state.db)
     .await
     .map_err(|e| internal_error("provision", e))?;
@@ -478,10 +485,17 @@ pub async fn provision_dns01(
     let cert_path = result.get("cert_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let key_path = result.get("key_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-    // Update site in DB
+    // Update site in DB. `provision_domain` — NOT `site.domain` — is what was
+    // ordered: for a wildcard it is the Cloudflare ZONE, and the certificate
+    // covers `{zone}` and `*.{zone}`. Recording the zone ROW as well as its name
+    // means the renewal reaches for the credential that issued this certificate
+    // instead of re-deriving a zone from a text subject, which is how a stale
+    // string could otherwise select a different tenant's Cloudflare token.
     sqlx::query(
         "UPDATE sites SET ssl_enabled = true, ssl_cert_path = $1, ssl_key_path = $2, \
          ssl_expiry = $3, ssl_profile = $4, \
+         ssl_challenge = 'dns-01', ssl_cert_subject = $6, ssl_wildcard = $7, \
+         ssl_dns_zone_id = $8, \
          ssl_renewal_at = NULL, ssl_renewal_checked_at = NULL, \
          updated_at = NOW() WHERE id = $5",
     )
@@ -490,6 +504,9 @@ pub async fn provision_dns01(
     .bind(ssl_expiry)
     .bind(profile.as_deref())
     .bind(id)
+    .bind(provision_domain)
+    .bind(wildcard)
+    .bind(zone.id)
     .execute(&state.db)
     .await
     .map_err(|e| internal_error("dns01 update", e))?;
@@ -583,13 +600,190 @@ pub async fn status(
     let agent_path = format!("/ssl/status/{}", site.domain);
     let agent_status = agent.get(&agent_path).await.ok();
 
+    // ⚠ `agent_status` asks the agent about `{SSL_DIR}/{site.domain}/`, so for a
+    // site served by a zone WILDCARD it reports `has_cert: false` — the
+    // certificate is real and is installed under the zone's name, not this
+    // site's. The provenance below is what tells those two cases apart, and it
+    // is the only place the panel says what the certificate actually covers.
     Ok(Json(serde_json::json!({
         "ssl_enabled": site.ssl_enabled,
         "cert_path": site.ssl_cert_path,
         "key_path": site.ssl_key_path,
         "expiry": site.ssl_expiry,
+        "challenge": site.ssl_challenge,
+        "cert_subject": site.ssl_cert_subject,
+        "wildcard": site.ssl_wildcard,
         "agent_status": agent_status,
     })))
+}
+
+/// How long a DNS-01 order may take, at every layer, in seconds.
+///
+/// Derived from the agent's own arithmetic rather than guessed: `provision_cert_dns01`
+/// sleeps 10s per authorization for DNS propagation — TWO of them for a wildcard,
+/// which orders `{subject}` and `*.{subject}` — then polls readiness on a 120s
+/// retry policy and polls for the certificate on another 120s. That is ~260s of
+/// budgeted waiting before any slack.
+///
+/// ⛔ Every caller must use THIS constant. The three renewal doors disagreed:
+/// `auto_healer` used plain `post` (a hard 60s cap in `AgentHandle::request`),
+/// `security_scanner` the same, and the interactive Renew button
+/// `post_long(.., 120)` — so a DNS-01 renewal timed out at every door while the
+/// agent went on to succeed, and the panel recorded a failure, skipped the
+/// expiry write and wrote a cooldown row. A budget below the agent's own wait is
+/// not a timeout, it is a guaranteed false failure.
+pub(crate) const DNS01_ORDER_TIMEOUT_SECS: u64 = 300;
+
+/// Renew a certificate over DNS-01, against the name it was actually issued for.
+///
+/// ⚠ This reuses the agent's EXISTING `/ssl/provision-dns01/{domain}` route
+/// rather than adding a renewal route of its own. That route has been a renewal
+/// since v2.6.7: it orders `{domain}` (+ `*.{domain}` when `wildcard`), and
+/// `provision_cert_dns01` does `create_dir_all` then `write`, which over an
+/// existing directory is exactly a re-issue in place. It also deliberately skips
+/// the vhost enable for a wildcard, leaving that to the panel — which is what
+/// this door needs. Reusing it is why this fix reaches every installed agent as
+/// it stands instead of waiting for a fleet-wide upgrade; `error.rs` states that
+/// doctrine outright: "an agent is only updated when somebody updates it, so a
+/// fix that lives only in the agent does not arrive."
+///
+/// ⚠ The zone is taken by ID, decided by the caller from what was RECORDED at
+/// issuance. It is never re-derived from a text subject here, because an
+/// unattended loop has no actor to scope a zone lookup to, and resolving one by
+/// bare domain would hand one account's Cloudflare token to a renewal running
+/// for another account's site.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn renew_over_dns01(
+    pool: &sqlx::PgPool,
+    jwt_secret: &str,
+    agent: &crate::services::agent::AgentHandle,
+    subject: &str,
+    wildcard: bool,
+    zone_id: Uuid,
+    owner_id: Uuid,
+    profile: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let zone: crate::routes::dns::DnsZone =
+        sqlx::query_as("SELECT * FROM dns_zones WHERE id = $1")
+            .bind(zone_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("DNS zone lookup failed: {e}"))?
+            .ok_or_else(|| "the Cloudflare zone this certificate was issued against no longer exists".to_string())?;
+
+    let cf_zone_id = zone
+        .cf_zone_id
+        .as_deref()
+        .ok_or_else(|| format!("the {} zone has no Cloudflare zone ID", zone.domain))?;
+    let cf_api_token_enc = zone
+        .cf_api_token
+        .as_deref()
+        .ok_or_else(|| format!("the {} zone has no Cloudflare API token", zone.domain))?;
+    let cf_api_token =
+        crate::services::secrets_crypto::decrypt_credential_or_legacy(cf_api_token_enc, jwt_secret);
+
+    // The ACME contact belongs to the site's OWNER, not to whoever triggered
+    // this — the unattended doors have no one to attribute it to, and the
+    // interactive one is reachable by an administrator acting on another
+    // account's site.
+    let owner_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+        .bind(owner_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("owner lookup failed: {e}"))?
+        .ok_or_else(|| "the site's owner account has no email address on file".to_string())?;
+    let email = resolve_acme_contact(pool, &owner_email).await?;
+
+    let mut agent_body = serde_json::json!({
+        "email": email,
+        "cf_zone_id": cf_zone_id,
+        "cf_api_token": cf_api_token,
+        "cf_api_email": zone.cf_api_email,
+        "wildcard": wildcard,
+    });
+    if let Some(p) = profile {
+        agent_body["profile"] = serde_json::json!(p);
+    }
+
+    agent
+        .post_long(
+            &format!("/ssl/provision-dns01/{subject}"),
+            Some(agent_body),
+            DNS01_ORDER_TIMEOUT_SECS,
+        )
+        .await
+        // s388's three-party classification, reused: name Cloudflare or the CA
+        // when either of them is what refused, and stay this machine's fault
+        // otherwise. ⛔ Deliberately NOT `acme_failure_or`, whose sentence tells
+        // the operator to check port 80 — on the door reached precisely because
+        // port 80 cannot work.
+        .map_err(|e| {
+            crate::error::dns_provider_failure(&e)
+                .or_else(|| crate::error::acme_order_failure(&e))
+                .unwrap_or_else(|| format!("the DNS-01 order for {subject} did not complete: {e}"))
+        })
+}
+
+/// Write down what a SUCCESSFUL renewal actually installed.
+///
+/// Two of the four plans change what is true about the row and must say so:
+///
+/// - `Http01 { record_challenge: true }` — nothing was recorded, this pass was
+///   the one degraded attempt, and it succeeded. Recording it here is what makes
+///   the rule terminate instead of degrading for ever.
+/// - `LastResortHttp01` — a DNS-01 certificate we could not re-order over
+///   DNS-01, downgraded on purpose inside its last week. The installed
+///   certificate really is single-name HTTP-01 now, so the row has to agree, or
+///   the next cycle branches to DNS-01 for a certificate that is not one.
+///
+/// ⚠ Called only after success. A FAILED HTTP-01 attempt on an unrecorded row
+/// must leave it unrecorded — the likeliest reason it failed is that the site
+/// cannot answer HTTP-01, which is exactly the case that made DNS-01 the right
+/// door, and recording `http-01` there would pin the wrong answer for ever.
+pub(crate) async fn record_renewal_provenance(
+    pool: &sqlx::PgPool,
+    site_id: Uuid,
+    domain: &str,
+    plan: &crate::helpers::RenewalPlan,
+) {
+    let losing = match plan {
+        crate::helpers::RenewalPlan::Http01 { record_challenge: true } => None,
+        crate::helpers::RenewalPlan::LastResortHttp01 { losing } => Some(losing.clone()),
+        _ => return,
+    };
+
+    let _ = sqlx::query(
+        "UPDATE sites SET ssl_challenge = 'http-01', ssl_cert_subject = $2, \
+         ssl_wildcard = FALSE, ssl_dns_zone_id = NULL, updated_at = NOW() WHERE id = $1",
+    )
+    .bind(site_id)
+    .bind(domain)
+    .execute(pool)
+    .await;
+
+    if let Some(losing) = losing {
+        // Say exactly what was lost. The defect this ship removes was never the
+        // downgrade itself — it was that the downgrade happened in silence and
+        // the panel then reported a successful renewal.
+        crate::services::system_log::log_event(
+            pool,
+            // ⚠ "warning", not "warn". The readers — the Warnings tile, the level
+            // filter and the badge — all spell it long, and a short spelling is a
+            // row nothing can count, filter or colour. `system-logs-scope` S8
+            // exists for exactly this and caught this line.
+            "warning",
+            "ssl",
+            &format!("{domain}: DNS-01 certificate downgraded to a single name"),
+            Some(&format!(
+                "The certificate covered {losing} and could not be re-ordered over DNS-01 \
+                 before it expired, so a single-name HTTP-01 certificate for {domain} was \
+                 issued instead. Any other name that certificate covered is no longer \
+                 covered. Restore it from the site's SSL tab once a Cloudflare zone with an \
+                 API token is available."
+            )),
+        )
+        .await;
+    }
 }
 
 /// POST /api/ssl/{id}/renew — Force-renew SSL certificate (admin only).
@@ -702,14 +896,57 @@ pub(crate) async fn renew_for_site(
         agent_body["profile"] = serde_json::json!(p);
     }
 
-    let agent_path = format!("/ssl/{}/renew", site.domain);
-    let result = agent
-        .post_long(&agent_path, Some(agent_body), 120)
-        .await
-        .map_err(|e| acme_failure_or(&site.domain, "SSL renewal", e))?;
+    // WHICH CHALLENGE ISSUED THIS CERTIFICATE decides which door renews it.
+    // Aiming HTTP-01 at a DNS-01 certificate does not refresh it — it orders a
+    // different certificate, for a different set of names, and for a wildcard it
+    // writes that over the shared file every sibling in the zone is serving.
+    let days_remaining = site
+        .ssl_expiry
+        .map(|e| (e - chrono::Utc::now()).num_days());
+    let plan = crate::helpers::renewal_plan(&state.db, site, days_remaining).await;
+
+    let result = match &plan {
+        crate::helpers::RenewalPlan::Refuse { reason } => {
+            // The idiom this file already uses for a precondition that is not an
+            // agent failure — the three sibling refusals in `provision_dns01` are
+            // PRECONDITION_FAILED with a plain sentence. `dns01_failure_or` is an
+            // AgentError translator and cannot be reached from here at all: no
+            // agent has been called yet.
+            return Err(err(StatusCode::PRECONDITION_FAILED, reason));
+        }
+        crate::helpers::RenewalPlan::Dns01 { subject, wildcard, zone_id } => {
+            renew_over_dns01(
+                &state.db,
+                &state.config.jwt_secret,
+                &agent,
+                subject,
+                *wildcard,
+                *zone_id,
+                site.user_id,
+                site.ssl_profile.as_deref(),
+            )
+            .await
+            .map_err(|reason| err(StatusCode::UNPROCESSABLE_ENTITY, &reason))?
+        }
+        crate::helpers::RenewalPlan::Http01 { .. }
+        | crate::helpers::RenewalPlan::LastResortHttp01 { .. } => {
+            let agent_path = format!("/ssl/{}/renew", site.domain);
+            agent
+                .post_long(&agent_path, Some(agent_body), DNS01_ORDER_TIMEOUT_SECS)
+                .await
+                .map_err(|e| acme_failure_or(&site.domain, "SSL renewal", e))?
+        }
+    };
 
     // Update expiry from the renew response and clear stale ARI hints so
     // the next auto-heal cycle refetches them.
+    //
+    // ⚠ The provenance columns move WITH the certificate. A last-resort
+    // downgrade really does leave an HTTP-01 single-name certificate installed,
+    // so the row must say so — otherwise the next cycle would branch to DNS-01
+    // for a certificate that is no longer one. And an unrecorded row records
+    // itself here, which is what makes the whole rule converge: an unknown row
+    // behaves as it does today exactly once, and is known ever after.
     if let Some(expiry_str) = result.get("expiry").and_then(|v| v.as_str()) {
         if let Some(expiry) = crate::helpers::parse_agent_cert_expiry(expiry_str) {
             let _ = sqlx::query(
@@ -722,6 +959,7 @@ pub(crate) async fn renew_for_site(
             .await;
         }
     }
+    record_renewal_provenance(&state.db, id, &site.domain, &plan).await;
 
     rebuild_vhost_after_ssl(state, &agent, id).await;
 
@@ -773,7 +1011,9 @@ pub async fn revoke(
     // Clear SSL fields in DB
     sqlx::query(
         "UPDATE sites SET ssl_enabled = false, ssl_cert_path = NULL, ssl_key_path = NULL, \
-         ssl_expiry = NULL, ssl_profile = NULL, ssl_renewal_at = NULL, \
+         ssl_expiry = NULL, ssl_profile = NULL, \
+         ssl_challenge = NULL, ssl_cert_subject = NULL, ssl_wildcard = NULL, \
+         ssl_dns_zone_id = NULL, ssl_renewal_at = NULL, \
          ssl_renewal_checked_at = NULL, updated_at = NOW() WHERE id = $1",
     )
     .bind(id)
@@ -1049,6 +1289,35 @@ pub(crate) async fn resolve_acme_contact(
     }
 }
 
+/// Resolve the profile to use for an operation: explicit override > stored
+/// default > None (CA picks its default).
+pub(crate) async fn resolve_profile(
+    pool: &sqlx::PgPool,
+    override_: Option<&str>,
+) -> Option<String> {
+    if let Some(p) = override_ {
+        if !p.is_empty() {
+            return Some(p.to_string());
+        }
+    }
+    sqlx::query_scalar::<_, String>(
+        "SELECT value FROM settings WHERE key = 'acme_default_profile'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .filter(|s| !s.is_empty())
+}
+
+// ⛔ EVERYTHING BELOW THE FIRST `#[cfg(test)]` IN THIS FILE IS INVISIBLE TO THE
+// PIN SUITES. `ssl-correctness-pin-e2e.sh`'s `prod_lines` blanks from the first
+// test marker to EOF and never resumes, so a `prod_*` arm cannot see production
+// code placed after one. `resolve_profile` had drifted below it and was blinded
+// at v2.144.0 — the second instance of lesson #669, which was written when a
+// test module placed mid-file hid ~60% of this file. Production items go ABOVE
+// this line; test modules go at the END.
+
 #[cfg(test)]
 mod acme_contact_tests {
     use super::validate_acme_contact;
@@ -1106,26 +1375,6 @@ mod acme_contact_tests {
     }
 }
 
-/// Resolve the profile to use for an operation: explicit override > stored
-/// default > None (CA picks its default).
-pub(crate) async fn resolve_profile(
-    pool: &sqlx::PgPool,
-    override_: Option<&str>,
-) -> Option<String> {
-    if let Some(p) = override_ {
-        if !p.is_empty() {
-            return Some(p.to_string());
-        }
-    }
-    sqlx::query_scalar::<_, String>(
-        "SELECT value FROM settings WHERE key = 'acme_default_profile'",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .filter(|s| !s.is_empty())
-}
 
 #[cfg(test)]
 mod dns01_message_tests {

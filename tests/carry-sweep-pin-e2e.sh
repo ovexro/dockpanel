@@ -170,13 +170,20 @@ echo "── §B  BOTH SSL doors, not the one the register named"
 has "B1 the shared translator exists" "$F_BSSL" "fnacme_failure_or("
 eq "B2 both doors call it" "$(occ "$F_BSSL" "acme_failure_or(&site.domain,")" 2
 has "B3 provisioning is one of them" "$F_BSSL" 'acme_failure_or(&site.domain,"SSLprovisioning",e))?;'
-has "B4 renewal is the other" "$F_BSSL" 'acme_failure_or(&site.domain,"SSLrenewal",e))?;'
+# ⚠ No trailing `;` since v2.145.0: the renewal call moved inside a `match` arm
+# that branches on which challenge issued the certificate, so the expression ends
+# the arm rather than a statement. The property — the renewal door propagates
+# through the shared translator, not a bare passthrough — is unchanged.
+has "B4 renewal is the other" "$F_BSSL" 'acme_failure_or(&site.domain,"SSLrenewal",e))?'
 has "B5 it answers 422, not a passthrough" "$F_BSSL" \
     'returnerr(StatusCode::UNPROCESSABLE_ENTITY,&format!("Acertificatefor{domain}couldnotbeissued:'
 # All four 422s must survive: s386's foreign-issuer refusal, s387's declined
 # order, and the DNS-01 door's two — a provider refusal and a declined order,
 # which are different sentences because they are different parties.
-eq "B5b and every refusal that earns a 422 keeps one" "$(occ "$F_BSSL" "StatusCode::UNPROCESSABLE_ENTITY,")" 4
+# FIVE since v2.145.0 — the DNS-01 renewal that cannot reach its Cloudflare zone
+# refuses rather than silently re-ordering over HTTP-01.
+# ⚠ `ssl-controls` F10b pins this SAME literal in this SAME file. Both move together.
+eq "B5b and every refusal that earns a 422 keeps one" "$(occ "$F_BSSL" "StatusCode::UNPROCESSABLE_ENTITY,")" 5
 # ⛔ #662. The compatibility path puts this sentence in front of a local agent
 # fault too, so it must name no cause — and must never say "try again", which on
 # a rate-limited order is the one instruction that makes it worse.

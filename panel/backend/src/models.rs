@@ -103,6 +103,25 @@ pub struct Site {
     pub ssl_profile: Option<String>,
     pub ssl_renewal_at: Option<DateTime<Utc>>,
     pub ssl_renewal_checked_at: Option<DateTime<Utc>>,
+    /// Which ACME challenge issued the installed certificate: `http-01` or
+    /// `dns-01`. NULL means "not recorded" — a row that predates the provenance
+    /// migration and that the activity-log backfill could not prove. Renewal
+    /// treats NULL as unknown and never as `http-01`; see
+    /// [`crate::helpers::renewal_plan`].
+    pub ssl_challenge: Option<String>,
+    /// The name the certificate was actually ORDERED for. Equal to `domain`
+    /// except for a wildcard, where it is the Cloudflare zone — the certificate
+    /// covers `{subject}` and `*.{subject}`, never `*.{domain}`.
+    pub ssl_cert_subject: Option<String>,
+    /// Three-state on purpose: `Some(true)` wildcard, `Some(false)` not, `None`
+    /// not recorded. A default `false` would assert "not a wildcard" over every
+    /// legacy apex wildcard, which is exactly the row that cannot be identified.
+    pub ssl_wildcard: Option<bool>,
+    /// The `dns_zones` row whose Cloudflare credential issued this certificate.
+    /// Renewal uses THIS row rather than re-deriving a zone from the subject, so
+    /// the credential that renews is provably the credential that issued and no
+    /// text match can select another tenant's token.
+    pub ssl_dns_zone_id: Option<Uuid>,
     pub rate_limit: Option<i32>,
     pub max_upload_mb: i32,
     pub php_memory_mb: i32,

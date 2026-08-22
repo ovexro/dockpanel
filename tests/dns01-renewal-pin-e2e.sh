@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+# Regression pins for the s392 ship — a certificate is renewed over the challenge
+# that ISSUED it.
+#
+# ⛔ EVERY ARM READS A COMMENT-STRIPPED SUBJECT. s386's suite printed 43/43 green
+# with that ship's headline defect restored, because the explanatory comment above
+# the fix quoted the code and satisfied every arm. Stripping is not a style choice
+# here; an arm that reads a file any other way is a bug in this file.
+#
+# WHAT THE SHIP FIXED
+#
+#   `sites` recorded nothing about which ACME challenge produced a certificate, so
+#   all three renewal doors aimed an HTTP-01, single-name order at `site.domain`.
+#   For a DNS-01 certificate that is wrong in two directions, both silent:
+#
+#     SHAPE A — the site IS the Cloudflare zone apex. The certificate directory is
+#       named after the site, so `foreign_cert_issuer` finds the wildcard, sees a
+#       Let's Encrypt issuer, and returns "not foreign" — permission to proceed.
+#       `provision_cert` then overwrites the shared fullchain.pem IN PLACE with a
+#       single-name certificate and every sibling vhost in the zone begins serving
+#       a certificate that does not cover it. Reachable on a STOCK install:
+#       `auto_fix_safe_findings` runs on every security scan with no opt-in.
+#
+#     SHAPE B — a subdomain under a zone wildcard. There is no certificate at
+#       `/etc/dockpanel/ssl/{site.domain}/`, so the guard exits on `has_cert:false`
+#       before it ever reads an issuer. The renewal writes an orphan certificate,
+#       the panel re-renders the vhost from `ssl_cert_path` and points nginx BACK
+#       at the un-renewed wildcard, and stamps the NEW certificate's expiry on the
+#       row. The 45-day window never reopens and the site goes dark behind a panel
+#       that already reported a successful renewal.
+#
+# §A is the arm that would have caught it: it derives the subject the ISSUANCE
+# door records and the subject the RENEWAL door orders, and fails when they can
+# drift apart. An arm pinned to either side alone was green throughout.
+#
+# Static analysis over source text: offline, deterministic, same verdict on an
+# air-gapped runner (lesson #641).
+set -uo pipefail
+cd "$(dirname "$0")/.." || exit 1
+
+PASS=0; FAIL=0
+ok()  { printf '\033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
+bad() { printf '\033[31m✗\033[0m %s — %s\n' "$1" "$2"; FAIL=$((FAIL+1)); }
+eq()  { [ "$2" = "$3" ] && ok "$1" || bad "$1" "expected '$3', got '$2'"; }
+has() { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1" "missing: $3" ;; esac; }
+hasnt(){ case "$2" in *"$3"*) bad "$1" "present but must not be: $3" ;; *) ok "$1" ;; esac; }
+
+# ugrep's --ignore-files shim honours .gitignore, so use the real binary.
+G=/usr/bin/grep
+
+subj()   { sed -E -e 's://.*$::' -e 's:^[[:space:]]*--.*$::' "$1" | tr -d ' \n\\'; }
+subjin() { sed -E -e 's://.*$::' -e 's:^[[:space:]]*--.*$::' | tr -d ' \n\\'; }
+# ⛔ ONE FUNCTION'S BODY, not the file (#672). A file-scoped `has` asks "does this
+# file contain this shape anywhere", which for ordinary Rust is always yes.
+fnbody() { awk -v p="$2" 'index($0,p){f=1} f{print} f && /^}$/{exit}' "$1"; }
+occ()    { printf '%s' "$1" | $G -oF -- "$2" | wc -l | tr -d ' '; }
+
+HELP=panel/backend/src/helpers.rs
+BSSL=panel/backend/src/routes/ssl.rs
+SITES=panel/backend/src/routes/sites.rs
+HEAL=panel/backend/src/services/auto_healer.rs
+SCAN=panel/backend/src/services/security_scanner.rs
+AGENT=panel/backend/src/services/agent.rs
+ASSL=panel/agent/src/services/ssl.rs
+ASSLR=panel/agent/src/routes/ssl.rs
+MIGDIR=panel/backend/migrations
+MIG="$MIGDIR/20260823000000_ssl_provenance.sql"
+
+for f in "$HELP" "$BSSL" "$SITES" "$HEAL" "$SCAN" "$AGENT" "$ASSL" "$ASSLR" "$MIG"; do
+  [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
+done
+
+# An arm over an empty subject prints green for every absence below (#143), so
+# every subject is floored on its POST-strip size before anything reads it.
+for pair in "$HELP:20000" "$BSSL:20000" "$SITES:60000" "$HEAL:30000" "$SCAN:8000" \
+            "$AGENT:20000" "$ASSL:12000" "$ASSLR:9000" "$MIG:900"; do
+  f=${pair%:*}; min=${pair##*:}
+  n=$(subj "$f" | wc -c)
+  [ "$n" -ge "$min" ] || { bad "SETUP" "$f has $n chars of code, expected >= $min"; exit 1; }
+done
+
+F_HELP=$(subj "$HELP"); F_BSSL=$(subj "$BSSL"); F_SITES=$(subj "$SITES")
+F_HEAL=$(subj "$HEAL"); F_SCAN=$(subj "$SCAN"); F_AGENT=$(subj "$AGENT")
+F_ASSL=$(subj "$ASSL"); F_ASSLR=$(subj "$ASSLR"); F_MIG=$(subj "$MIG")
+
+echo "── §A  the door that ISSUES and the door that RENEWS agree on the subject"
+
+# ⭐ THE ARM THAT WOULD HAVE CAUGHT THE ORIGINAL DEFECT. Both halves are DERIVED
+# from source and compared: an arm pinned to either side alone stayed green for
+# 137 releases while the two disagreed.
+#
+# The issuance door records the name it ORDERED (`provision_domain`, which on a
+# wildcard is the zone, not the site). The renewal door must order the name the
+# row RECORDED (`ssl_cert_subject`). If either side ever names `site.domain`
+# instead, they have drifted and the wildcard is destroyed again.
+has "A1 the DNS-01 door records the name it ordered, not the site" "$F_BSSL" \
+    "ssl_challenge='dns-01',ssl_cert_subject=\$6"
+has "A1b bound to provision_domain — the ZONE on a wildcard" "$F_BSSL" \
+    ".bind(provision_domain)"
+has "A2 the HTTP-01 door records the site's own domain" "$F_BSSL" \
+    "ssl_challenge='http-01',ssl_cert_subject=\$6"
+F_RENEWDNS=$(fnbody "$BSSL" "pub(crate) async fn renew_over_dns01(" | subjin)
+[ "$(printf '%s' "$F_RENEWDNS" | wc -c)" -ge 800 ] || \
+  { bad "SETUP" "renew_over_dns01 body extracted to $(printf '%s' "$F_RENEWDNS" | wc -c) chars — arms over it examine nothing"; exit 1; }
+has "A3 the renewal orders the RECORDED subject" "$F_RENEWDNS" \
+    'format!("/ssl/provision-dns01/{subject}")'
+# …and never the site's own domain, which is what the defect did.
+hasnt "A3b and never the site's own domain" "$F_RENEWDNS" "site.domain"
+
+# The agent route this reuses ALREADY existed and already is a renewal — that is
+# why the fix reaches an installed fleet with no agent upgrade. Pinned so a
+# future edit cannot quietly invent a second route and strand every existing box.
+has "A4 the agent route reused here is the one that already shipped" "$F_ASSLR" \
+    '.route("/ssl/provision-dns01/{domain}",post(provision_dns01))'
+has "A4b and it orders the wildcard SAN off the same flag" "$F_ASSL" \
+    'ids.push(Identifier::Dns(format!("*.{domain}")));'
+
+echo "── §B  the plan is decided from POSITIVE evidence, never from an absence"
+
+F_PLAN=$(fnbody "$HELP" "pub async fn renewal_plan(" | subjin)
+[ "$(printf '%s' "$F_PLAN" | wc -c)" -ge 900 ] || \
+  { bad "SETUP" "renewal_plan body extracted to $(printf '%s' "$F_PLAN" | wc -c) chars"; exit 1; }
+
+# ⭐ THE RULE THAT CONVERGES. Renewing over HTTP-01 requires the row to SAY
+# `http-01`. Absence-of-wildcard-evidence does not converge: a NON-wildcard
+# DNS-01 certificate is byte-identical to an HTTP-01 one in every field the panel
+# or the agent can read — one identifier, no `*.` SAN, its own directory — and
+# that is the population whose operator chose DNS-01 *because port 80 cannot be
+# reached*. Under an absence rule the fleet would re-order those over HTTP-01 for
+# ever. Under this rule an unrecorded row degrades exactly ONCE and records itself.
+has "B1 positive evidence of http-01 renews over http-01" "$F_PLAN" \
+    'Some("http-01")=>returnRenewalPlan::Http01{record_challenge:false}'
+has "B2 an unrecorded row degrades ONCE and records itself" "$F_PLAN" \
+    'None=>returnRenewalPlan::Http01{record_challenge:true}'
+# Everything else — including `dns-01` — falls through to the DNS-01 branch.
+has "B3 every other recorded challenge falls through" "$F_PLAN" '_=>{}'
+
+# ⛔ THE FORGED SIGNAL. `rename_domain` writes only the domain while the agent
+# MOVES the certificate directory, so every renamed HTTP-01 site permanently
+# carries a path naming a directory it no longer uses — in SQL indistinguishable
+# from a genuine wildcard child. A draft of this ship derived provenance from it
+# and would have branded healthy sites as wildcards and refused to renew them for
+# ever. The plan must never read that column.
+hasnt "B4 the plan never reads ssl_cert_path (rename forges it)" "$F_PLAN" "ssl_cert_path"
+# POSITIVE CONTROL: the same subject DOES carry the columns it is supposed to read,
+# so B4 cannot be passing because the extraction is empty or misspelled.
+has "B4-control the plan does read the recorded challenge" "$F_PLAN" "ssl_challenge"
+has "B4-control2 and the recorded subject" "$F_PLAN" "ssl_cert_subject"
+
+echo "── §C  whose Cloudflare credential renews whose certificate"
+
+# ⛔ An unattended loop has no actor. Resolving a zone by bare domain would hand
+# one account's Cloudflare token to a renewal running for another account's site,
+# and every other `dns_zones` read in the tree is scoped `user_id = $2`.
+has "C1 the legacy fallback scopes zones to the SITE OWNER" "$F_PLAN" \
+    "WHEREuser_id=\$1ANDprovider='cloudflare'"
+has "C1b bound to the site's owner, not an actor" "$F_PLAN" ".bind(site.user_id)"
+# The recorded zone ROW is preferred, so the credential that renews is provably
+# the credential that issued and no text subject can select a different tenant's.
+has "C2 the recorded zone id is preferred" "$F_PLAN" "site.ssl_dns_zone_id"
+has "C2b and the issuance door records it" "$F_BSSL" ".bind(zone.id)"
+# The unattended loops take the key from the registry field, not the environment.
+# One each: the healer opens it at the renewal, the scanner threads it from `run`.
+eq "C3 both loops open the token through the registry accessor" \
+   "$(( $(occ "$F_HEAL" "agents.jwt_secret()") + $(occ "$F_SCAN" "agents.jwt_secret()") ))" "2"
+has "C3b the scanner threads it rather than re-reading it" "$F_SCAN" "jwt_secret:&str,"
+
+echo "── §D  refusal is a RUNG, not a terminus"
+
+# For a zone-apex wildcard the OLD silent downgrade at least left the apex
+# serving; refusing all the way to expiry takes the apex AND every sibling down
+# together. So a refusal that cannot be repaired in time becomes a DELIBERATE,
+# recorded, alerted downgrade instead — never worse than the behaviour it replaced.
+has "D1 the ladder has a last rung" "$F_HELP" "pubconstDNS01_LAST_RESORT_DAYS:i64=7;"
+has "D2 the rung is reached by time remaining" "$F_PLAN" \
+    "days_remaining.is_some_and(|d|d<=DNS01_LAST_RESORT_DAYS)"
+has "D3 and it names what stops being covered" "$F_PLAN" "RenewalPlan::LastResortHttp01{losing:names}"
+has "D3b the wildcard's names are spelled out for the operator" "$F_PLAN" \
+    'format!("{subject}and*.{subject}")'
+
+# ⛔ A DECLINE IS NOT A FAILURE. `ssl_renewal_alert` / `ssl_renewal_blocked` say
+# "renewal failed" and page at critical; both are false when the panel declined on
+# purpose. `ssl-correctness` pins the failure helpers' counts for exactly this
+# reason, with a comment saying so. These arms pin the other end.
+eq "D4 each loop has its own decline helper" \
+   "$(( $(occ "$F_HEAL" "asyncfnssl_dns01_declined_alert(") + $(occ "$F_SCAN" "asyncfnssl_dns01_declined_alert(") ))" "2"
+eq "D5 and its own downgrade helper" \
+   "$(( $(occ "$F_HEAL" "asyncfnssl_dns01_downgraded_alert(") + $(occ "$F_SCAN" "asyncfnssl_dns01_downgraded_alert(") ))" "2"
+# The decline warns; the downgrade pages. Getting these the wrong way round is
+# the defect `ssl-controls` F13 exists to catch, one layer out.
+F_HDECL=$(fnbody "$HEAL" "async fn ssl_dns01_declined_alert(" | subjin)
+F_HDOWN=$(fnbody "$HEAL" "async fn ssl_dns01_downgraded_alert(" | subjin)
+[ "$(printf '%s' "$F_HDECL" | wc -c)" -ge 200 ] && [ "$(printf '%s' "$F_HDOWN" | wc -c)" -ge 200 ] || \
+  { bad "SETUP" "alert helper bodies extracted too small"; exit 1; }
+has "D6 the decline is a warning" "$F_HDECL" '"warning",'
+has "D7 the downgrade is critical" "$F_HDOWN" '"critical",'
+hasnt "D8 and the downgrade never calls itself a failure" "$F_HDOWN" "renewalfailed"
+
+echo "── §E  the budget is derived from the agent, not guessed"
+
+# ⛔ The three doors disagreed: two used plain `post` (a hard 60s cap) and the
+# interactive one `post_long(..,120)`, while a wildcard DNS-01 order budgets
+# ~260s inside the agent alone. Every door timed out while the agent SUCCEEDED,
+# and the panel recorded a failure and wrote a cooldown row.
+has "E1 one budget, named once" "$F_BSSL" "pub(crate)constDNS01_ORDER_TIMEOUT_SECS:u64=300;"
+eq "E2 and every renewal door spends THAT budget" \
+   "$(( $(occ "$F_BSSL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_HEAL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_SCAN" "DNS01_ORDER_TIMEOUT_SECS") ))" "5"
+# ⭐ DERIVED FROM THE AGENT'S OWN ARITHMETIC, not from a number typed here: the
+# per-authorization propagation sleep, and the two poll budgets. If the agent ever
+# waits longer than the panel is willing to, this goes red before a fleet does.
+AGENT_SLEEP=$(printf '%s' "$F_ASSL" | $G -oE 'sleep\(std::time::Duration::from_secs\([0-9]+\)\)' | $G -oE '[0-9]+' | sort -rn | head -1)
+AGENT_POLL=$(printf '%s' "$F_ASSL" | $G -oE 'lettimeout=std::time::Duration::from_secs\([0-9]+\)' | $G -oE '[0-9]+' | sort -rn | head -1)
+[ -n "$AGENT_SLEEP" ] && [ -n "$AGENT_POLL" ] || \
+  { bad "SETUP" "could not derive the agent's own waits (sleep='$AGENT_SLEEP' poll='$AGENT_POLL')"; exit 1; }
+AGENT_WORST=$(( 2 * AGENT_SLEEP + 2 * AGENT_POLL ))
+# ⛔ THE PANEL'S SIDE IS DERIVED TOO. An earlier draft of this arm compared the
+# agent's derived worst case against the literal `300` TYPED HERE — which cannot
+# fail however the constant is edited, because the arm was reading its own
+# assumption instead of the value under test. Mutation caught it: dropping the
+# real constant to 120 reddened E1 and left E3 green. Both sides derived, or the
+# comparison is decoration ([[feedback_verifier_shares_source]]).
+PANEL_BUDGET=$(printf '%s' "$F_BSSL" | $G -oE 'DNS01_ORDER_TIMEOUT_SECS:u64=[0-9]+' | $G -oE '[0-9]+$' | head -1)
+[ -n "$PANEL_BUDGET" ] || { bad "SETUP" "could not derive the panel's own budget"; exit 1; }
+if [ "$PANEL_BUDGET" -ge "$AGENT_WORST" ]; then
+  ok "E3 the panel's budget (${PANEL_BUDGET}s) covers the agent's own worst case (${AGENT_WORST}s = 2x${AGENT_SLEEP}s + 2x${AGENT_POLL}s)"
+else
+  bad "E3 the panel's budget covers the agent's own worst case" \
+      "panel ${PANEL_BUDGET}s < agent ${AGENT_WORST}s — a DNS-01 renewal reports a false failure"
+fi
+# The unattended door must not fall back to the 60s `post`.
+hasnt "E4 the healer no longer spends the 60s quick budget on a certificate order" "$F_HEAL" \
+    'agent.post(&agent_path,Some(agent_body)).await'
+
+echo "── §F  provenance is written where it is known, and only on success"
+
+# All five writers, so a sixth door cannot appear without a decision.
+# Counted PER FILE and per value, not lumped: the three writers mean different
+# things and a lumped total is invariant under moving one to the wrong place.
+eq "F1 the DNS-01 door is the only writer of 'dns-01'" \
+   "$(occ "$F_BSSL" "ssl_challenge='dns-01',")" "1"
+# TWO in this file: the HTTP-01 issuance door, and `record_renewal_provenance`,
+# which is what makes an unrecorded row correct after one degraded pass and what
+# tells the truth after a deliberate last-resort downgrade.
+eq "F1b routes/ssl.rs writes 'http-01' at the door and at the recorder" \
+   "$(occ "$F_BSSL" "ssl_challenge='http-01',")" "2"
+eq "F1c and the auto-SSL-on-create door writes it once" \
+   "$(occ "$F_SITES" "ssl_challenge='http-01',")" "1"
+eq "F2 and the retiring doors CLEAR it" \
+   "$(( $(occ "$F_BSSL" "ssl_challenge=NULL,") + $(occ "$F_SITES" "ssl_challenge=NULL,") ))" "2"
+# ⛔ ONLY AFTER SUCCESS. A failed HTTP-01 attempt on an unrecorded row must stay
+# unrecorded: the likeliest reason it failed is that the site cannot answer
+# HTTP-01 at all, which is exactly the case that made DNS-01 right. Recording
+# `http-01` there would pin the wrong answer for ever.
+eq "F3 every door records provenance after a renewal" \
+   "$(( $(occ "$F_BSSL" "record_renewal_provenance(") + $(occ "$F_HEAL" "record_renewal_provenance(") + $(occ "$F_SCAN" "record_renewal_provenance(") ))" "4"
+F_REC=$(fnbody "$BSSL" "pub(crate) async fn record_renewal_provenance(" | subjin)
+[ "$(printf '%s' "$F_REC" | wc -c)" -ge 500 ] || \
+  { bad "SETUP" "record_renewal_provenance body extracted too small"; exit 1; }
+has "F4 it records only the two plans that change what is true" "$F_REC" \
+    "RenewalPlan::Http01{record_challenge:true}=>None,"
+has "F4b and the deliberate downgrade" "$F_REC" "RenewalPlan::LastResortHttp01{losing}=>Some(losing.clone()),"
+has "F4c every other plan writes nothing" "$F_REC" "_=>return,"
+# The downgrade leaves a durable record the operator can filter for.
+has "F5 the downgrade is logged at a level the readers can count" "$F_REC" '"warning",'
+
+echo "── §G  the migration cannot run before the schema it alters"
+
+# ⛔ sqlx parses a migration's version prefix as an i64 and runs them in ASCENDING
+# numeric order, with no out-of-order guard. A 13-digit prefix sorts BELOW every
+# 14-digit one, so it would run before `initial.sql` — `ALTER TABLE sites` against
+# a database with no `sites` table, killing every FRESH install while an upgrading
+# box stays green. A draft of this ship had exactly that filename. Nothing in the
+# tree validated the shape.
+BADNAME=0
+for m in "$MIGDIR"/*.sql; do
+  b=$(basename "$m")
+  case "$b" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_*) ;;
+    *) BADNAME=$((BADNAME+1)); LASTBAD="$b" ;;
+  esac
+done
+MIGCOUNT=$(find "$MIGDIR" -maxdepth 1 -name '*.sql' | wc -l | tr -d ' ')
+[ "$MIGCOUNT" -ge 100 ] || { bad "SETUP" "only $MIGCOUNT migrations found — refusing to judge"; exit 1; }
+if [ "$BADNAME" -eq 0 ]; then
+  ok "G1 all $MIGCOUNT migration filenames carry a 14-digit version prefix"
+else
+  bad "G1 every migration filename carries a 14-digit version prefix" \
+      "$BADNAME do not, e.g. ${LASTBAD:-?} — sqlx would order it before the schema it alters"
+fi
+
+# ⛔ THE BACKFILL'S SOURCE. `activity_logs` is a positive historical fact written
+# by the DNS-01 door itself; `ssl_cert_path` is forged by every rename. If a
+# future edit swaps the source, this goes red.
+has "G2 the backfill reads the activity log" "$F_MIG" "FROMactivity_logs"
+has "G2b for the actions the DNS-01 door writes" "$F_MIG" "'site.ssl.dns01','site.ssl.wildcard'"
+has "G2c and refuses a domain that is ambiguous across servers" "$F_MIG" "HAVINGcount(*)=1"
+# Three-state on purpose: a NOT NULL DEFAULT FALSE would assert "not a wildcard"
+# over every legacy apex wildcard — the one row this migration cannot identify.
+hasnt "G3 ssl_wildcard is nullable, so 'not recorded' is representable" "$F_MIG" \
+    "ssl_wildcardBOOLEANNOTNULL"
+has "G3-control the column is added at all" "$F_MIG" "ADDCOLUMNIFNOTEXISTSssl_wildcardBOOLEAN"
+
+echo "── §H  the pin harness can see the code it judges"
+
+# ⛔ `ssl-correctness`'s `prod_lines` blanks from the FIRST `#[cfg(test)]` to EOF
+# and never resumes, so production code below one is invisible to every `prod_*`
+# arm. `resolve_profile` had drifted below it and was blinded at v2.144.0 — the
+# second instance of lesson #669. This arm is the standing guard.
+FIRSTTEST=$($G -n '^#\[cfg(test)\]' "$BSSL" | head -1 | cut -d: -f1)
+[ -n "$FIRSTTEST" ] || { bad "SETUP" "no #[cfg(test)] found in $BSSL"; exit 1; }
+PRODBELOW=$(awk -v s="$FIRSTTEST" 'NR>s && /^(pub|async fn|fn |impl |struct |const |static )/' "$BSSL" | wc -l | tr -d ' ')
+if [ "$PRODBELOW" -eq 0 ]; then
+  ok "H1 no production item sits below the first #[cfg(test)] in routes/ssl.rs"
+else
+  bad "H1 no production item sits below the first #[cfg(test)] in routes/ssl.rs" \
+      "$PRODBELOW item(s) are blinded to every prod_* arm in ssl-correctness"
+fi
+# POSITIVE CONTROL: the same scan DOES find production items ABOVE the marker, so
+# H1 cannot be passing because the pattern matches nothing at all.
+PRODABOVE=$(awk -v s="$FIRSTTEST" 'NR<s && /^(pub|async fn|fn |impl |struct |const |static )/' "$BSSL" | wc -l | tr -d ' ')
+[ "$PRODABOVE" -ge 10 ] && ok "H1-control the same scan finds $PRODABOVE production items above it" \
+  || bad "H1-control the same scan finds production items above it" "only $PRODABOVE — the pattern matches nothing"
+
+echo
+echo "── dns01-renewal: $PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ] || exit 1

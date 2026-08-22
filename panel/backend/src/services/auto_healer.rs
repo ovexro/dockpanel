@@ -749,6 +749,75 @@ async fn ssl_renewal_blocked(
     .await;
 }
 
+/// Announce a DNS-01 certificate the panel DECLINED to renew, while there is
+/// still time to fix the cause.
+///
+/// ⚠ Deliberately NOT `ssl_renewal_blocked`. That helper says "SSL renewal
+/// blocked", pages at `critical`, and closes by telling the operator to set a
+/// contact address — three statements that are all false here. Nothing failed
+/// and nothing is missing on the account: the panel chose not to aim an HTTP-01
+/// order at a certificate HTTP-01 cannot reproduce. This is the same split
+/// `ssl_renewal_declined_alert` already draws in the scanner, and
+/// `ssl-correctness` pins the failure helper's count precisely so a decline
+/// cannot be wired back into the failure wording.
+async fn ssl_dns01_declined_alert(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    server_id: Option<uuid::Uuid>,
+    site_id: uuid::Uuid,
+    domain: &str,
+    reason: &str,
+) {
+    notifications::fire_alert_deduped(
+        pool,
+        user_id,
+        server_id,
+        Some(site_id),
+        "ssl_renewal_failure",
+        "",
+        "warning",
+        &format!("SSL certificate for {domain} needs a Cloudflare zone"),
+        reason,
+        12,
+    )
+    .await;
+}
+
+/// Announce a DNS-01 certificate that was downgraded to a single name on
+/// purpose, in its last week, because it could not be re-ordered over DNS-01.
+///
+/// `critical` is right — names really did stop being covered — but the wording
+/// must not say "renewal failed", because a certificate WAS installed. The
+/// operator needs to know what is no longer covered, not that nothing happened.
+async fn ssl_dns01_downgraded_alert(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    server_id: Option<uuid::Uuid>,
+    site_id: uuid::Uuid,
+    domain: &str,
+    losing: &str,
+) {
+    notifications::fire_alert_deduped(
+        pool,
+        user_id,
+        server_id,
+        Some(site_id),
+        "ssl_renewal_failure",
+        "",
+        "critical",
+        &format!("SSL certificate downgraded: {domain}"),
+        &format!(
+            "The certificate for {domain} covered {losing} and could not be re-ordered over \
+             DNS-01 before it expired, so DockPanel issued a single-name certificate for \
+             {domain} instead. Any other name it covered is no longer covered. Add the \
+             Cloudflare zone and API token under DNS management, then re-issue from the \
+             site's SSL tab."
+        ),
+        12,
+    )
+    .await;
+}
+
 async fn auto_renew_ssl(pool: &PgPool, agents: &AgentRegistry) {
     // Widen the window to 45 days so we pick up short-lived (6-day) and
     // 45-day-profile certs with enough lead time. ARI trims this further.
@@ -958,8 +1027,76 @@ async fn auto_renew_ssl(pool: &PgPool, agents: &AgentRegistry) {
             agent_body["profile"] = serde_json::json!(profile);
         }
 
-        let agent_path = format!("/ssl/{domain}/renew");
-        let result = agent.post(&agent_path, Some(agent_body)).await;
+        // WHICH CHALLENGE ISSUED THIS CERTIFICATE decides which door renews it.
+        // The row is re-read in full here rather than widened into the tuple
+        // above, because the provenance decision wants the whole `Site` and this
+        // is a primary-key lookup on the handful of rows already inside the
+        // 45-day window.
+        let full: Option<crate::models::Site> =
+            sqlx::query_as("SELECT * FROM sites WHERE id = $1")
+                .bind(*site_id)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten();
+        let Some(full) = full else { continue };
+        let days_remaining = (*ssl_expiry - now).num_days();
+        let plan = crate::helpers::renewal_plan(pool, &full, Some(days_remaining)).await;
+
+        // A DNS-01 certificate whose zone we cannot reach is REFUSED while there
+        // is still time to fix the cause, and downgraded on purpose only inside
+        // its last week (`helpers::DNS01_LAST_RESORT_DAYS`). Refusing all the way
+        // to expiry would be worse than the defect: for a zone-apex wildcard the
+        // old silent downgrade at least left the apex serving, and a terminal
+        // refusal takes the apex and every sibling down together.
+        //
+        // ⛔ This refusal ALERTS. The sibling foreign-issuer refusal twelve
+        // hundred lines up is a bare `tracing::info!` with no alert, no activity
+        // row and no notification — a precedent this must not inherit, or the
+        // operator's first news of a certificate nobody can renew is the outage.
+        if let crate::helpers::RenewalPlan::Refuse { reason } = &plan {
+            // ⚠ A DIFFERENT sentence from the foreign-issuer stop above, on
+            // purpose. That guard's line is pinned at exactly one occurrence, and
+            // a second copy of its wording here would let either stop satisfy the
+            // arm written for the other — sibling satisfaction, the class this
+            // project has been bitten by three times in one session before.
+            tracing::warn!("Auto-heal: DNS-01 renewal declined for {domain} — {reason}");
+            ssl_dns01_declined_alert(pool, *user_id, Some(*server_id), *site_id, domain, reason)
+                .await;
+            continue;
+        }
+
+        // ⛔ `post_long`, not `post`. Plain `post` caps at 60s inside
+        // `AgentHandle::request`, and a wildcard DNS-01 order budgets ~260s in
+        // the agent alone — so this door would have recorded a false failure,
+        // skipped the expiry write and the vhost rebuild, and written a cooldown
+        // row, while the agent went on to issue the certificate successfully.
+        let result: Result<serde_json::Value, String> = match &plan {
+            crate::helpers::RenewalPlan::Dns01 { subject, wildcard, zone_id } => {
+                crate::routes::ssl::renew_over_dns01(
+                    pool,
+                    agents.jwt_secret(),
+                    &agent,
+                    subject,
+                    *wildcard,
+                    *zone_id,
+                    *user_id,
+                    ssl_profile.as_deref(),
+                )
+                .await
+            }
+            _ => {
+                let agent_path = format!("/ssl/{domain}/renew");
+                agent
+                    .post_long(
+                        &agent_path,
+                        Some(agent_body),
+                        crate::routes::ssl::DNS01_ORDER_TIMEOUT_SECS,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+        };
 
         let success = result.is_ok();
         let details = match &result {
@@ -1015,6 +1152,21 @@ async fn auto_renew_ssl(pool: &PgPool, agents: &AgentRegistry) {
                     .execute(pool)
                     .await;
                 }
+            }
+            // Only after success: a failed HTTP-01 attempt on an unrecorded row
+            // must stay unrecorded, because the likeliest reason it failed is
+            // that this site cannot answer HTTP-01 at all.
+            crate::routes::ssl::record_renewal_provenance(pool, *site_id, domain, &plan).await;
+            if let crate::helpers::RenewalPlan::LastResortHttp01 { losing } = &plan {
+                ssl_dns01_downgraded_alert(
+                    pool,
+                    *user_id,
+                    Some(*server_id),
+                    *site_id,
+                    domain,
+                    losing,
+                )
+                .await;
             }
             tracing::info!("Auto-heal: SSL renewed for {domain}");
 

@@ -46,7 +46,7 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
 
             if needs_scan {
                 tracing::info!("Running scheduled weekly security scan on {}", member.name);
-                run_scan(&pool, &member).await;
+                run_scan(&pool, &member, agents.jwt_secret()).await;
             }
         }
 
@@ -61,7 +61,7 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
     }
 }
 
-async fn run_scan(pool: &PgPool, member: &FleetMember) {
+async fn run_scan(pool: &PgPool, member: &FleetMember, jwt_secret: &str) {
     let agent = &member.agent;
 
     // Create scan record, naming the host it is a scan OF.
@@ -208,7 +208,7 @@ async fn run_scan(pool: &PgPool, member: &FleetMember) {
 
     // Auto-fix safe findings (non-destructive only)
     if let Some(findings) = findings {
-        auto_fix_safe_findings(pool, member, findings).await;
+        auto_fix_safe_findings(pool, member, findings, jwt_secret).await;
     }
 
     // Keep only last 90 days of scans
@@ -318,6 +318,65 @@ async fn ssl_renewal_alert(
     .await;
 }
 
+/// A DNS-01 certificate this loop DECLINED to renew, while the cause is still
+/// fixable.
+///
+/// ⚠ Not `ssl_renewal_alert`. That helper says "SSL renewal failed" and pages at
+/// `critical`; neither is true of a refusal the panel made on purpose. This is
+/// the same split `ssl_renewal_declined_alert` draws for a foreign issuer, and
+/// `ssl-correctness` pins the failure helper's count with a comment saying in so
+/// many words that a decline wired back into the failure wording is a defect.
+async fn ssl_dns01_declined_alert(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    site_id: uuid::Uuid,
+    domain: &str,
+    reason: &str,
+) {
+    notifications::fire_alert_deduped(
+        pool,
+        user_id,
+        None,
+        Some(site_id),
+        "ssl_renewal_failure",
+        "",
+        "warning",
+        &format!("SSL certificate for {domain} needs a Cloudflare zone"),
+        reason,
+        12,
+    )
+    .await;
+}
+
+/// A DNS-01 certificate downgraded to a single name on purpose, in its last
+/// week. `critical`, because names stopped being covered — but never worded as a
+/// failure, because a certificate WAS installed.
+async fn ssl_dns01_downgraded_alert(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    site_id: uuid::Uuid,
+    domain: &str,
+    losing: &str,
+) {
+    notifications::fire_alert_deduped(
+        pool,
+        user_id,
+        None,
+        Some(site_id),
+        "ssl_renewal_failure",
+        "",
+        "critical",
+        &format!("SSL certificate downgraded: {domain}"),
+        &format!(
+            "The certificate for {domain} covered {losing} and could not be re-ordered over \
+             DNS-01 before it expired, so DockPanel issued a single-name certificate for \
+             {domain} instead. Any other name it covered is no longer covered."
+        ),
+        12,
+    )
+    .await;
+}
+
 /// Auto-fix safe findings after a scan completes.
 /// Only fixes things that are SAFE to fix automatically (SSL renewal).
 /// Never auto-fixes malware, open ports, or config changes that could break things.
@@ -325,6 +384,10 @@ async fn auto_fix_safe_findings(
     pool: &PgPool,
     member: &FleetMember,
     findings: &[serde_json::Value],
+    // The key stored credentials are encrypted under, threaded from `run` so a
+    // DNS-01 renewal here can open the Cloudflare token that ISSUED the
+    // certificate. This loop has no `AppState` and no session.
+    jwt_secret: &str,
 ) {
     let agent = &member.agent;
     for f in findings {
@@ -476,13 +539,65 @@ async fn auto_fix_safe_findings(
                     agent_body["profile"] = serde_json::json!(profile);
                 }
 
-                match agent
-                    .post(
-                        &format!("/ssl/provision/{domain}"),
-                        Some(agent_body),
-                    )
-                    .await
-                {
+                // WHICH CHALLENGE ISSUED THIS CERTIFICATE decides which door
+                // renews it — and this is the door that matters most, because it
+                // is the ONLY automatic renewal on a stock install and it is
+                // reached with no opt-in at all. `/ssl/provision/{domain}` is
+                // the HTTP-01 provisioner, single identifier, writing over
+                // `/etc/dockpanel/ssl/{domain}/fullchain.pem`. For a zone-apex
+                // wildcard that file is the shared certificate every sibling
+                // vhost in the zone is serving.
+                let full: Option<crate::models::Site> =
+                    sqlx::query_as("SELECT * FROM sites WHERE id = $1")
+                        .bind(site_id)
+                        .fetch_optional(pool)
+                        .await
+                        .ok()
+                        .flatten();
+                let Some(full) = full else { continue };
+                let days_remaining = full
+                    .ssl_expiry
+                    .map(|e| (e - chrono::Utc::now()).num_days());
+                let plan = crate::helpers::renewal_plan(pool, &full, days_remaining).await;
+
+                if let crate::helpers::RenewalPlan::Refuse { reason } = &plan {
+                    // ⚠ A DIFFERENT sentence from the foreign-issuer stop above.
+                    // That line is pinned at exactly one occurrence, and a second
+                    // copy of its wording here would let either stop satisfy the
+                    // arm written for the other.
+                    tracing::warn!("Auto-fix: DNS-01 renewal declined for {domain} — {reason}");
+                    ssl_dns01_declined_alert(pool, user_id, site_id, domain, reason).await;
+                    continue;
+                }
+
+                // ⛔ `post_long` with the shared budget, not `post`. Plain `post`
+                // caps at 60s and a wildcard DNS-01 order budgets ~260s in the
+                // agent alone.
+                let outcome: Result<serde_json::Value, String> = match &plan {
+                    crate::helpers::RenewalPlan::Dns01 { subject, wildcard, zone_id } => {
+                        crate::routes::ssl::renew_over_dns01(
+                            pool,
+                            jwt_secret,
+                            &agent,
+                            subject,
+                            *wildcard,
+                            *zone_id,
+                            user_id,
+                            ssl_profile.as_deref(),
+                        )
+                        .await
+                    }
+                    _ => agent
+                        .post_long(
+                            &format!("/ssl/provision/{domain}"),
+                            Some(agent_body),
+                            crate::routes::ssl::DNS01_ORDER_TIMEOUT_SECS,
+                        )
+                        .await
+                        .map_err(|e| e.to_string()),
+                };
+
+                match outcome {
                     Ok(result) => {
                         tracing::info!("Auto-fix: SSL renewed successfully for {domain}");
 
@@ -533,6 +648,17 @@ async fn auto_fix_safe_findings(
                             }
                         }
 
+                        // Only after success: a failed HTTP-01 attempt on an
+                        // unrecorded row must stay unrecorded, because the
+                        // likeliest reason it failed is that this site cannot
+                        // answer HTTP-01 — the case that made DNS-01 right.
+                        crate::routes::ssl::record_renewal_provenance(pool, site_id, domain, &plan)
+                            .await;
+                        if let crate::helpers::RenewalPlan::LastResortHttp01 { losing } = &plan {
+                            ssl_dns01_downgraded_alert(pool, user_id, site_id, domain, losing)
+                                .await;
+                        }
+
                         // Preserve the site's full config (WAF/CSP/Permissions-
                         // Policy/rate-limit/custom_nginx/bot-protection) — the
                         // agent's provision only renders a subset. Best-effort.
@@ -559,10 +685,21 @@ async fn auto_fix_safe_findings(
                             // serving it, but this loop runs against every host
                             // in the fleet and an agent is only updated when
                             // somebody updates it. Declining here is what makes
-                            // the fix arrive with the PANEL. Nothing is lost by
-                            // skipping: renewal does not change what the vhost
-                            // contains, since the certificate paths it names are
-                            // stable symlinks.
+                            // the fix arrive with the PANEL.
+                            //
+                            // ⛔ RETRACTED at v2.145.0. This comment used to end
+                            // "Nothing is lost by skipping: renewal does not
+                            // change what the vhost contains, since the
+                            // certificate paths it names are stable symlinks."
+                            // Both halves are false. Nothing in this tree writes
+                            // a symlink under /etc/dockpanel/ssl — both
+                            // provisioners `create_dir_all` then `fs::write`
+                            // plain files — and a renewal CAN change which path
+                            // is correct, because the DNS-01 door writes under
+                            // the ZONE apex while the HTTP-01 door writes under
+                            // the site's own name. The skip is still right, but
+                            // only because a disabled site is not serving:
+                            // "nothing is lost" was never the reason.
                             if !site.enabled {
                                 tracing::info!(
                                     "Auto-fix: renewed SSL for {} but skipped the vhost rebuild — the site is disabled",

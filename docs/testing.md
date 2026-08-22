@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.144.0.** The version stamp, the template count and every
+> **Reflects v2.145.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -402,23 +402,24 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Eighty-eight suites, **3014 assertions**, all green at the current commit:
+survivable. Eighty-nine suites, **3065 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
 | `carry-sweep-pin-e2e.sh` | 88 |
-| `ssl-controls-pin-e2e.sh` | 88 |
+| `ssl-controls-pin-e2e.sh` | 89 |
 | `db-import-pin-e2e.sh` | 53 |
 | `mail-smtp-dkim-pin-e2e.sh` | 25 |
 | `mail-auth-autosleep-pin-e2e.sh` | 28 |
 | `site-backup-databases-pin-e2e.sh` | 52 |
 | `git-deploy-sandbox-pin-e2e.sh` | 42 |
 | `ssl-correctness-pin-e2e.sh` | 85 |
+| `dns01-renewal-pin-e2e.sh` | 49 |
 | `nginx-listen-pin-e2e.sh` | 17 |
 | `rpm-install-pin-e2e.sh` | 71 |
 | `mail-rpm-pin-e2e.sh` | 22 |
 | `cpu-metric-pin-e2e.sh` | 17 |
-| `credentials-at-rest-pin-e2e.sh` | 35 |
+| `credentials-at-rest-pin-e2e.sh` | 36 |
 | `canary-arm-pin-e2e.sh` | 20 |
 | `notifications-pin-e2e.sh` | 35 |
 | `sandbox-paths-pin-e2e.sh` | 94 |

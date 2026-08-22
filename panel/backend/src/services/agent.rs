@@ -1261,6 +1261,17 @@ impl AgentRegistry {
         }
     }
 
+    /// The key stored credentials are encrypted under.
+    ///
+    /// Exposed so the UNATTENDED renewal loops can open a Cloudflare API token
+    /// for a DNS-01 renewal. They hold an `AgentRegistry` and no `AppState`, and
+    /// this struct is already the single place that key lives for background
+    /// work — re-reading it from the environment there would be the second
+    /// source of truth the field comment above exists to prevent.
+    pub fn jwt_secret(&self) -> &str {
+        &self.jwt_secret
+    }
+
     /// Set the local server ID (called once on startup after ensure_local_server).
     pub async fn set_local_server_id(&self, id: Uuid) {
         *self.local_server_id.write().await = Some(id);
