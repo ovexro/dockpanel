@@ -653,6 +653,65 @@ fn copy_dir_shallow(src: &str, dst: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The backup trees this agent keys by site domain.
+///
+/// Three trees, three spellings of the same site, and every one of them is
+/// rebuilt from the LIVE domain by whoever reads it — the panel's `backups`
+/// table stores a filename and no path at all. So a rename that does not carry
+/// these leaves every archive on disk under a name nothing will look up again,
+/// while the panel keeps listing the rows and answers a restore with a path that
+/// does not exist.
+///
+/// The restic key substitutes `_` for `.`, and that substitution is injective
+/// here: `is_valid_domain` permits only ASCII alphanumerics and `-` inside a
+/// label, so a `_` in the key can only have come from a `.`. That is what
+/// separates it from the fail2ban jail key in step 8, which maps `.` onto `-`
+/// where `-` is already legal, and therefore needs an ownership guard.
+fn domain_backup_trees(old_domain: &str, new_domain: &str) -> Vec<(String, String)> {
+    let root = "/var/backups/dockpanel";
+    vec![
+        (format!("{root}/{old_domain}"), format!("{root}/{new_domain}")),
+        (
+            format!("{root}/restic/{}", old_domain.replace('.', "_")),
+            format!("{root}/restic/{}", new_domain.replace('.', "_")),
+        ),
+        (
+            format!("{root}/wp-snapshots/{old_domain}"),
+            format!("{root}/wp-snapshots/{new_domain}"),
+        ),
+    ]
+}
+
+/// Does anything already live at `path`?
+///
+/// `NotFound` is the only answer that means "free". Every other error — a
+/// permission problem, a dangling mount — answers `true`, because the
+/// alternative is moving one tenant's archives on top of something we could not
+/// read.
+fn dir_is_occupied(path: &str) -> bool {
+    match std::fs::read_dir(path) {
+        Ok(mut entries) => entries.next().is_some(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
+}
+
+/// Put carried trees back, most recent move first.
+///
+/// Best-effort by necessity — it runs on a path that is already failing — but
+/// never silent. A tree that cannot be put back is an archive the panel will
+/// look for under the old name and not find, which is the exact defect the
+/// carry exists to prevent, so both paths go into the log at ERROR.
+fn undo_backup_carry(carried: &[(String, String)], old_domain: &str) {
+    for (old_tree, new_tree) in carried.iter().rev() {
+        if let Err(e) = std::fs::rename(new_tree, old_tree) {
+            tracing::error!(
+                "Rolling back the rename of {old_domain}, but {new_tree} could not be put back                  at {old_tree}: {e}. Those archives are on disk under the new name while the                  panel will look for them under the old one."
+            );
+        }
+    }
+}
+
 async fn rename_site(
     Path(old_domain): Path<String>,
     Json(body): Json<serde_json::Value>,
@@ -678,6 +737,33 @@ async fn rename_site(
         return Err((StatusCode::NOT_FOUND, Json(NginxResponse {
             success: false, message: format!("No nginx config for {old_domain}"),
         })));
+    }
+
+    // 0. Refuse, before anything moves, if a backup tree is already occupied at
+    //    the destination.
+    //
+    //    This is not a hypothetical collision — every completed site delete
+    //    manufactures one. The panel writes a pre-delete archive for a site it is
+    //    about to remove and records no row for it, then the site row goes and the
+    //    cascade takes the backup rows with it. The directory outlives every
+    //    record of itself. Rename another site onto that domain and two tenants'
+    //    archives become one listing, with no ownership filter between them and a
+    //    restore one click away.
+    //
+    //    Refusing costs the operator one directory they can inspect and remove.
+    //    Merging costs them somebody else's site restored over their webroot.
+    let backup_trees = domain_backup_trees(&old_domain, new_domain);
+    for (old_tree, new_tree) in &backup_trees {
+        if std::path::Path::new(old_tree).exists() && dir_is_occupied(new_tree) {
+            return Err((StatusCode::CONFLICT, Json(NginxResponse {
+                success: false,
+                message: format!(
+                    "{new_tree} already holds files. {old_domain} has backups that must move \
+                     there, and merging them would put two sites' archives in one listing. \
+                     Move or delete that directory, then rename again."
+                ),
+            })));
+        }
     }
 
     // 1. Rename site directory
@@ -865,6 +951,97 @@ async fn rename_site(
         }
     }
 
+    // 9c. Carry the backup trees.
+    //
+    // Last among the moves, deliberately. It is the heaviest and it is the only
+    // one whose failure aborts the rename, so putting it here keeps the undo a
+    // single self-contained loop and means a cheap failure earlier never has to
+    // unwind gigabytes.
+    //
+    // The result of each move is matched, never discarded. A move that lands on
+    // a destination which filled up since step 0 answers ENOTEMPTY, and
+    // swallowing that answer is precisely the "reports success while leaking"
+    // defect this whole step exists to close.
+    let mut carried: Vec<(String, String)> = Vec::new();
+    let mut files_renamed = 0usize;
+    for (old_tree, new_tree) in &backup_trees {
+        if !std::path::Path::new(old_tree).exists() {
+            continue;
+        }
+        if let Some(parent) = std::path::Path::new(new_tree).parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        match std::fs::rename(old_tree, new_tree) {
+            Ok(()) => {
+                carried.push((old_tree.clone(), new_tree.clone()));
+                tracing::info!("Carried backups for {old_domain}: {old_tree} to {new_tree}");
+            }
+            Err(e) => {
+                undo_backup_carry(&carried, &old_domain);
+                std::fs::write(&old_conf, &config_content).ok();
+                services::nginx::restore_or_remove(&new_conf, displaced.as_deref());
+                if std::path::Path::new(&new_dir).exists() {
+                    std::fs::rename(&new_dir, &old_dir).ok();
+                }
+                // A destination that filled up is the operator's to clear, so it
+                // gets a status that carries this sentence to them. Anything else
+                // is this machine's fault and keeps its incident id.
+                let status = match e.kind() {
+                    std::io::ErrorKind::DirectoryNotEmpty
+                    | std::io::ErrorKind::AlreadyExists => StatusCode::CONFLICT,
+                    _ => StatusCode::INTERNAL_SERVER_ERROR,
+                };
+                return Err((status, Json(NginxResponse {
+                    success: false,
+                    message: format!(
+                        "Could not move {old_tree} to {new_tree}: {e}. The rename was rolled \
+                         back and {old_domain} is unchanged."
+                    ),
+                })));
+            }
+        }
+    }
+
+    // The archive names carry the old domain as a prefix, and that prefix is load
+    // bearing rather than decorative: off-site retention is handed the site's
+    // live domain and uses it to choose which remote objects it may delete. Left
+    // alone, remote pruning silently stops matching this site's archives — and
+    // starts matching the previous occupant's if the old name is ever reused.
+    if !carried.is_empty() {
+        let moved_dir = format!("/var/backups/dockpanel/{new_domain}");
+        let old_prefix = format!("{old_domain}-");
+        let new_prefix = format!("{new_domain}-");
+        if let Ok(entries) = std::fs::read_dir(&moved_dir) {
+            for entry in entries.flatten() {
+                let Some(name) = entry.file_name().to_str().map(|n| n.to_string()) else {
+                    continue;
+                };
+                let Some(rest) = name.strip_prefix(&old_prefix) else {
+                    continue;
+                };
+                let renamed = format!("{new_prefix}{rest}");
+                if let Err(e) = std::fs::rename(
+                    std::path::Path::new(&moved_dir).join(&name),
+                    std::path::Path::new(&moved_dir).join(&renamed),
+                ) {
+                    tracing::warn!("Could not rename archive {name} to {renamed}: {e}");
+                } else {
+                    files_renamed += 1;
+                }
+            }
+        }
+
+        // A moved directory keeps the mode it was created with, and archives are
+        // created with the process umask rather than the tightened one. The
+        // repair otherwise runs only at agent start, so a tree created since the
+        // last restart would ride to its new name still world-traversable.
+        services::backups::secure_backup_tree();
+        tracing::info!(
+            "Backup carry for {old_domain} to {new_domain}: {} trees, {files_renamed} archives renamed",
+            carried.len()
+        );
+    }
+
     // 10. Test and reload nginx
     match services::nginx::test_config().await {
         Ok(output) if output.success => {
@@ -883,6 +1060,7 @@ async fn rename_site(
             // Rollback: restore old config, and put back whatever we displaced
             // at the destination rather than deleting it.
             std::fs::write(&old_conf, &config_content).ok();
+            undo_backup_carry(&carried, &old_domain);
             let restored = services::nginx::restore_or_remove(&new_conf, displaced.as_deref());
             if std::path::Path::new(&new_dir).exists() {
                 std::fs::rename(&new_dir, &old_dir).ok();
@@ -898,6 +1076,7 @@ async fn rename_site(
         }
         Err(e) => {
             std::fs::write(&old_conf, &config_content).ok();
+            undo_backup_carry(&carried, &old_domain);
             services::nginx::restore_or_remove(&new_conf, displaced.as_deref());
             if std::path::Path::new(&new_dir).exists() {
                 std::fs::rename(&new_dir, &old_dir).ok();

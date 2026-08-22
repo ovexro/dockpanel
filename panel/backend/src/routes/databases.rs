@@ -393,6 +393,28 @@ pub async fn remove(
          WHERE user_id = (SELECT reseller_id FROM users WHERE id = $1 AND reseller_id IS NOT NULL)"
     ).bind(claims.sub).execute(&state.db).await;
 
+    purge_dumps_if_unclaimed(&state, &agent, &name, site_server_id).await;
+
+    tracing::info!("Database deleted: {name}");
+
+    Ok(Json(serde_json::json!({ "ok": true, "name": name })))
+}
+
+/// Remove a database's dump directory, but only once nothing else can claim it.
+///
+/// ⛔ ORDERING IS THE ONLY GUARD, and getting it wrong is silent. The `shared`
+/// probe has no self-exclusion term, so every row still present answers the
+/// question about ITSELF: call this before the row is gone and `shared` is
+/// always true, nothing is ever purged, and the log line reads exactly like
+/// correct behaviour. Call it only AFTER the row (or the cascade that takes it)
+/// has committed.
+pub(crate) async fn purge_dumps_if_unclaimed(
+    state: &AppState,
+    agent: &crate::services::agent::AgentHandle,
+    name: &str,
+    site_server_id: Option<Uuid>,
+) {
+    let name = name.to_string();
     // Take the dumps with it — but only once nothing else is using them.
     //
     // The dump directory is named for the DATABASE and nothing else, while the
@@ -436,10 +458,8 @@ pub async fn remove(
         }
     }
 
-    tracing::info!("Database deleted: {name}");
-
-    Ok(Json(serde_json::json!({ "ok": true, "name": name })))
 }
+
 
 /// Helper: fetch database info (name, engine, password, port) — and the id of the server
 /// the owning site actually runs on — with an ownership check.

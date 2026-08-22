@@ -228,12 +228,27 @@ async fn purge(Path(db_name): Path<String>) -> Result<Json<serde_json::Value>, A
     })))
 }
 
+/// DELETE /db-backups/dump — the same door, for the one database name that
+/// collides with this router's own static segment.
+///
+/// `dump` is a legal database name, so the static route has to carry the delete
+/// verb or that one name answers 405. But a static path captures nothing while
+/// `purge` asks for a path parameter, so registering `purge` there traded the
+/// 405 for a 500: axum rejects the request with `MissingPathParams` before the
+/// handler runs. This supplies the segment the URL cannot.
+///
+/// Delegating rather than re-implementing keeps the name validation on exactly
+/// one path — there is a pin counting those call sites.
+async fn purge_dump() -> Result<Json<serde_json::Value>, ApiErr> {
+    purge(Path("dump".to_string())).await
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         // ⚠ Both verbs on the STATIC path. A static segment wins the match outright,
         // so registering the purge only on the parameter path leaves `DELETE
         // /db-backups/dump` answering 405 — and `dump` is a legal database name.
-        .route("/db-backups/dump", post(dump).delete(purge))
+        .route("/db-backups/dump", post(dump).delete(purge_dump))
         .route("/db-backups/{db_name}", delete(purge))
         .route("/db-backups/{db_name}/list", get(list))
         .route("/db-backups/{db_name}/{filename}", delete(remove))

@@ -4,6 +4,117 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.142.0]
+
+### Fixed — renaming a site left every one of its backups behind
+
+Renaming a site's domain migrated the webroot, the vhost, the parked vhost, the
+certificate directory, the nginx logs, the PHP-FPM pools, the fail2ban jail and
+the redirect configs. Ten numbered steps, and none of them touched
+`/var/backups`.
+
+That is worse than a disk leak, because the `backups` table stores a filename and
+**no path**: every reader rebuilds the directory from the site's current domain.
+So the moment a rename completed, every archive the site had became
+**unrestorable and undownloadable** — while the panel went on listing all of them
+as if nothing had happened. Restore answered `502 Operation failed` with an
+incident number. Download did the same. Then the nightly retention sweep resolved
+the new name, got "no such file", treated that as *already gone*, deleted the
+rows, and counted them in the number of backups it reported pruning. Records
+destroyed, files stranded under a name nothing would look up again, success
+logged.
+
+A rename now carries all three domain-keyed trees — the archive directory, the
+restic repository and the WordPress update snapshots — and the archives inside
+are re-prefixed to the new name, because off-site retention is handed the site's
+live domain and uses it to decide which remote objects it may delete. Left alone,
+remote pruning silently stopped enforcing for a renamed site, and would have
+started matching the *previous* occupant's objects if the old name were reused.
+
+Two things a rename will now refuse rather than do quietly:
+
+- **A destination that already holds backups.** This is not a hypothetical
+  collision. Deleting a site writes a final pre-delete archive and records no row
+  for it, and the cascade then removes the rows that would have named it — so
+  every completed site delete leaves an archive directory that outlives every
+  record of itself. Renaming another site onto that domain would have merged two
+  tenants' archives into one listing, one click from restoring the wrong site
+  over a live webroot. The rename now stops before anything moves and names the
+  directory to clear.
+- **A site with backups on an agent too old to carry them.** Such an agent
+  answers success and leaks anyway, and there is nothing in its reply to notice.
+  A site with no backups still renames on any agent version.
+
+If the move fails part way, the trees already carried are put back and the site
+returns to its old domain. ⚠ As before this release, the certificate directory,
+the logs, the pools, the jail and the redirect configs are *not* reverted by a
+rollback — that asymmetry is older than this change and is not addressed here.
+
+⚠ Renaming does not make a *restic* snapshot taken before the rename restorable
+under the new name: those snapshots record absolute paths under the old webroot.
+The repository is no longer lost, which it was; that is a different fix.
+
+⚠ Archives already uploaded off-site keep their old-domain object names. Local
+files and rows are re-prefixed; re-keying remote objects is not part of this
+release.
+
+### Fixed — a backup whose upload failed could never be cleaned up
+
+When a scheduled backup was created but its off-site upload exhausted all three
+retries, the panel recorded **no row at all** — deliberately, with a comment
+saying the local file remained "for manual recovery".
+
+Retention only ever enumerates rows. A full-site tarball that no row names is
+therefore invisible to it for ever. One nightly schedule against a destination
+that has gone away produced one unreapable archive per night, accumulating on the
+very disk the backups exist to insure — and the sibling that runs policy backups
+had already rejected this design in a comment naming the divergence, and fixed
+only its own side.
+
+The archive is now recorded local-only, with the schedule's destination attached
+so a failed upload can be told apart from a schedule that never had one. The run
+still fails, still writes `last_status = 'failed'`, and still raises the critical
+backup alert.
+
+Because that row now exists, three places that reported "no recent backup" purely
+*because* no row existed were taught to ignore an archive that never left the
+machine — the dashboard's backup-freshness tile, the Backup Health stale list and
+the 48-hour stale-backup notification. Without that, the one site whose
+destination is down would have started reading as freshly backed up.
+
+### Fixed — deleting a site left its database dumps on disk
+
+v2.140.0 added a purge for a database's dump directory and wired it to exactly
+one caller: deleting a database from the Databases page. Deleting the **site**
+removed the containers only — it did not even read the database names, so it
+never held the value the purge needs.
+
+Site deletion is the likeliest way a database name is freed, and a dump directory
+is named for the database alone. Site delete now purges each of its databases'
+dumps, after the cascade rather than before — before it, every name is still
+claimed by the row being deleted, so the "is anything else using this name?"
+check answers yes about the row itself, nothing is purged, and the log line reads
+exactly like a correct decision. A name still in use by another site on the same
+host is still kept, and a directory holding anything the panel did not write is
+still left alone.
+
+### Fixed — one database name could not have its dumps deleted at all
+
+`dump` is a legal database name, and it collides with a static segment in the
+agent's own routing table. The route was registered so that the name would not
+answer 405 — but it was pointed at a handler that asks for a path parameter the
+static path cannot supply, so it answered `500` instead. For that one name only.
+
+### Testing
+
+A new pin suite covers the rename carry, both refusals, the rollback, the
+recorded-but-not-uploaded row, the three staleness readers and the dump purge —
+43 assertions, every one of them run against a planted defect and watched to
+print its own failure. Two existing arms that could never have failed were
+repaired in the process: one froze the exact expression this release had to
+change, and one was satisfied by a sibling guard, so the guard it named could be
+deleted outright while it stayed green.
+
 ## [2.141.0]
 
 ### Fixed — the wildcard certificate door still answered "Operation failed"

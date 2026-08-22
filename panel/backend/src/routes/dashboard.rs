@@ -117,10 +117,15 @@ pub async fn intelligence(
 
     // 6. Backup freshness — sites with no backup in the last 7 days.
     //    Server-wide for an admin; only the caller's own sites for anyone else.
+    //
+    //    A row whose schedule had a destination and whose upload failed does NOT
+    //    count as a backup here. It is on local disk only, which is the one place
+    //    a disk failure takes with it — the case this tile exists to warn about.
     let (stale_backups,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM sites s WHERE s.status = 'active' AND s.server_id = $1 \
          AND ($2::uuid IS NULL OR s.user_id = $2) \
-         AND NOT EXISTS (SELECT 1 FROM backups b WHERE b.site_id = s.id AND b.created_at > NOW() - INTERVAL '7 days')",
+         AND NOT EXISTS (SELECT 1 FROM backups b WHERE b.site_id = s.id AND b.created_at > NOW() - INTERVAL '7 days' \
+                         AND (b.destination_id IS NULL OR b.uploaded))",
     )
     .bind(server_id)
     .bind(tenant)

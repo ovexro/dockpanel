@@ -316,22 +316,60 @@ for i, (s, n) in enumerate(fns):
     body = src[s:e]
     if not re.search(r'agent\s*\n?\s*\.(?:post|get|put|delete)', body):
         continue
-    ok = bool(re.search(r'agent_for_site_server\(|site_agent_for_caller\(|\bfor_server\(', body))
-    print(f"{n}:{'OK' if ok else 'VIOL'}")
+    resolves = bool(re.search(r'agent_for_site_server\(|site_agent_for_caller\(|\bfor_server\(', body))
+    # A helper that ACCEPTS an already-resolved handle takes its provenance from
+    # its caller rather than from a lookup of its own. Excluding it is a
+    # narrowing, so E1b below pins every such helper's call sites — without that
+    # arm this clause is a hole shaped exactly like the defect the census exists
+    # to catch: extract the agent call into a helper and the census stops looking.
+    takes_handle = bool(re.search(r'agent:\s*&[A-Za-z_:]*AgentHandle', body))
+    kind = 'OK' if resolves else ('PARAM' if takes_handle else 'VIOL')
+    print(f"{n}:{kind}")
 PY
 )
 DBH_N=$(grep -c . <<< "$DBH" || true)
 DBH_V=$(grep -c ':VIOL$' <<< "$DBH" || true)
+DBH_P=$(grep -c ':PARAM$' <<< "$DBH" || true)
 
 if [ "${DBH_N:-0}" -lt 5 ]; then
   bad "E1 censused only ${DBH_N:-0} agent-dispatching handlers in databases.rs — the extractor is broken, not the tree"
 elif [ "${DBH_V:-0}" -eq 0 ]; then
-  ok "E1 all $DBH_N agent-dispatching handlers in databases.rs resolve the host from the row"
+  ok "E1 all $DBH_N agent-dispatching handlers in databases.rs resolve the host from the row ($DBH_P by parameter, pinned by E1b)"
 else
   while read -r row; do
     [ -n "$row" ] || continue
     bad "E1 databases.rs::${row%:VIOL} dispatches to whatever host the CALLER named — its database may live on another machine"
   done < <(grep ':VIOL$' <<< "$DBH")
+fi
+
+# E1b — the other half of E1's PARAM clause.
+#
+# A helper excluded because it ACCEPTS a handle is only safe if everything that
+# hands it one resolved that handle from the row. Without this arm, "takes a
+# handle parameter" is a way to launder the very dispatch E1 exists to catch:
+# extract the agent call into a helper and the census stops looking. The
+# exclusion and this arm ship together or neither does.
+PARAM_FNS=$(grep -E ':PARAM$' <<< "$DBH" | sed 's/:PARAM$//')
+if [ -z "$PARAM_FNS" ]; then
+  ok "E1b no handler takes a handle by parameter, so there is nothing to launder"
+else
+  E1B_BAD=""
+  E1B_SEEN=0
+  for fn in $PARAM_FNS; do
+    while read -r site; do
+      [ -n "$site" ] || continue
+      E1B_SEEN=$((E1B_SEEN+1))
+      case "$site" in *:UNRESOLVED) E1B_BAD="$E1B_BAD ${site%:UNRESOLVED}" ;; esac
+    done < <(python3 tests/helpers/callers-resolve-host.py "$fn" \
+               panel/backend/src/routes/databases.rs panel/backend/src/routes/sites.rs)
+  done
+  if [ "$E1B_SEEN" -eq 0 ]; then
+    bad "E1b found no call site for the handle-taking helper(s) —$PARAM_FNS — the arm measured nothing"
+  elif [ -n "$E1B_BAD" ]; then
+    bad "E1b these call sites hand over a handle they did not resolve from the row:$E1B_BAD"
+  else
+    ok "E1b all $E1B_SEEN call site(s) of the handle-taking helper(s) resolve the host from the row"
+  fi
 fi
 
 echo

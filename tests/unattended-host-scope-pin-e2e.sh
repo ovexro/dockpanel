@@ -348,7 +348,20 @@ fi
 PPB=$(fnbody "$AH_S" "prune_policy_backup")
 if [ -n "$PPB" ]; then
   # E4 — a failed unlink must KEEP the row: it is the only record of the archive.
-  if has "$PPB" "return false"; then
+  #
+  # ⛔ SCOPED TO THE UNLINK ARM AND COUNTED. Until s389 this was a whole-body
+  # `has "return false"`, and the body holds TWO of them — the remote-server
+  # guard that E5 pins separately, and the failed-unlink guard that E4 NAMES. So
+  # the guard this arm exists to protect could be deleted outright and E4 stayed
+  # green off its sibling. It had never been able to fail. Found by counting the
+  # literal inside its own subject, not by reading the arm.
+  PPB_UNLINK=$(awk '/match std::fs::remove_file\(filepath\)/,/^    \}$/' <<< "$PPB")
+  PPB_RF=$(/usr/bin/grep -oF -- "return false" <<< "$PPB" | wc -l | tr -d ' ')
+  if [ "$(wc -c <<< "$PPB_UNLINK")" -lt 200 ]; then
+    bad "E4 the unlink arm could not be isolated from prune_policy_backup — the arm measured nothing"
+  elif [ "$PPB_RF" != "2" ]; then
+    bad "E4 expected exactly two guards that keep the row (another server, failed unlink); found $PPB_RF"
+  elif has "$PPB_UNLINK" "return false"; then
     ok "E4 a failed unlink keeps the row that names the archive"
   else
     bad "E4 the row is deleted regardless of whether the archive was removed"

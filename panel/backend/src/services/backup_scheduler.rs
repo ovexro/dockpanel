@@ -297,6 +297,12 @@ async fn run_scheduled_backup(
     };
     let filepath = format!("/var/backups/dockpanel/{}/{}", row.domain, filename);
 
+    // Carries an exhausted upload past the INSERT. The archive still gets a row —
+    // that row is what retention enumerates and what the hash chain hangs off —
+    // but the RUN still has to fail, and the caller's failure arm is what writes
+    // last_status 'failed', the system_log entry and the critical alert.
+    let mut upload_failed: Option<String> = None;
+
     // 2. Upload to remote destination (if configured)
     let uploaded_remote = if let (Some(dest_dtype), Some(dest_config)) =
         (&row.dest_dtype, &row.dest_config)
@@ -348,8 +354,18 @@ async fn run_scheduled_backup(
         }
 
         if !uploaded {
-            // All retries exhausted — don't record in DB since the upload failed.
-            // The local file still exists on disk for manual recovery.
+            // All retries exhausted. Record the archive anyway, local-only.
+            //
+            // Returning here used to skip the INSERT, and the sibling executor's
+            // comment has said for two releases why that is wrong: the row is
+            // what the sha256 chain hangs off, and it is also the ONLY thing
+            // retention enumerates. An archive with no row is a full-site tarball
+            // that nothing will ever reap — one per night, for as long as the
+            // destination stays down, on the disk the backups are insuring.
+            //
+            // The run still fails. `upload_failed` carries the reason past the
+            // INSERT so the caller's failure arm keeps writing last_status
+            // 'failed', the system_log entry and the critical alert.
             crate::services::system_log::log_event(
                 db,
                 "error",
@@ -358,42 +374,43 @@ async fn run_scheduled_backup(
                 Some(&last_err),
             ).await;
 
-            return Err(format!("Upload failed after 3 attempts: {last_err}"));
-        }
-
-        // Prune old remote backups.
-        //
-        // The agent answers 200 with an explanatory `message` when it cannot
-        // prune — SFTP has no supported prune path, so it returns pruned:0 and
-        // says so. Discarding the body meant the schedule kept rendering its
-        // retention count as an enforced setting while remote copies accumulated
-        // forever, and the only trace was a warn in a journal that gets vacuumed.
-        let prune_body = serde_json::json!({
-            "destination": dest,
-            "domain": row.domain,
-            "retention": row.retention_count,
-        });
-        match agent.post("/backups/prune", Some(prune_body)).await {
-            Ok(resp) => {
-                if let Some(msg) = resp.get("message").and_then(|v| v.as_str()) {
-                    // "warning", not "warn" — this file's two other warning writers
-                    // (:201, :248) already spell it the long way, and only that
-                    // spelling is filterable and countable.
-                    crate::services::system_log::log_event(
-                        db,
-                        "warning",
-                        "backup_scheduler",
-                        &format!("Remote retention was not enforced for {}", row.domain),
-                        Some(msg),
-                    ).await;
+            upload_failed = Some(last_err.clone());
+            false
+        } else {
+            // Prune old remote backups.
+            //
+            // The agent answers 200 with an explanatory `message` when it cannot
+            // prune — SFTP has no supported prune path, so it returns pruned:0 and
+            // says so. Discarding the body meant the schedule kept rendering its
+            // retention count as an enforced setting while remote copies accumulated
+            // forever, and the only trace was a warn in a journal that gets vacuumed.
+            let prune_body = serde_json::json!({
+                "destination": dest,
+                "domain": row.domain,
+                "retention": row.retention_count,
+            });
+            match agent.post("/backups/prune", Some(prune_body)).await {
+                Ok(resp) => {
+                    if let Some(msg) = resp.get("message").and_then(|v| v.as_str()) {
+                        // "warning", not "warn" — this file's two other warning writers
+                        // (:201, :248) already spell it the long way, and only that
+                        // spelling is filterable and countable.
+                        crate::services::system_log::log_event(
+                            db,
+                            "warning",
+                            "backup_scheduler",
+                            &format!("Remote retention was not enforced for {}", row.domain),
+                            Some(msg),
+                        ).await;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Remote prune failed for {}: {e}", row.domain);
                 }
             }
-            Err(e) => {
-                tracing::warn!("Remote prune failed for {}: {e}", row.domain);
-            }
-        }
 
-        true
+            true
+        }
     } else {
         false
     };
@@ -434,12 +451,23 @@ async fn run_scheduled_backup(
     .bind(db_included)
     .bind(db_expected)
     .bind(uploaded_remote)
-    .bind(if uploaded_remote { row.dest_id } else { None })
+    // Bound unconditionally. `uploaded = FALSE` alone cannot mean "off-site
+    // failed" — the manual path never binds a destination and a schedule with no
+    // destination writes FALSE too, so the only predicate that distinguishes a
+    // failed upload is the pair (destination_id IS NOT NULL AND NOT uploaded).
+    // That is exactly what the policy executor already writes into this table.
+    .bind(row.dest_id)
     .bind(if sha256_hash.is_empty() { None } else { Some(&sha256_hash) })
     .bind(previous_hash.as_deref())
     .execute(db)
     .await {
         return Err(format!("Backup created but could not be recorded: {e}"));
+    }
+
+    if let Some(why) = upload_failed {
+        return Err(format!(
+            "Backup recorded local-only: upload failed after 3 attempts: {why}"
+        ));
     }
 
     tracing::info!("Scheduled backup complete for {}", row.domain);

@@ -242,7 +242,8 @@ async fn tick(db: &PgPool, agents: &AgentRegistry, jwt_secret: &str) -> Result<(
 
         let stale: Vec<(String,)> = sqlx::query_as(
             "SELECT s.domain FROM sites s WHERE s.status = 'active' \
-             AND NOT EXISTS (SELECT 1 FROM backups b WHERE b.site_id = s.id AND b.created_at > NOW() - INTERVAL '48 hours')"
+             AND NOT EXISTS (SELECT 1 FROM backups b WHERE b.site_id = s.id AND b.created_at > NOW() - INTERVAL '48 hours' \
+                             AND (b.destination_id IS NULL OR b.uploaded))"
         ).fetch_all(db).await.unwrap_or_default();
 
         if !stale.is_empty() {
@@ -269,10 +270,14 @@ async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow,
 
     // A failed upload counts as a FAILURE (so the policy reports partial/failed
     // and the backup_failure alert fires) but the local file is still recorded.
-    // This deliberately differs from `backup_scheduler`, which drops the row
-    // entirely: these tables carry the sha256 integrity chain, and a missing row
-    // would break `previous_hash` for every backup after it. Recording the file
-    // with `uploaded = FALSE` keeps the chain intact and keeps the UI honest.
+    // The reasons are the sha256 integrity chain, which a missing row breaks for
+    // every backup after it, and retention, which enumerates rows and can never
+    // reap a file no row names.
+    //
+    // `backup_scheduler` used to drop the row entirely and this comment used to
+    // name that divergence. It no longer exists: the scheduler records the
+    // archive local-only and fails the run afterwards, so both writers now agree
+    // that an archive on disk gets a row whatever happened to the upload.
     let mut upload_failures = 0;
 
     // Circuit breaker. Each upload retries three times with 5s/15s/30s backoff,

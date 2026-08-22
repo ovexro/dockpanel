@@ -99,6 +99,11 @@ use crate::services::notifications;
 use crate::services::security_hardening;
 use crate::AppState;
 
+/// The agent release in which a domain rename began carrying the site's backup
+/// trees with it. Before it, the archives stayed on disk under the old name
+/// while the panel kept listing rows that no longer resolved to a file.
+const BACKUP_CARRY_MIN_AGENT: &str = "2.142.0";
+
 /// A single provisioning step event.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct ProvisionStep {
@@ -1894,16 +1899,25 @@ pub async fn remove(
         ),
     }
 
-    // Remove database containers before CASCADE deletes the records
-    let databases: Vec<(String,)> = sqlx::query_as(
-        "SELECT container_id FROM databases WHERE site_id = $1 AND container_id IS NOT NULL AND container_id != ''",
+    // Remove database containers before CASCADE deletes the records.
+    //
+    // The NAME is selected alongside the container id, and rows without a
+    // container are carried too: a dump directory is keyed by the database name
+    // and exists whether or not anything is still running. Selecting only the
+    // container id meant this handler did not even hold the value the dump purge
+    // needs, which is why site deletion left every dump on disk.
+    let databases: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT name, container_id FROM databases WHERE site_id = $1",
     )
     .bind(id)
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
 
-    for (container_id,) in &databases {
+    for (_, container_id) in &databases {
+        let Some(container_id) = container_id.as_deref().filter(|c| !c.is_empty()) else {
+            continue;
+        };
         if let Err(e) = agent.delete(&format!("/databases/{container_id}")).await {
             tracing::warn!("Failed to remove database container {container_id}: {e}");
         }
@@ -1987,6 +2001,21 @@ pub async fn remove(
         .execute(&state.db)
         .await
         .map_err(|e| internal_error("remove sites", e))?;
+
+    // Take each database's dumps with it, now that the cascade has removed the
+    // rows that would otherwise answer the "is this name still in use" question
+    // about themselves.
+    //
+    // ⛔ THE ORDER IS THE GUARD. Above this line every one of these names is
+    // still claimed — by the very row being deleted — so the probe answers
+    // "shared", nothing is purged, and the log reads like a correct decision.
+    // There is no error, no failing request and no symptom; the only evidence
+    // would be the dumps still on disk. This is pinned.
+    for (name, _) in &databases {
+        crate::routes::databases::purge_dumps_if_unclaimed(
+            &state, &agent, name, site.server_id,
+        ).await;
+    }
 
     // Decrement reseller site counter
     let _ = sqlx::query(
@@ -3012,6 +3041,44 @@ pub async fn rename_domain(
 
     // Call agent to rename nginx config, site dir, logs
     let old_domain = site.domain.clone();
+
+    // An agent older than the carry release renames the vhost, the webroot, the
+    // certificates, the logs, the pools and the jail — and silently leaves every
+    // backup tree behind under the old name. It answers success either way, so
+    // there is nothing in the response to notice. Refuse instead, and only for a
+    // site that actually has archives to lose: a site with none renames on any
+    // agent, which is what keeps a mid-upgrade fleet usable.
+    let backup_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM backups WHERE site_id = $1")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
+    let agent_carries_backups = if backup_rows > 0 {
+        let reported = agent
+            .get("/health")
+            .await
+            .ok()
+            .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(str::to_string));
+        let carries = crate::services::panel_update::semver_key(reported.as_deref())
+            >= crate::services::panel_update::semver_key(Some(BACKUP_CARRY_MIN_AGENT));
+        if !carries {
+            return Err(err(
+                StatusCode::PRECONDITION_FAILED,
+                &format!(
+                    "This site has {backup_rows} backup(s) and the agent on its server reports \
+                     {}, which does not move a site's archives when the domain changes — they \
+                     would be left on disk under {old_domain} where nothing can restore them. \
+                     Update that server's agent to {BACKUP_CARRY_MIN_AGENT} or later, then \
+                     rename.",
+                    reported.as_deref().unwrap_or("an unknown version"),
+                ),
+            ));
+        }
+        true
+    } else {
+        false
+    };
+
     agent.post(
         &format!("/nginx/sites/{}/rename", old_domain),
         Some(serde_json::json!({ "new_domain": new_domain })),
@@ -3024,6 +3091,57 @@ pub async fn rename_domain(
         .execute(&state.db)
         .await
         .map_err(|e| internal_error("rename domain", e))?;
+
+    // The agent renamed each archive's `{old}-` prefix to `{new}-` as part of the
+    // carry, so the rows have to follow or every filename in them names a file
+    // that is no longer there. Both sides derive the same prefix from the same
+    // two domains, so this is a mirror of the move rather than a guess about it.
+    if agent_carries_backups {
+        let renamed_rows = sqlx::query(
+            "UPDATE backups SET filename = $1 || substring(filename from $3) \
+             WHERE site_id = $2 AND filename LIKE $4",
+        )
+        .bind(format!("{new_domain}-"))
+        .bind(id)
+        .bind(old_domain.len() as i32 + 2)
+        .bind(format!("{old_domain}-%"))
+        .execute(&state.db)
+        .await;
+        match renamed_rows {
+            Ok(r) => tracing::info!(
+                "Rename {old_domain} to {new_domain}: re-prefixed {} backup row(s)",
+                r.rows_affected()
+            ),
+            Err(e) => tracing::error!(
+                "Rename {old_domain} to {new_domain}: the archives moved but their rows could \
+                 not be re-prefixed ({e}). Every backup row for this site now names a file that \
+                 is not there."
+            ),
+        }
+
+        // The carry is the one step of the rename whose success the panel can
+        // check from the outside, and the check is version-independent: if
+        // anything is still listed under the old name, something was left behind.
+        match agent.get(&format!("/backups/{old_domain}/list")).await {
+            Ok(v) => {
+                // The agent answers this one with a bare array, not an object
+                // wrapping a `backups` key. Reading a key that is not there
+                // would make this check report "nothing left behind" for every
+                // input it will ever see.
+                let left = v.as_array().map(|a| a.len()).unwrap_or(0);
+                if left > 0 {
+                    tracing::error!(
+                        "Rename {old_domain} to {new_domain} completed, but the agent still \
+                         lists {left} backup(s) under {old_domain} — the carry did not take \
+                         everything and those archives are unreachable from the panel."
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(
+                "Could not confirm the backup carry for {old_domain}: {e}"
+            ),
+        }
+    }
 
     // Update monitors linked to this site.
     //

@@ -433,6 +433,12 @@ pub async fn health(
 
     // Find stale sites (no backup in > 7 days)
     //
+    // The join admits only archives that landed where they were meant to. An
+    // upload that exhausted its retries still writes a row — that row is what
+    // makes the local file reapable — but it is not off-site, so counting it as
+    // a fresh backup would quietly disarm this list for exactly the site whose
+    // destination is down.
+    //
     // `last_backup` is Option because the HAVING clause deliberately admits sites
     // that have NEVER been backed up — those are the ones that matter most — and
     // a LEFT JOIN miss makes MAX() NULL. Decoding that into a bare DateTime made
@@ -442,6 +448,7 @@ pub async fn health(
     let stale_sites: Vec<(String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         "SELECT s.domain, MAX(b.created_at) as last_backup \
          FROM sites s LEFT JOIN backups b ON b.site_id = s.id \
+                                        AND (b.destination_id IS NULL OR b.uploaded) \
          GROUP BY s.id, s.domain \
          HAVING MAX(b.created_at) IS NULL OR MAX(b.created_at) < NOW() - INTERVAL '7 days' \
          ORDER BY MAX(b.created_at) NULLS FIRST LIMIT 10"

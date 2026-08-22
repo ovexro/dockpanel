@@ -155,10 +155,25 @@ else
   ok "the upload result is bound to a name that is actually read"
 fi
 
-if has "$SRC_SCHED" 'bind(if uploaded_remote { row.dest_id } else { None })'; then
-  ok "destination_id is bound from the row that drove the upload"
+# Pinned as a CAPABILITY, not as a literal.
+#
+# The previous spelling of this arm was an exact match on
+# `bind(if uploaded_remote { ... } else { None })`, and s389's correct fix — making
+# the bind unconditional — therefore reported as a regression. That is the same
+# freeze-a-literal failure this file's own §B comment above already describes.
+#
+# What actually has to hold: the destination is recorded whatever the upload did.
+# `uploaded = FALSE` alone cannot mean "off-site failed" — the manual path binds
+# no destination and a schedule with none writes FALSE too — so the only predicate
+# that identifies a failed off-site copy is the PAIR (destination_id IS NOT NULL
+# AND NOT uploaded), which is what the policy executor already writes.
+DEST_BIND=$(grep -oE '\.bind\([^)]*dest_id[^)]*\)' <<< "$SRC_SCHED" | head -1)
+if [ -z "$DEST_BIND" ]; then
+  bad "the scheduler binds no destination_id at all — a scheduled off-site copy records no destination"
+elif grep -q 'uploaded' <<< "$DEST_BIND"; then
+  bad "destination_id is bound only when the upload succeeded, so a failed off-site copy cannot be told from a schedule that never had a destination: $DEST_BIND"
 else
-  bad "destination_id is not bound from the schedule's own destination"
+  ok "destination_id is bound from the schedule's own destination whatever the upload did"
 fi
 
 if has "$(grep -B2 'dest_id: Option<Uuid>' <<< "$SRC_SCHED")" 'allow(dead_code)'; then
