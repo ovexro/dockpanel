@@ -4,6 +4,54 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.149.0]
+
+### Fixed — the public status page published monitor URLs, and the guide said it did not
+
+`docs/guides/status-page.md` has stated, in the list of what a visitor sees, that
+monitor **URLs are not published**. That was true of the monitor list and false
+of incident causes.
+
+When an HTTP check failed, DockPanel stored the HTTP client's own error message.
+That message ends with `for url (…)`, so the monitor's full address — scheme,
+host, path and **query string** — was written into the incident's cause, into
+the incident's description, and into the *"Auto-detected: …"* entry on its
+timeline. Two of those three are served by `/api/status-page/public`, which
+answers with no login at all. A monitor pointed at a health endpoint that
+authenticates by query parameter published that parameter to anyone who loaded
+`/status`.
+
+The check's failure reason is now composed rather than copied: the URL is
+dropped, and the useful half — the operating system's or the TLS library's own
+sentence, several layers down inside the error — is kept, so a failure still
+reads *"error sending request: client error (Connect): Connection refused (os
+error 111)"* rather than becoming four identical words. A migration strips the
+URL out of rows already stored, in all four columns that hold one.
+
+**If a monitor URL contained a token and your status page was on, rotate that
+token.** Neither the fix nor the migration can un-publish what was already
+fetched, or reach a backup taken before the upgrade. Note that the status page
+may have been reachable without you enabling it — see the v2.70.0 upgrade note
+in the guide.
+
+One residual is deliberate: when a check fails on a certificate name mismatch,
+the error still names the domains the *certificate* is valid for. That is a
+property of the certificate the monitored host presented rather than of the URL
+you configured, and removing it would mean pattern-matching the TLS library's
+wording, which is the kind of coupling this change exists to undo.
+
+### Fixed — the public status page published the operator's email address
+
+The same unauthenticated response carried each incident update's `author_email`,
+because the timeline rows were serialized whole. Nothing rendered it — the
+public page has never declared the field — so it was visible only to someone
+reading the JSON. The switch's own description in Settings lists everything else
+this publishes and has never mentioned an address.
+
+The timeline is now projected field by field: status, message and timestamp. The
+field is untouched everywhere it belongs, including the Incidents screen and the
+guide's account of update attribution.
+
 ## [2.148.1]
 
 ### Fixed — a refusal message that overstated what it was protecting

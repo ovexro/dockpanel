@@ -326,6 +326,20 @@ pub async fn deploy_or_update(
     //      agent runs under `ProtectSystem=strict` with an explicit
     //      `ReadWritePaths`, so most host paths would fail at mkdir anyway, and
     //      a free-form bind of `/` or `/etc` is a container escape.
+    //   6. The deploy that ADDS a volume must carry what is already in the
+    //      container's writable layer onto the new mount. Constraints 1-5 all
+    //      protect data written AFTER the volume exists; the reporter's data is
+    //      in the writable layer right now, and every deploy path removes the
+    //      container, which deletes it. Ship without this and the first deploy
+    //      after the fix destroys the files the fix was built to save.
+    //      `docker_apps::migrate_unmounted_volumes` already does exactly this
+    //      for #110 and is the shape to follow, but it cannot be called as it
+    //      stands: its discovery half returns empty for any container without a
+    //      `dockpanel.app.template` label (a git container has none), and it
+    //      takes `&[&'static str]` because template paths are compile-time
+    //      constants while an operator's are runtime `String`s. Note also that
+    //      Docker Apps refuses blue-green on TWO grounds — an unmigrated path as
+    //      well as shared state — which is why constraint 2 alone is not enough.
     let mut host_config = bollard::service::HostConfig {
         port_bindings: Some(port_bindings),
         restart_policy: Some(bollard::service::RestartPolicy {

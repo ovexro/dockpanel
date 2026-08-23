@@ -264,6 +264,91 @@ else
   bad "E2 docs/guides/status-page.md exists"
 fi
 
+echo "== §F  the public surface does not republish what it must not ==="
+
+# v2.149.0. Two leaks on the SAME unauthenticated response, both of them
+# over-disclosure rather than a missing gate — the gate above was working.
+#
+#   §F1/F2/F3  a monitor's own URL. `reqwest::Error`'s Display ends with
+#              " for url ({url})", and that string became `incidents.cause`,
+#              `managed_incidents.description` and the "Auto-detected: …"
+#              timeline entry — two of which this endpoint publishes, while
+#              the guide states URLs are not published and the OTHER public
+#              handler drops the URL deliberately.
+#   §F4        `author_email`. The timeline was serialized whole, and the
+#              struct carries the operator's address.
+#
+# ⚠ F2 is the arm the UNIT TESTS CANNOT REPLACE. `uptime.rs`'s tests exercise
+# `redact_monitor_target` directly, so deleting its CALL from
+# `describe_check_error` leaves all three of them green — measured, not
+# assumed. F2 is what makes that mutation red.
+
+UPT=panel/backend/src/services/uptime.rs
+
+if [ ! -f "$UPT" ]; then
+  bad "F0 $UPT exists"
+elif U=$(subj "$UPT"); then
+  HTTPBODY=$(fnbody "$U" check_http)
+  DESCBODY=$(fnbody "$U" describe_check_error)
+  REDBODY=$(fnbody "$U" redact_monitor_target)
+
+  # FLOOR the three function subjects. An fnbody whose pattern stops matching
+  # yields an EMPTY subject, and every absence arm below it then passes green
+  # for a file that no longer contains the code at all.
+  if [ "${#HTTPBODY}" -ge 600 ] && [ "${#DESCBODY}" -ge 200 ] && [ "${#REDBODY}" -ge 200 ]; then
+    ok "F0 function subjects resolved (check_http ${#HTTPBODY}c, describe_check_error ${#DESCBODY}c, redact_monitor_target ${#REDBODY}c)"
+
+    # The failing arm of check_http must not hand reqwest's Display straight to
+    # the caller — that string is what gets stored and published.
+    if grep -qE 'describe_check_error\(' <<< "$HTTPBODY" \
+    && ! grep -qE 'Some\(e\.to_string\(\)\)' <<< "$HTTPBODY"; then
+      ok "F1 check_http renders its error through describe_check_error, not reqwest's Display"
+    else
+      bad "F1 check_http renders its error through describe_check_error, not reqwest's Display"
+    fi
+
+    if grep -qE 'redact_monitor_target\(' <<< "$DESCBODY"; then
+      ok "F2 describe_check_error is WIRED to the scrub (the unit tests cannot see this)"
+    else
+      bad "F2 describe_check_error is WIRED to the scrub (the unit tests cannot see this)"
+    fi
+
+    if grep -qE 'without_url\(\)' <<< "$DESCBODY"; then
+      ok "F3 describe_check_error still strips the error's own URL slot"
+    else
+      bad "F3 describe_check_error still strips the error's own URL slot"
+    fi
+  else
+    bad "F0 function subjects resolved — extraction is broken, F1-F3 would be vacuous"
+    bad "F1 check_http renders its error through describe_check_error"
+    bad "F2 describe_check_error is WIRED to the scrub"
+    bad "F3 describe_check_error still strips the error's own URL slot"
+  fi
+fi
+
+if I=$(subj "$INC"); then
+  PUBBODY=$(fnbody "$I" public_status_page)
+  if [ "${#PUBBODY}" -ge 1500 ]; then
+    # `IncidentUpdate` is `SELECT *` over a table with an author_email column, so
+    # serializing the Vec whole publishes it. The projection names its fields.
+    if ! grep -qE '"updates": updates' <<< "$PUBBODY" \
+    && grep -qE '"updates": public_updates' <<< "$PUBBODY"; then
+      ok "F4 the public timeline is projected field by field, not serialized whole"
+    else
+      bad "F4 the public timeline is projected field by field, not serialized whole"
+    fi
+
+    if ! grep -qE 'author_email' <<< "$PUBBODY"; then
+      ok "F5 author_email is named nowhere in the public handler"
+    else
+      bad "F5 author_email is named nowhere in the public handler"
+    fi
+  else
+    bad "F4 public_status_page subject resolved (${#PUBBODY}c) — arms would be vacuous"
+    bad "F5 public_status_page subject resolved"
+  fi
+fi
+
 echo
 printf 'status-page-gate: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -422,6 +422,94 @@ async fn check_heartbeat(monitor: &MonitorRow, pool: &PgPool) {
     }
 }
 
+/// Describe a failed HTTP check without republishing the monitor's own URL.
+///
+/// `reqwest::Error`'s `Display` ends with ` for url ({url})` whenever the URL is
+/// known, so `e.to_string()` on a connection failure carries the monitor's
+/// address, path and query string verbatim. That one string becomes three
+/// stored columns — `incidents.cause`, `managed_incidents.description`, and the
+/// `Auto-detected: …` timeline entry — and `/api/status-page/public` serves the
+/// first and third of them to anyone on the internet with no login. A monitor
+/// URL routinely carries a token in its query string, `docs/guides/status-page.md`
+/// states that URLs are not published, and the other public handler drops the
+/// URL deliberately (`routes/monitors.rs::status_page` destructures it to `_url`).
+///
+/// `Error::without_url()` alone is not the repair. For a request-kind error it
+/// leaves the four words `error sending request`, which is the whole message —
+/// every failed HTTP check would read identically and no test would notice.
+/// What an operator needs is the source chain (`Connection refused (os error
+/// 111)`, `invalid peer certificate`), so this keeps that and drops only the
+/// URL. The chain is walked rather than read one level down because the useful
+/// sentence is the operating system's, three or four layers in.
+///
+/// The final scrub is not redundant with `without_url`, and the case that makes
+/// it load-bearing was found by measurement rather than reasoning. Three failure
+/// classes were driven against reqwest 0.12.28 (2026-08-23):
+///
+/// - connection refused → `client error (Connect)` → `Connection refused (os
+///   error 111)`. No host anywhere. The scrub does not fire.
+/// - DNS failure → `dns error` → `failed to lookup address information: Name or
+///   service not known`. No host either — the obvious guess, and it is wrong.
+/// - **TLS hostname mismatch → `invalid peer certificate: certificate not valid
+///   for name "wrong.host.badssl.com"`.** The host, verbatim, in a source layer
+///   that `without_url()` never touches. This is the one that needs the scrub.
+///
+/// ⚠ Residual, measured and deliberate: that same message goes on to name the
+/// *certificate's* declared domains (`DnsName("*.badssl.com")`), which the scrub
+/// does not remove because they are a property of the certificate the target
+/// presented, not of the URL the operator configured. Truncating rustls's
+/// sentence would mean string-matching a dependency's prose, which is the class
+/// of mistake this whole function exists to undo.
+fn describe_check_error(e: reqwest::Error, url: &str) -> String {
+    let e = e.without_url();
+    let mut msg = e.to_string();
+
+    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(&e);
+    let mut depth = 0;
+    while let Some(cause) = source {
+        if depth >= 4 {
+            break;
+        }
+        let text = cause.to_string();
+        if !text.is_empty() && !msg.contains(&text) {
+            msg.push_str(": ");
+            msg.push_str(&text);
+        }
+        source = std::error::Error::source(cause);
+        depth += 1;
+    }
+
+    redact_monitor_target(msg, url)
+}
+
+/// Remove a monitor's own address from a message about that monitor.
+///
+/// Three needles, longest first: the URL as the operator wrote it, the URL as
+/// `url::Url` normalises it (a bare `http://host` is stored without the trailing
+/// slash and printed with one), and the bare host. Longest-first matters — the
+/// host is a substring of both URLs, so replacing it first would leave the path
+/// and query stranded beside a redaction marker.
+fn redact_monitor_target(mut msg: String, url: &str) -> String {
+    let parsed = url::Url::parse(url).ok();
+    let mut needles: Vec<String> = vec![url.trim().to_string()];
+    if let Some(u) = &parsed {
+        needles.push(u.to_string());
+        if let Some(host) = u.host_str() {
+            needles.push(host.to_string());
+        }
+    }
+    needles.sort_by_key(|n| std::cmp::Reverse(n.len()));
+    for needle in needles {
+        // Four characters is the shortest thing worth calling an address. Below
+        // that a needle is likelier to be a fragment of an unrelated word, and
+        // redacting it would corrupt the sentence it appears in.
+        if needle.len() >= 4 && msg.contains(&needle) {
+            msg = msg.replace(&needle, "(url withheld)");
+        }
+    }
+    msg
+}
+
 /// HTTP check with optional keyword verification and custom headers.
 async fn check_http(monitor: &MonitorRow, client: &reqwest::Client) -> (Option<i32>, Option<String>, &'static str, i32) {
     // SSRF re-validation at check time: the URL was vetted at write time, but a low-TTL
@@ -496,7 +584,7 @@ async fn check_http(monitor: &MonitorRow, client: &reqwest::Client) -> (Option<i
 
             (Some(code), None, "up", response_time)
         }
-        Err(e) => (None, Some(e.to_string()), "down", response_time),
+        Err(e) => (None, Some(describe_check_error(e, &monitor.url)), "down", response_time),
     }
 }
 
@@ -670,4 +758,98 @@ fn notify_status_subscribers(monitor_name: &str, status: &str, message: &str) {
         format!("[Status Update] {} — {}", monitor_name, status),
         message.to_string(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Deliberately credential-shaped. The reason `describe_check_error` exists
+    /// is that a health endpoint's query string is where people put tokens.
+    const SECRET_URL: &str = "http://127.0.0.1:9/internal/health?api_key=SUPERSECRET123";
+
+    async fn refused_error() -> reqwest::Error {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("client builds")
+            .get(SECRET_URL)
+            .send()
+            .await
+            .expect_err("port 9 on loopback must refuse the connection")
+    }
+
+    #[tokio::test]
+    async fn a_failed_check_does_not_republish_the_monitor_url() {
+        let e = refused_error().await;
+
+        // POSITIVE CONTROL, and it is load-bearing: this is the exact string the
+        // panel used to store and publish. If a future reqwest stops printing
+        // the URL, this assertion fails loudly rather than letting the three
+        // below start passing for a reason that has nothing to do with the fix.
+        let raw = e.to_string();
+        assert!(
+            raw.contains("SUPERSECRET123"),
+            "control failed — reqwest no longer prints the URL, so this test proves nothing: {raw}"
+        );
+
+        let described = describe_check_error(e, SECRET_URL);
+        assert!(
+            !described.contains("SUPERSECRET123"),
+            "query string published: {described}"
+        );
+        assert!(
+            !described.contains("internal/health"),
+            "path published: {described}"
+        );
+        assert!(
+            !described.contains("127.0.0.1"),
+            "host published: {described}"
+        );
+
+        // ...and it still says something. `without_url()` on its own leaves the
+        // four words "error sending request" for every failure there is.
+        assert!(
+            described.len() > "error sending request".len(),
+            "message reduced to nothing an operator can act on: {described}"
+        );
+    }
+
+    /// The fixture is a MEASURED string, not an invented one. Driven against
+    /// reqwest 0.12.28 + rustls on 2026-08-23 with a real hostname-mismatch
+    /// target, this is the source-chain text verbatim — and it is the only one
+    /// of the three failure classes that names the host, which is the whole
+    /// reason the scrub exists. `without_url()` does not touch it, because the
+    /// host is inside a source layer rather than in the error's URL slot.
+    #[test]
+    fn the_scrub_removes_the_host_a_tls_mismatch_prints() {
+        let out = redact_monitor_target(
+            "error sending request: client error (Connect): invalid peer certificate: \
+             certificate not valid for name \"status.example.com\"; certificate is only \
+             valid for DnsName(\"*.other.example\")"
+                .to_string(),
+            "https://status.example.com/healthz?token=abc",
+        );
+        assert!(
+            !out.contains("status.example.com"),
+            "host survived the scrub: {out}"
+        );
+        assert!(
+            out.contains("invalid peer certificate"),
+            "the operator's half was destroyed: {out}"
+        );
+    }
+
+    #[test]
+    fn the_scrub_takes_the_whole_url_before_the_bare_host() {
+        // Longest-first is the whole point: the host is a substring of the URL,
+        // so redacting it first would strand the path and query beside the marker.
+        let out = redact_monitor_target(
+            "error sending request for url (https://status.example.com/healthz?token=abc)"
+                .to_string(),
+            "https://status.example.com/healthz?token=abc",
+        );
+        assert!(!out.contains("token=abc"), "query survived: {out}");
+        assert!(!out.contains("healthz"), "path survived: {out}");
+    }
 }

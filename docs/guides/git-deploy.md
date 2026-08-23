@@ -158,11 +158,13 @@ Two parts of that warning were closed in v2.148.0, and the rest of it stands:
   as a successful deploy of the new commit.
 
 Volumes on Git Deploys are tracked as unbuilt work rather than declined. The
-five constraints that make it bigger than a field — two `HostConfig` literals,
+six constraints that make it bigger than a field — two `HostConfig` literals,
 the blue-green refusal it needs, previews that must not inherit volumes,
-delete-time cleanup that has to read the binds before removal, and a
-container-path-only field shape — are recorded in the agent beside the code that
-would change (`panel/agent/src/services/git_build.rs`).
+delete-time cleanup that has to read the binds before removal, a
+container-path-only field shape, and carrying the data already in the
+container's writable layer onto the mount on the deploy that adds it — are
+recorded in the agent beside the code that would change
+(`panel/agent/src/services/git_build.rs`).
 
 ## Nixpacks Auto-Detection
 

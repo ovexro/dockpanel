@@ -27,13 +27,39 @@ Anyone with the URL and no login sees:
 
 - every **enabled** monitor's name and current status (URLs are not published)
 - your **components** and their derived status
-- every incident marked visible on the status page, with its updates
+- every incident marked visible on the status page, with its updates — each update's status,
+  message and timestamp, but **not** the address of whoever posted it
 
 That last item includes incidents **DockPanel files for you**. The alert engine, the auto-healer,
 the uptime checker and the backup executor all open status-page-visible incidents automatically,
 and their titles name your infrastructure — *"Service mariadb is stopped on This Server"*,
 *"Disk at 53% on This Server"*. Review **Incidents** before switching the page on, and set an
 incident's visibility off if it should not be public.
+
+An auto-detected incident also carries a **cause** — the reason the check failed, such as
+*"error sending request: client error (Connect): Connection refused (os error 111)"*. From
+v2.149.0 that sentence no longer contains the monitored URL. See the upgrade note below if you
+were running an earlier version.
+
+> **Upgrade note (v2.149.0) — rotate any credential that was in a monitor URL.** The bullet
+> above saying URLs are not published was true of the monitor list and **false of incident
+> causes**. When an HTTP check failed, DockPanel stored the HTTP client's own error message,
+> which ends with `for url (…)` and therefore contained the monitor's full address — scheme,
+> host, path and query string. That string was published in two places on this page: an
+> auto-detected incident's cause, and the *"Auto-detected: …"* entry in an incident's timeline.
+> A monitor pointed at something like `https://api.example.com/health?api_key=…` published that
+> token to anyone who loaded `/status`.
+>
+> v2.149.0 fixes the writer, and its migration strips the URL out of rows already stored. Neither
+> can un-publish what was already fetched, and neither reaches a backup taken earlier. **If any
+> monitor URL contained a token and your status page was on, treat that token as disclosed and
+> rotate it.** The exposure needed the master switch above to be on — which, per the v2.70.0 note,
+> may have been true without you switching it on.
+>
+> One thing the fix deliberately does not remove: when a check fails because of a TLS certificate
+> mismatch, the error names the domains the *certificate* is valid for. That is a property of the
+> certificate the monitored host presented, not of the URL you configured, and cutting it out
+> would mean pattern-matching the TLS library's own wording.
 
 ## Setting Up Components
 

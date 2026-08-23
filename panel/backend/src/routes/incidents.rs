@@ -915,6 +915,24 @@ pub async fn public_status_page(
         .fetch_all(&state.db).await
         .unwrap_or_default();
 
+        // Projected field by field, not serialized whole: `IncidentUpdate`
+        // carries `author_email`, and this endpoint answers with no login. The
+        // four fields below are exactly what `PublicStatusPage.tsx` declares.
+        // `#[serde(skip_serializing)]` on the field is the smaller edit and the
+        // wrong one — three authenticated handlers return the same struct and
+        // the incidents guide publishes attribution as behaviour.
+        let public_updates: Vec<serde_json::Value> = updates
+            .iter()
+            .map(|u| {
+                serde_json::json!({
+                    "id": u.id,
+                    "status": u.status,
+                    "message": u.message,
+                    "created_at": u.created_at,
+                })
+            })
+            .collect();
+
         incident_list.push(serde_json::json!({
             "id": inc.id,
             "title": inc.title,
@@ -922,7 +940,7 @@ pub async fn public_status_page(
             "severity": inc.severity,
             "started_at": inc.started_at,
             "resolved_at": inc.resolved_at,
-            "updates": updates,
+            "updates": public_updates,
         }));
     }
 
