@@ -1089,13 +1089,28 @@ pub enum RenewalPlan {
 
 /// Decide how `site` must be renewed, from what was RECORDED at issuance.
 ///
-/// ⚠ This deliberately does not consult `ssl_cert_path`. An earlier draft used
-/// "the certificate directory is not the site's own domain" as proof of a shared
-/// zone certificate. It is not proof: `rename_domain` writes only the domain
-/// while the agent MOVES the certificate directory, so every renamed HTTP-01
-/// site carries a path naming a directory it no longer uses, and in SQL that row
-/// is indistinguishable from a genuine wildcard child. Acting on it would have
-/// refused to renew healthy sites for ever.
+/// ⚠ This deliberately does not consult the stored certificate path. An earlier
+/// draft used "the certificate directory is not the site's own domain" as proof
+/// of a shared zone certificate. It is not proof — but the reason first written
+/// here has since STOPPED BEING TRUE, and a guard defended by a dead reason is
+/// one refactor from being removed as obsolete.
+///
+/// ⛔ THE OLD REASON, REPEALED BY THE SAME RELEASE THAT WROTE IT: *"`rename_domain`
+/// writes only the domain while the agent MOVES the certificate directory."* Since
+/// v2.145.0 the rename rewrites that column itself (`routes/sites.rs`, the
+/// `CASE WHEN … LIKE` in the rename statement), so a renamed site's path is
+/// correct from that release on.
+///
+/// ⭐ THE REASON THAT STILL HOLDS, and it is two reasons, not one:
+///   1. That rewrite is deliberately SCOPED to the site's own old directory, so a
+///      wildcard child renamed out of its zone keeps naming the zone for ever —
+///      correctly, because the zone is where its certificate really lives.
+///   2. Any row renamed on a build at or below v2.144.x still carries the stale
+///      pre-rewrite path, and the name it points at can be handed to the NEXT
+///      site that claims it.
+/// Both shapes make a row that names a directory belonging to somebody else, and
+/// neither is distinguishable in SQL from a genuine wildcard child. Acting on it
+/// would refuse to renew healthy sites for ever.
 pub async fn renewal_plan(
     pool: &sqlx::PgPool,
     site: &crate::models::Site,

@@ -135,12 +135,19 @@ has "B2 an unrecorded row degrades ONCE and records itself" "$F_PLAN" \
 # Everything else — including `dns-01` — falls through to the DNS-01 branch.
 has "B3 every other recorded challenge falls through" "$F_PLAN" '_=>{}'
 
-# ⛔ THE FORGED SIGNAL. `rename_domain` writes only the domain while the agent
-# MOVES the certificate directory, so every renamed HTTP-01 site permanently
-# carries a path naming a directory it no longer uses — in SQL indistinguishable
-# from a genuine wildcard child. A draft of this ship derived provenance from it
-# and would have branded healthy sites as wildcards and refused to renew them for
-# ever. The plan must never read that column.
+# ⛔ THE FORGED SIGNAL. A draft of the s392 ship derived provenance from the
+# stored certificate path and would have branded healthy sites as wildcards and
+# refused to renew them for ever. The plan must never read that column.
+#
+# ⚠ The reason originally written here — "rename_domain writes only the domain
+# while the agent MOVES the certificate directory" — was repealed by the very
+# release that wrote it: the rename now rewrites that column itself. The signal
+# is STILL forged, for two reasons that do survive: the rewrite is scoped to the
+# site's own old directory, so a wildcard child renamed out of its zone keeps
+# naming the zone; and any row renamed on a build at or below v2.144.x keeps the
+# stale path, whose name can be re-claimed by the next site that asks for it.
+# Recorded because an arm defended by a dead reason is one refactor from being
+# deleted as obsolete.
 hasnt "B4 the plan never reads ssl_cert_path (rename forges it)" "$F_PLAN" "ssl_cert_path"
 # POSITIVE CONTROL: the same subject DOES carry the columns it is supposed to read,
 # so B4 cannot be passing because the extraction is empty or misspelled.
@@ -203,8 +210,30 @@ echo "── §E  the budget is derived from the agent, not guessed"
 # ~260s inside the agent alone. Every door timed out while the agent SUCCEEDED,
 # and the panel recorded a failure and wrote a cooldown row.
 has "E1 one budget, named once" "$F_BSSL" "pub(crate)constDNS01_ORDER_TIMEOUT_SECS:u64=300;"
-eq "E2 and every renewal door spends THAT budget" \
-   "$(( $(occ "$F_BSSL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_HEAL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_SCAN" "DNS01_ORDER_TIMEOUT_SECS") ))" "5"
+# ⭐ WIDENED at s393, from "every renewal door" to EVERY DNS-01 door. v2.145.0 gave
+# the three renewal doors the shared budget and left the door that ISSUES a
+# wildcard — the exact order the constant derives its arithmetic from — passing a
+# bare literal 180. The constant's own doc comment already said "every caller must
+# use THIS constant"; the arm counted only the callers that did.
+eq "E2 and every DNS-01 door spends THAT budget — issuance included" \
+   "$(( $(occ "$F_BSSL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_HEAL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_SCAN" "DNS01_ORDER_TIMEOUT_SECS") ))" "6"
+# ⛔ A COUNT OF THE CONSTANT'S USES CANNOT SEE A CALLER THAT DOES NOT USE IT —
+# that is how the issuance door stayed invisible to E2 for a whole release (#671:
+# a count is blind to the thing it does not count). E2b asks the complementary
+# question: EVERY long agent call in this file spends the shared budget.
+#
+# ⚠ BOTH SIDES ARE DERIVED FROM THE SUBJECT. Neither is a number typed here, so
+# the arm cannot become a tautology when the population grows (#701) — add a
+# fourth door and it stays green only if that door also names the constant.
+#
+# ⚠ The first draft of this arm was `$G -cE 'post_long\([^)]*,[0-9]+\)'` = 0, and
+# a mutation proved it could NOT fail: the subject is whitespace-stripped, so the
+# call ends `,180,)` with Rust's trailing comma, and `&format!(…)` puts a `)`
+# INSIDE the argument list that `[^)]*` stops at. #626, rebuilt inside the suite
+# written to catch it. A regex over an argument list is not a parser; count the
+# calls instead.
+eq "E2b every long agent call in this file spends THAT budget" \
+   "$(occ "$F_BSSL" ",DNS01_ORDER_TIMEOUT_SECS")" "$(occ "$F_BSSL" "post_long(")"
 # ⭐ DERIVED FROM THE AGENT'S OWN ARITHMETIC, not from a number typed here: the
 # per-authorization propagation sleep, and the two poll budgets. If the agent ever
 # waits longer than the panel is willing to, this goes red before a fleet does.
@@ -262,6 +291,75 @@ has "F4b and the deliberate downgrade" "$F_REC" "RenewalPlan::LastResortHttp01{l
 has "F4c every other plan writes nothing" "$F_REC" "_=>return,"
 # The downgrade leaves a durable record the operator can filter for.
 has "F5 the downgrade is logged at a level the readers can count" "$F_REC" '"warning",'
+
+# ⭐ s393 — THE PATH FOLLOWS THE CERTIFICATE. No renewal door writes the stored
+# certificate path (0 occurrences in either service file; both DO write
+# `SET ssl_expiry`, so that is a measurement and not a missing grep), yet every
+# door re-renders the vhost FROM that column moments later. A row whose path
+# named a different directory — a wildcard child naming the zone — therefore had
+# its certificate renewed and nginx pointed straight back at the un-renewed
+# wildcard, with the NEW expiry stamped on the row. The window never reopened.
+# Both plans that reach this function ordered HTTP-01 for the site's own name, so
+# the certificate really is at the site's own directory.
+has "F6 the recorder moves the path with the challenge" "$F_REC" \
+    "ssl_cert_path=\$3,ssl_key_path=\$4,"
+has "F6b bound to the directory the HTTP-01 order actually wrote" "$F_REC" \
+    'format!("/etc/dockpanel/ssl/{domain}/fullchain.pem")'
+# ⚠ F6b's literal appears elsewhere in this file. It is sound ONLY because
+# `$F_REC` is a `fnbody` extraction (#672 — a file-scoped `has` asks "does this
+# file contain this shape anywhere", which for ordinary Rust is always yes).
+# Re-scope it to `$F_BSSL` and it becomes satisfiable by a sibling and dies silently.
+
+# ⛔ ORDER, NOT PRESENCE. Recording the path after the rebuild would leave the
+# rebuild reading the stale value — the defect unchanged, with both strings
+# present and every `has` above still green. Only an ordering arm can see it.
+# Derived by splitting each subject at its rebuild and asking what precedes it.
+# ⚠ Passed by NAME, never interpolated into a delimited string: a stripped Rust
+# body is full of `::`, so a colon-delimited loop would split the subject itself.
+records_before_rebuild() {  # $1 label  $2 subject  $3 rebuild marker
+  case "$2" in
+    *"$3"*)
+      case "${2%%"$3"*}" in
+        *"record_renewal_provenance("*)
+          ok "F7-$1 records provenance BEFORE it re-renders the vhost" ;;
+        *) bad "F7-$1 records provenance BEFORE it re-renders the vhost" \
+               "the rebuild runs first, so it re-asserts the stale path" ;;
+      esac ;;
+    *) bad "F7-$1 subject does not contain $3" "arm is vacuous — re-scope it" ;;
+  esac
+}
+# ⚠ `renew` is a thin wrapper that delegates; the body that renews — and that the
+# Diagnostics "Fix" button also reaches — is `renew_for_site`. Pinning the wrapper
+# extracts 460 chars containing neither call, and both arms below would be vacuous.
+F_RENEW=$(fnbody "$BSSL" "pub(crate) async fn renew_for_site(" | subjin)
+[ "$(printf '%s' "$F_RENEW" | wc -c)" -ge 2000 ] || \
+  { bad "SETUP" "renew_for_site body extracted to $(printf '%s' "$F_RENEW" | wc -c) chars"; exit 1; }
+records_before_rebuild BSSL "$F_RENEW" "rebuild_vhost_after_ssl("
+records_before_rebuild HEAL "$F_HEAL" "build_nginx_body("
+records_before_rebuild SCAN "$F_SCAN" "build_nginx_body("
+
+# ⛔ s393 — REVOKE RE-RENDERS THE VHOST IT JUST STRIPPED. The agent's teardown
+# deletes `/etc/dockpanel/ssl/{domain}/` while the vhost still names it, and
+# `nginx -t` is WHOLE-SERVER: every later site edit on the box fails and the next
+# restart leaves nginx down for every tenant. The agent's shared-directory guard
+# does not cover this door — it skips the site's OWN vhost — so a solo site's
+# directory really is removed. Four sibling SSL writers have always re-rendered;
+# this one never did. Reachable from an ordinary admin button, two clicks.
+F_REV=$(fnbody "$BSSL" "pub async fn revoke(" | subjin)
+[ "$(printf '%s' "$F_REV" | wc -c)" -ge 700 ] || \
+  { bad "SETUP" "revoke body extracted to $(printf '%s' "$F_REV" | wc -c) chars"; exit 1; }
+has "F8 revoke re-renders the vhost it just stripped of its certificate" "$F_REV" \
+    "rebuild_vhost_after_ssl(&state,&agent,id).await;"
+has "F8-control the subject really is the revoke door" "$F_REV" "ssl_challenge=NULL,"
+# ⛔ AND AFTER THE CLEAR. `build_nginx_body` emits the certificate keys only under
+# `if site.ssl_enabled`, and this helper re-reads the row — so called BEFORE the
+# clear it writes the HTTPS config back naming the deleted directory, fails
+# `nginx -t`, and is rolled back. That is a silent no-op which satisfies F8.
+case "${F_REV%%rebuild_vhost_after_ssl(*}" in
+  *"ssl_enabled=false,"*) ok "F8b and only after the row has been cleared" ;;
+  *) bad "F8b and only after the row has been cleared" \
+         "the rebuild precedes the UPDATE — it re-asserts the deleted certificate and is rolled back" ;;
+esac
 
 echo "── §G  the migration cannot run before the schema it alters"
 

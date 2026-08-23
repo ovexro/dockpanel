@@ -467,11 +467,19 @@ pub async fn provision_dns01(
         agent_body["profile"] = serde_json::json!(p);
     }
 
+    // ⛔ THE SAME BUDGET AS EVERY OTHER DNS-01 DOOR. This is the door that ISSUES
+    // a wildcard — the exact order `DNS01_ORDER_TIMEOUT_SECS` derives its 300s
+    // from (two 10s propagation sleeps for `{d}` and `*.{d}`, then two 120s
+    // polls ≈ 260s) — and it was the one caller still passing a bare literal 180.
+    // v2.145.0 gave the three RENEWAL doors the shared budget and left issuance
+    // short, so issuing a wildcard could report a false failure while the agent
+    // went on to succeed. A budget below the agent's own wait is not a timeout,
+    // it is a guaranteed false failure — which is what that constant already says.
     let result = agent
         .post_long(
             &format!("/ssl/provision-dns01/{provision_domain}"),
             Some(agent_body),
-            180,
+            DNS01_ORDER_TIMEOUT_SECS,
         )
         .await
         .map_err(|e| dns01_failure_or(provision_domain, &zone.domain, wildcard, e))?;
@@ -752,12 +760,35 @@ pub(crate) async fn record_renewal_provenance(
         _ => return,
     };
 
+    // ⭐ THE PATH FOLLOWS THE CERTIFICATE, and it is the half v2.145.0 left open.
+    // No renewal door writes `ssl_cert_path` — 0 occurrences in `auto_healer.rs`
+    // and `security_scanner.rs` (both DO write `SET ssl_expiry`, so that is a
+    // measurement, not a missing grep) — yet every door re-renders the vhost from
+    // that column moments later. Both plans reaching this point ordered HTTP-01
+    // for `domain`, so the agent wrote `/etc/dockpanel/ssl/{domain}/`.
+    //
+    // For a row whose stored path names a DIFFERENT directory — a wildcard child
+    // whose path names the zone — the panel therefore renewed the certificate and
+    // then pointed nginx back at the un-renewed wildcard, while stamping the NEW
+    // certificate's expiry on the row. The 45-day window never reopened and the
+    // site went dark at the wildcard's real expiry, behind a panel reporting a
+    // successful renewal. That is Shape B of the s392 defect, still live for every
+    // row whose provenance was never recorded.
+    //
+    // Writing it HERE fixes all three doors at once: every one of them calls this
+    // before its rebuild (`ssl.rs` 962→964, `auto_healer.rs` 1159→1193,
+    // `security_scanner.rs` 655→711). And the scope is already exactly right —
+    // the match above returns early for every plan except the two whose
+    // certificate really does land at the site's own name.
     let _ = sqlx::query(
         "UPDATE sites SET ssl_challenge = 'http-01', ssl_cert_subject = $2, \
-         ssl_wildcard = FALSE, ssl_dns_zone_id = NULL, updated_at = NOW() WHERE id = $1",
+         ssl_wildcard = FALSE, ssl_dns_zone_id = NULL, \
+         ssl_cert_path = $3, ssl_key_path = $4, updated_at = NOW() WHERE id = $1",
     )
     .bind(site_id)
     .bind(domain)
+    .bind(format!("/etc/dockpanel/ssl/{domain}/fullchain.pem"))
+    .bind(format!("/etc/dockpanel/ssl/{domain}/privkey.pem"))
     .execute(pool)
     .await;
 
@@ -1020,6 +1051,23 @@ pub async fn revoke(
     .execute(&state.db)
     .await
     .map_err(|e| internal_error("ssl revoke", e))?;
+
+    // ⛔ AFTER the clear, never before. The agent's teardown removes
+    // `/etc/dockpanel/ssl/{domain}/` while `/etc/nginx/sites-enabled/{domain}.conf`
+    // still carries `ssl_certificate` naming it — and `nginx -t` is WHOLE-SERVER,
+    // so from that moment every site edit on the box fails and the next restart
+    // leaves nginx down for every tenant. The agent's shared-directory guard does
+    // not save this door: `ownership.rs` skips the site's OWN vhost, so a solo
+    // site's directory really is deleted. The four sibling SSL writers have always
+    // re-rendered here; this one never did.
+    //
+    // Placement is load-bearing. `build_nginx_body` emits the certificate keys
+    // only under `if site.ssl_enabled`, which the statement above has just made
+    // false, and this helper re-reads the row — so it now writes a plain HTTP
+    // vhost. Called BEFORE the clear it would write the HTTPS config back,
+    // naming the deleted directory, fail `nginx -t` and be rolled back: a silent
+    // no-op that satisfies any arm merely asserting the call exists.
+    rebuild_vhost_after_ssl(&state, &agent, id).await;
 
     tracing::info!("SSL revoked for {} by {}", site.domain, claims.email);
     activity::log_activity(

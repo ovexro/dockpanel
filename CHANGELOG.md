@@ -4,6 +4,72 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.146.0]
+
+### Fixed — deleting one certificate could take every site on the server down
+
+Deleting a certificate from the **Certificates** page removed it from disk and
+cleared the site's SSL columns — and left the site's nginx config still naming
+the file that had just been deleted. `nginx -t` validates the **whole server**,
+so from that moment every later configuration change on that machine failed its
+check and was rolled back, and the next nginx restart left every site on the box
+dark. Not only the site whose certificate was deleted.
+
+The four other places that write or remove a certificate have always re-rendered
+the site's config afterwards. This one never did, and the code that deletes the
+files describes the outcome exactly, in two other places, for the two doors that
+were already guarded.
+
+Deleting a certificate now re-renders the site's configuration as plain HTTP, so
+the site keeps serving on port 80 instead of taking the server with it.
+
+⚠ One residual, stated rather than left to be discovered: a **WordPress** site
+whose canonical URL was promoted to `https://` when the certificate was issued is
+not demoted when it is deleted, so it will redirect to a port that is no longer
+listening until the URL is changed back. That is one site, two clicks from
+repair, and it is unchanged from previous releases.
+
+### Fixed — a renewed certificate could be installed and then ignored
+
+A renewal writes the new certificate under the site's own name and the panel
+re-renders the site's nginx config immediately afterwards — from a stored path
+that **no renewal path has ever updated**. For a site whose stored path pointed
+somewhere else, the panel therefore installed a fresh certificate and then
+pointed nginx straight back at the old one, while recording the new
+certificate's 90-day expiry against the site.
+
+The renewal window never reopened, so nothing tried again. The site went dark at
+the *old* certificate's real expiry, behind a panel showing two months remaining
+and a notice saying the certificate had been renewed successfully.
+
+v2.145.0 fixed this for certificates whose provenance it could recover. This
+release fixes it for the rest, by making the recorded path follow the
+certificate that was actually installed — at all four renewal doors, from one
+place.
+
+### Fixed — issuing a wildcard could report a failure that had not happened
+
+v2.145.0 derived a single timeout for a DNS-01 order from the agent's own
+arithmetic — two DNS propagation waits plus two polling budgets — and gave it to
+the three paths that *renew* a certificate. The path that **issues** one kept its
+old, shorter limit, which is below the wait it was measured against. So issuing a
+wildcard could time out and report a failure while the agent went on to issue the
+certificate successfully. All four now spend the same budget, and a regression
+test asks the question the previous one could not: the old test counted the
+callers that used the shared budget, which cannot see a caller that does not.
+
+### Changed — two explanations that had stopped being true
+
+The renewal logic and its regression test both explained a deliberate design
+choice with a reason that the previous release had itself repealed. The choice is
+still correct and is unchanged; the reasons now say why. A guard defended by a
+dead reason is one refactor away from being deleted as obsolete.
+
+⚠ The same superseded explanation also appears in a database migration, which
+cannot be corrected: applied migrations are checksummed, so editing the file
+would break the upgrade on every installed system. It is left as shipped and
+recorded here instead.
+
 ## [2.145.0]
 
 ### Fixed — renewing a DNS-01 certificate destroyed it
