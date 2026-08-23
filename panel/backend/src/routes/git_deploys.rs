@@ -1983,8 +1983,11 @@ fn spawn_deploy_task(
             match agent.post_long("/apps/compose/deploy", Some(serde_json::json!({
                 "yaml": yaml,
                 "stack_id": config.id.to_string(),
-            })), 660).await {
-                Ok(_) => {
+            })), 660).await
+                .map_err(|e| format!("{e}"))
+                .and_then(compose_outcome)
+            {
+                Ok(()) => {
                     emit("compose", "Docker Compose deployed", "done", None);
                     emit("complete", "Deploy complete (Compose)", "done", None);
 
@@ -2560,6 +2563,78 @@ fn spawn_deploy_task(
 /// Returns the sentence to report when the deploy must not proceed. Callers are
 /// background tasks with no `?` to propagate through, which is why this hands
 /// back a message rather than an `ApiError`.
+/// Read the agent's per-service compose report and answer the only question the
+/// caller actually asked: did this deploy happen?
+///
+/// `deploy_compose` reports each service's outcome INSIDE a 200 and never
+/// returns an `Err` for a service that failed to start, so both callers here
+/// used to take the HTTP status as the answer and write `status = 'running'`
+/// over a deploy in which nothing came up. That is not a rare shape: the compose
+/// engine has no teardown, so the SECOND compose deploy of the same deployment
+/// collides with its own container names and every service fails — while the row
+/// said the new commit was running. `stacks::deployed_service_states` is the
+/// reader written for exactly this, and it is shared rather than copied so the
+/// two paths cannot drift apart again.
+///
+/// ⚠ `total == 0` is deliberately NOT a failure. An agent that reports no
+/// services at all is indistinguishable from one too old to report them, and an
+/// empty observation is the one reading that cannot tell "nothing came up" from
+/// "I cannot see". Only `total > 0 && running == 0` is a fact.
+fn compose_outcome(deploy_result: serde_json::Value) -> Result<(), String> {
+    let (running, total, errors) = crate::routes::stacks::deployed_service_states(&deploy_result);
+    if total > 0 && running == 0 {
+        let detail = if errors.is_empty() {
+            "the agent reported no reason".to_string()
+        } else {
+            errors.join(" | ")
+        };
+        return Err(format!(
+            "no service in the compose file stayed running — {detail}"
+        ));
+    }
+    Ok(())
+}
+
+/// Refuse a compose file whose services name no image, rather than deploying
+/// the rest of it and calling that a success.
+///
+/// A repository that has a Dockerfile is exactly the one whose compose file
+/// builds from source, and the compose engine drops every service it cannot
+/// resolve to a registry image. The deploy then comes up without the
+/// application — the one service the author cared about — while the row says
+/// `running`. Naming them is better than dropping them, and the alternative
+/// offered is better than the thing refused: without a compose file this
+/// deployment builds the Dockerfile and also gets the domain, the certificate,
+/// zero-downtime swaps, preview environments and rollback.
+///
+/// ⚠ Kept OUT of `compose_deploy_refusal`'s body on purpose. The gate census in
+/// `deploy-gate-coverage-pin-e2e.sh` attributes a `preflight_gate_image` call to
+/// the nearest `fn` declared within the 40 lines above it, so prose added inside
+/// that span pushes the declaration out of the window and the door reads as
+/// ungated. Writing this arm inline cost exactly that — the census dropped from
+/// 7 gated doors to 6 and named `trigger_deploy_task`, a door that does reach
+/// the gate. Add explanation here, not there.
+fn dropped_service_refusal(yaml: &str) -> Option<String> {
+    let dropped = crate::routes::compose_services_without_image(yaml);
+    if dropped.is_empty() {
+        return None;
+    }
+    let (it, them) = if dropped.len() == 1 {
+        ("it", "it")
+    } else {
+        ("they", "them")
+    };
+    Some(format!(
+        "this repository's compose file gives no image for {}, and DockPanel's Compose support \
+         runs registry images rather than building them — {it} would be skipped and the deploy \
+         would come up without {them}. Either name an already-built image for each of them, or \
+         remove the compose file: without it this deployment builds your Dockerfile and also \
+         gets the domain, the certificate, zero-downtime swaps, preview environments and \
+         rollback.",
+        dropped.join(", "),
+    ))
+}
+
 async fn compose_deploy_refusal(
     db: &sqlx::PgPool,
     agent: &crate::services::agent::AgentHandle,
@@ -2578,6 +2653,11 @@ async fn compose_deploy_refusal(
     if let Err(e) = crate::routes::validate_compose_yaml(yaml) {
         return Some(e.to_string());
     }
+
+    if let Some(reason) = dropped_service_refusal(yaml) {
+        return Some(reason);
+    }
+
     let images = crate::routes::compose_images(yaml);
     if let Err(e) = crate::routes::docker_apps::enforce_allowed_images(db, user_id, &images).await {
         return Some(sentence(e));
@@ -2900,8 +2980,11 @@ pub async fn trigger_deploy_task(
             }
             match agent.post_long("/apps/compose/deploy", Some(serde_json::json!({
                 "yaml": yaml, "stack_id": config.id.to_string(),
-            })), 660).await {
-                Ok(_) => {
+            })), 660).await
+                .map_err(|e| format!("{e}"))
+                .and_then(compose_outcome)
+            {
+                Ok(()) => {
                     let duration_ms = started.elapsed().as_millis() as i32;
                     if let Err(db_err) = sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, 'compose', 'success', 'Deployed via Docker Compose', $4, $5)")
                         .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message).bind(&triggered_by).bind(duration_ms)

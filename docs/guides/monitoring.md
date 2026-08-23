@@ -155,6 +155,16 @@ not that it is healthy. That happens for certificates installed before v2.139.0 
 **SSL → Upload certificate**, which recorded only that SSL was enabled; re-uploading the
 certificate records its expiry.
 
+**An uploaded certificate must name the site it secures.** Since v2.148.0 the upload is
+refused, before anything is written, if the certificate's subjectAltName entries (or its
+Common Name, when it carries no SAN) do not cover the site's domain — and the refusal
+tells you which names it does cover. A wildcard counts for exactly one level, so
+`*.example.com` covers `app.example.com` and not `app.staging.example.com`. Before that
+check existed, pasting the wrong `fullchain.pem` installed cleanly: nginx does not
+compare a certificate against `server_name`, so the panel showed a padlock and only the
+browser disagreed, with `ERR_CERT_COMMON_NAME_INVALID`. The same check refuses a private
+key pasted into the certificate field, which used to be stored world-readable.
+
 **DockPanel renews only the Let's Encrypt certificates it issued itself.** Its ACME
 client can produce nothing else, so a certificate from any other issuer — a commercial
 wildcard, a Cloudflare Origin CA certificate, a corporate PKI — is left alone by the

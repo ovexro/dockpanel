@@ -374,6 +374,41 @@ pub fn compose_images(yaml: &str) -> Vec<String> {
         .collect()
 }
 
+/// The services the agent will SILENTLY DROP — those naming no image.
+///
+/// The compose engine deserialises each service into a struct whose `image` is
+/// an `Option<String>` and skips the service outright when it is `None`. That
+/// service never becomes a container, so the deploy comes up missing exactly
+/// the part the author cared about while every status the panel writes says the
+/// deploy succeeded. Naming them lets a door refuse instead.
+///
+/// ⚠ The predicate has to be the AGENT'S question, not a similar one. The agent
+/// reads a typed `Option<String>`; this side reads an untyped YAML value, and
+/// the two disagree about YAML null. `image:` written with no value — the
+/// ordinary way an author blanks the line while switching a service over to
+/// `build:` — is `Some(Value::Null)` here and `None` there, so a predicate
+/// spelled `.get("image").is_none()` reports nothing while the agent drops the
+/// service. Measured over `image:`, `image: ~`, `image: ""`, `image: "   "`, a
+/// missing key and a fully-populated file; only the arm below agrees with the
+/// agent on all six.
+///
+/// The empty-string spellings are deliberately NOT included: the agent does not
+/// skip those, it tries to create a container from them, so refusing here would
+/// refuse a file the agent still deploys.
+pub fn compose_services_without_image(yaml: &str) -> Vec<String> {
+    let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml) else {
+        return Vec::new();
+    };
+    let Some(services) = doc.get("services").and_then(|s| s.as_mapping()) else {
+        return Vec::new();
+    };
+    services
+        .iter()
+        .filter(|(_, svc)| matches!(svc.get("image"), None | Some(serde_yaml_ng::Value::Null)))
+        .filter_map(|(name, _)| name.as_str().map(str::to_string))
+        .collect()
+}
+
 /// Validate a Docker Compose YAML for dangerous directives.
 /// Parses the YAML into a structured format to prevent bypass via anchors, aliases, or alternate quoting.
 pub fn validate_compose_yaml(yaml: &str) -> Result<(), &'static str> {
@@ -583,6 +618,59 @@ mod tests {
         // not whether either of them implements merge keys.
         let merged = "services:\n  a: &base\n    image: redis:7\n  b:\n    <<: *base\n";
         assert_eq!(compose_images(merged).len(), 1);
+    }
+
+    // ── The services the agent silently drops ───────────────────────────
+
+    #[test]
+    fn services_without_an_image_are_named() {
+        let yaml = "services:\n  web:\n    build: .\n  db:\n    image: postgres:16\n";
+        assert_eq!(
+            compose_services_without_image(yaml),
+            vec!["web".to_string()]
+        );
+        // Nothing to refuse when every service names an image.
+        let ok = "services:\n  web:\n    image: nginx\n  db:\n    image: postgres:16\n";
+        assert!(compose_services_without_image(ok).is_empty());
+    }
+
+    #[test]
+    fn a_blanked_image_line_is_the_same_defect_and_must_be_named_too() {
+        // ⚠ This is the case that decides the predicate, and it is the one an
+        // author actually writes: `image:` left with no value while switching a
+        // service to `build:`. Here that is `Some(Value::Null)`; on the agent it
+        // deserialises to `None` and the service is dropped. A predicate spelled
+        // `.get("image").is_none()` returns nothing for all three spellings
+        // below while the agent drops the service — the refusal would be green
+        // from birth against the ordinary spelling of the thing it refuses.
+        for yaml in [
+            "services:\n  web:\n    image:\n    build: .\n  db:\n    image: postgres:16\n",
+            "services:\n  web:\n    image: ~\n  db:\n    image: postgres:16\n",
+            "services:\n  web:\n    image: null\n  db:\n    image: postgres:16\n",
+        ] {
+            assert_eq!(
+                compose_services_without_image(yaml),
+                vec!["web".to_string()],
+                "a null image must be reported: {yaml}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_image_string_is_not_reported_because_the_agent_does_not_drop_it() {
+        // The agent deserialises `""` to `Some("")` and tries to create a
+        // container from it, so refusing here would refuse a file the agent
+        // still deploys. The two sides have to answer the SAME question, not
+        // two similar ones.
+        for yaml in [
+            "services:\n  web:\n    image: \"\"\n  db:\n    image: postgres:16\n",
+            "services:\n  web:\n    image: \"   \"\n  db:\n    image: postgres:16\n",
+        ] {
+            assert!(
+                compose_services_without_image(yaml).is_empty(),
+                "an empty image string is not the dropped-service defect: {yaml}"
+            );
+        }
     }
 
     // ── Reserved (control-plane) domains — s241 H2/H3 ───────────────────

@@ -503,6 +503,80 @@ eq "G12 and the page renders no control for it" \
    "$(occ "$F_CERTS" 'cert.site_id===null?(')" "1"
 
 echo
+echo "── H. an uploaded certificate has to name the site it secures (s395) ──"
+# Until v2.148.0 this door took any text containing `BEGIN CERTIFICATE`. A
+# certificate for ANOTHER site installed cleanly: nginx does not compare a
+# certificate against `server_name` (measured — `nginx -t` is "successful" for a
+# cert naming a different host), the panel wrote `ssl_enabled = true` and drew a
+# padlock reading the hardcoded literal "Enabled (Let's Encrypt)", and only the
+# browser ever disagreed. Reachable by a site OWNER, not just an admin.
+#
+# The subject is upload_cert's OWN BODY. `routes/ssl.rs` holds several handlers
+# and a whole-file arm here would be satisfied by a sibling — the class that
+# printed 43/43 green over a restored defect at s386.
+ufn() { awk -v p="$2" 'index($0,p){f=1} f{print} f && /^}$/{exit}' "$1"; }
+U=$(ufn "$ASSLR" 'async fn upload_cert(' | sed -E -e 's://.*$::' | tr -d ' \n\\')
+if [ "${#U}" -lt 900 ]; then
+  bad "H0 SETUP" "upload_cert body extracted to ${#U} chars — the extractor broke, not the code"
+else
+  ok "H0 upload_cert body extracted (${#U} chars)"
+
+  eq "H1 the door asks what the certificate actually names" \
+     "$(occ "$U" 'ssl::cert_covers_domain(&body.certificate,&body.domain)')" "1"
+
+  # ORDERING is the arm that matters. Refusing AFTER the write leaves the files
+  # on disk and the vhost re-rendered from a SiteConfig this handler invents —
+  # so a refusal that arrives late is worse than none.
+  CHK=$(printf '%s' "$U" | $G -boF 'cert_covers_domain' | head -1 | cut -d: -f1)
+  WRT=$(printf '%s' "$U" | $G -boF 'tokio::fs::write(&cert_path' | head -1 | cut -d: -f1)
+  if [ -z "$CHK" ] || [ -z "$WRT" ]; then
+    bad "H2 the check precedes the first write" "one end vanished (check='$CHK' write='$WRT')"
+  elif [ "$CHK" -lt "$WRT" ]; then
+    ok "H2 the check runs BEFORE anything is written to disk"
+  else
+    bad "H2 the check precedes the first write" "check at $CHK, write at $WRT"
+  fi
+
+  # A 4xx is an answer and reaches the operator's screen intact; a 5xx reaches
+  # them as an incident id.
+  eq "H3 the refusal is a 400 carrying the reason" \
+     "$(occ "$U" 'StatusCode::BAD_REQUEST,Json(serde_json::json!({"error":reason}))')" "1"
+
+  # The bare substring gate is GONE — a key-then-certificate paste satisfied it.
+  eq "H4 the bare BEGIN-CERTIFICATE substring gate is gone" \
+     "$(occ "$U" 'body.certificate.contains("BEGINCERTIFICATE")')" "0"
+  eq "H4b control: the private-key format check is still there, so H4 is not green by an empty subject" \
+     "$(occ "$U" 'body.private_key.contains("BEGIN")')" "1"
+fi
+
+# Only the FIRST certificate block is asked, because that is the one nginx binds.
+# Measured against nginx 1.24.0: a `[wrong, right]` bundle paired with the WRONG
+# key passes `nginx -t` and then serves `wrong`. An "any block will do" rule
+# would wave through exactly the mismatch this check exists to stop.
+eq "H5 only the first CERTIFICATE block is treated as the leaf" \
+   "$(occ "$F_ASSL" 'ifleaf.is_none(){')" "1"
+eq "H6 a non-certificate block in the certificate field is refused" \
+   "$(occ "$F_ASSL" 'ifblock.label!="CERTIFICATE"{')" "1"
+
+# ⛔ An `is_ca()` leaf filter INVERTS this ship: `openssl req -x509` stamps
+# CA:TRUE by default, so it refuses every self-signed staging certificate.
+eq "H7 no is_ca() filter was added to the leaf search" \
+   "$(occ "$F_ASSL" '.is_ca()')" "0"
+# Three call sites: the leaf search here (:152), the ARI reader and the status
+# reader. Pinned exactly, so H7 cannot go green because the parse it guards was
+# deleted along with the filter.
+eq "H7b control: the leaf IS parsed, so H7 is not green by absence" \
+   "$(occ "$F_ASSL" '.parse_x509()')" "3"
+
+# A wildcard covers EXACTLY ONE label. Pinned as the DERIVATION, not as the
+# identifier — an arm naming `dns_name_covers` survives the rule being inverted
+# inside it.
+eq "H8 the wildcard rule compares exactly one label" \
+   "$(occ "$F_ASSL" '=>!label.is_empty()&&!label.contains(')" "1"
+eq "H9 the Common Name is used only when no SAN name was found" \
+   "$(occ "$F_ASSL" 'if!names.is_empty(){returnnames;}')" "1"
+
+echo
 echo "── Result ───────────────────────────────────────────────────────────────────"
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

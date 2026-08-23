@@ -295,6 +295,37 @@ pub async fn deploy_or_update(
     let mut exposed_ports = HashMap::new();
     exposed_ports.insert(container_port_key, HashMap::new());
 
+    // ⚠ NO BINDS, DELIBERATELY — and adding them here alone would be a data-loss
+    // regression rather than the fix. Reported as #118: a Git Deploy container
+    // gets no volume and no bind mount, every deploy replaces the container, and
+    // anything the app wrote to its own filesystem is destroyed. The failure is
+    // silent and delayed — everything works until the SECOND deploy — and it has
+    // cost a reporter real customer uploads. Accepted as unbuilt, not declined;
+    // `docs/guides/git-deploy.md` states the limitation and names what does
+    // survive.
+    //
+    // Five constraints, established while pricing it. Whoever builds this needs
+    // all five, and the first is the one that turns a patch into a regression:
+    //   1. There are TWO `HostConfig` literals in this file. The blue-green path
+    //      builds its own and copies only memory and CPU from the base, so binds
+    //      added here alone would mount on the first deploy and UN-mount on the
+    //      first blue-green update.
+    //   2. Blue-green then needs the `shares_persistent_state` refusal Docker
+    //      Apps already has, or the old and new containers hold the same host
+    //      paths across a 30-second health check — which corrupts SQLite.
+    //   3. Preview environments inherit this deploy path and must explicitly NOT
+    //      inherit volumes, or a throwaway PR container writes into production
+    //      data — and preview teardown by name would then delete it.
+    //   4. Delete-time cleanup has to capture the data directory from the
+    //      container's binds at the PRE-REMOVAL inspect; where the current
+    //      cleanup runs, the container is already gone. Its "container already
+    //      missing" arm also bypasses the ownership check before reaching
+    //      `remove_dir_all`, which is fine for a re-clonable checkout and very
+    //      much not once real data lives there.
+    //   5. The field is container-path only, with the host side derived. This
+    //      agent runs under `ProtectSystem=strict` with an explicit
+    //      `ReadWritePaths`, so most host paths would fail at mkdir anyway, and
+    //      a free-form bind of `/` or `/etc` is a container escape.
     let mut host_config = bollard::service::HostConfig {
         port_bindings: Some(port_bindings),
         restart_policy: Some(bollard::service::RestartPolicy {

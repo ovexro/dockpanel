@@ -46,6 +46,134 @@ pub async fn write_key_file(path: &str, content: &str) -> Result<(), String> {
     }
 }
 
+/// Normalise a DNS name for comparison: trim, drop ONE trailing root dot,
+/// lowercase. Both sides go through this — `is_valid_domain` permits uppercase,
+/// so the site's own domain needs it as much as the certificate's names do.
+fn normalise_dns_name(name: &str) -> String {
+    let n = name.trim();
+    n.strip_suffix('.').unwrap_or(n).to_ascii_lowercase()
+}
+
+/// Does one name presented by a certificate cover `domain`?
+///
+/// A wildcard covers EXACTLY ONE label and only the leftmost one, per RFC 6125.
+/// `*.example.com` covers `app.example.com` and does NOT cover
+/// `app.staging.example.com` or the bare apex. Getting this wrong in the
+/// permissive direction is what makes a panel report TLS that browsers reject;
+/// getting it wrong in the strict direction would refuse working certificates,
+/// so both halves are pinned by tests below.
+fn dns_name_covers(name: &str, domain: &str) -> bool {
+    if name == domain {
+        return true;
+    }
+    let Some(base) = name.strip_prefix("*.") else {
+        return false;
+    };
+    // `*.com` and partial wildcards (`w*.example.com`) are not names we accept.
+    if base.is_empty() || base.contains('*') || !base.contains('.') {
+        return false;
+    }
+    match domain.split_once('.') {
+        Some((label, rest)) => !label.is_empty() && !label.contains('*') && rest == base,
+        None => false,
+    }
+}
+
+/// The DNS names a parsed certificate presents.
+///
+/// The Common Name is a FALLBACK, consulted only when the certificate carries no
+/// subjectAltName extension at all — which is what every browser does, and what
+/// makes a `CN=other.example.com, SAN=real.example.com` certificate correctly
+/// refused for `other.example.com`.
+fn presented_dns_names(cert: &x509_parser::certificate::X509Certificate<'_>) -> Vec<String> {
+    if let Ok(Some(san)) = cert.subject_alternative_name() {
+        let names: Vec<String> = san
+            .value
+            .general_names
+            .iter()
+            .filter_map(|gn| match gn {
+                x509_parser::extensions::GeneralName::DNSName(n) => Some(normalise_dns_name(n)),
+                _ => None,
+            })
+            .collect();
+        if !names.is_empty() {
+            return names;
+        }
+    }
+    cert.subject()
+        .iter_common_name()
+        .filter_map(|cn| cn.as_str().ok())
+        .map(normalise_dns_name)
+        .collect()
+}
+
+/// Check that an uploaded certificate actually names the site it is being
+/// installed for. On success returns the names it presents, so the caller can
+/// show them back to the operator.
+///
+/// Three decisions here are load-bearing and each of them is the opposite of an
+/// obvious alternative that was measured and rejected:
+///
+/// 1. **Only the FIRST `CERTIFICATE` block is asked**, because that is the one
+///    nginx binds as the leaf. Measured against nginx 1.24.0: a bundle of
+///    `[wrong.crt, right.crt]` paired with `wrong.key` passes `nginx -t` and
+///    then serves `wrong.crt`. A rule that accepted the bundle because SOME
+///    block covered the domain would wave through exactly the silent mismatch
+///    this function exists to stop.
+/// 2. **Blocks are filtered by label, and a non-certificate block is refused
+///    outright.** The certificate field is checked today with a bare
+///    `contains("BEGIN CERTIFICATE")`, which a key-then-certificate paste
+///    satisfies — and that paste is written with a plain world-readable write,
+///    putting the private key at 0644 on disk permanently. It also blinds the
+///    expiry ladder, because the status reader decodes the first PEM block
+///    whatever its label and gets no date from a key.
+/// 3. **There is no `is_ca()` filter.** `openssl req -x509` stamps
+///    `basicConstraints CA:TRUE` on its output, so every self-signed staging
+///    certificate is a "CA" by that test and an `is_ca()` leaf filter refuses
+///    all of them. Note for whoever writes fixtures: `rcgen` defaults to
+///    `IsCa::NoCa`, so a suite built only on rcgen defaults stays GREEN with
+///    that filter wrongly restored — one fixture below sets it by hand.
+pub fn cert_covers_domain(cert_pem: &str, domain: &str) -> Result<Vec<String>, String> {
+    let want = normalise_dns_name(domain);
+    let mut leaf: Option<Vec<String>> = None;
+
+    for block in x509_parser::pem::Pem::iter_from_buffer(cert_pem.as_bytes()) {
+        let block = block.map_err(|e| format!("the certificate could not be read: {e}"))?;
+        if block.label != "CERTIFICATE" {
+            return Err(format!(
+                "the certificate field contains a {} block. Paste only the certificate (and its \
+                 chain) here — the private key goes in its own field, and storing it here would \
+                 leave it readable by every account on this server.",
+                block.label.to_ascii_lowercase()
+            ));
+        }
+        if leaf.is_none() {
+            let cert = block
+                .parse_x509()
+                .map_err(|e| format!("the certificate could not be read: {e}"))?;
+            leaf = Some(presented_dns_names(&cert));
+        }
+    }
+
+    let Some(names) = leaf else {
+        return Err("no certificate was found in the certificate field.".to_string());
+    };
+
+    if names.iter().any(|n| dns_name_covers(n, &want)) {
+        return Ok(names);
+    }
+    let presented = if names.is_empty() {
+        "no host name at all".to_string()
+    } else {
+        names.join(", ")
+    };
+    Err(format!(
+        "this certificate is for {presented}, not {want}. A certificate has to name the site it \
+         secures or browsers reject it whatever the panel says — check that you pasted the \
+         certificate for {want} and not for another site."
+    ))
+}
+
 /// Options controlling an ACME order — profile selection + ARI replacement chain.
 /// `None` or all-None fields means "classic, no prior cert" (backwards-compatible).
 #[derive(Default, Clone)]
@@ -794,4 +922,145 @@ fn first_cert_der(pem_bytes: &[u8]) -> Option<Vec<u8>> {
 
 fn offset_to_chrono(dt: time::OffsetDateTime) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::<chrono::Utc>::from_timestamp(dt.unix_timestamp(), dt.nanosecond())
+}
+
+// ⚠ This module must stay the LAST thing in this file. The pin suites blank
+// from the first `#[cfg(test)]` to EOF and never resume, so a test module
+// placed mid-file hides every production line below it from every `prod_*` arm
+// in every suite that reads this file.
+#[cfg(test)]
+mod cert_coverage_tests {
+    use super::*;
+    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
+
+    /// A self-signed certificate presenting `sans` as subjectAltName dNSNames.
+    fn cert_with_sans(sans: &[&str]) -> String {
+        let key = KeyPair::generate().unwrap();
+        let params =
+            CertificateParams::new(sans.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
+        params.self_signed(&key).unwrap().pem()
+    }
+
+    /// A certificate carrying a Common Name and NO subjectAltName extension —
+    /// legal, deprecated, and still issued by corporate PKI.
+    fn cert_with_cn_only(cn: &str) -> String {
+        let key = KeyPair::generate().unwrap();
+        let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.distinguished_name.push(DnType::CommonName, cn);
+        params.self_signed(&key).unwrap().pem()
+    }
+
+    #[test]
+    fn an_exact_name_is_accepted_case_and_trailing_dot_insensitively() {
+        let pem = cert_with_sans(&["Shop.Example.com"]);
+        assert!(cert_covers_domain(&pem, "shop.example.com").is_ok());
+        assert!(cert_covers_domain(&pem, "SHOP.EXAMPLE.COM.").is_ok());
+    }
+
+    #[test]
+    fn a_certificate_for_another_site_is_refused_and_names_what_it_covers() {
+        let pem = cert_with_sans(&["www.example.com", "example.com"]);
+        let err = cert_covers_domain(&pem, "shop.example.com").unwrap_err();
+        assert!(err.contains("www.example.com"), "{err}");
+        assert!(err.contains("shop.example.com"), "{err}");
+    }
+
+    #[test]
+    fn a_wildcard_covers_exactly_one_label() {
+        let pem = cert_with_sans(&["*.example.com", "example.com"]);
+        // one label below the wildcard base — covered
+        assert!(cert_covers_domain(&pem, "app.example.com").is_ok());
+        // the apex — covered only because this cert also carries the apex SAN
+        assert!(cert_covers_domain(&pem, "example.com").is_ok());
+        // TWO labels below — NOT covered. This is the half a permissive
+        // `ends_with` rule gets wrong, and it is the shape that makes a panel
+        // report TLS the browser rejects.
+        assert!(cert_covers_domain(&pem, "app.staging.example.com").is_err());
+    }
+
+    #[test]
+    fn a_bare_wildcard_apex_does_not_cover_the_apex() {
+        let pem = cert_with_sans(&["*.example.com"]);
+        assert!(cert_covers_domain(&pem, "example.com").is_err());
+    }
+
+    #[test]
+    fn a_partial_wildcard_label_is_not_a_wildcard() {
+        assert!(!dns_name_covers("w*.example.com", "www.example.com"));
+        assert!(!dns_name_covers("*.com", "example.com"));
+    }
+
+    #[test]
+    fn the_common_name_is_a_fallback_only_when_no_san_is_present() {
+        let cn_only = cert_with_cn_only("legacy.example.com");
+        assert!(cert_covers_domain(&cn_only, "legacy.example.com").is_ok());
+        assert!(cert_covers_domain(&cn_only, "other.example.com").is_err());
+
+        // With a SAN present the CN is ignored, exactly as browsers do.
+        let key = KeyPair::generate().unwrap();
+        let mut params = CertificateParams::new(vec!["real.example.com".to_string()]).unwrap();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, "cn.example.com");
+        let pem = params.self_signed(&key).unwrap().pem();
+        assert!(cert_covers_domain(&pem, "real.example.com").is_ok());
+        assert!(cert_covers_domain(&pem, "cn.example.com").is_err());
+    }
+
+    #[test]
+    fn a_self_signed_certificate_marked_ca_is_still_accepted() {
+        // `openssl req -x509` stamps CA:TRUE by default, so an `is_ca()` leaf
+        // filter would refuse every self-signed staging certificate. rcgen
+        // defaults to NoCa, so this fixture sets it BY HAND — without that, a
+        // suite of rcgen defaults stays green with the wrong filter restored.
+        let key = KeyPair::generate().unwrap();
+        let mut params = CertificateParams::new(vec!["staging.example.com".to_string()]).unwrap();
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let pem = params.self_signed(&key).unwrap().pem();
+        assert!(cert_covers_domain(&pem, "staging.example.com").is_ok());
+    }
+
+    #[test]
+    fn only_the_first_certificate_block_is_asked() {
+        // nginx binds the FIRST certificate in the file as the leaf. Measured
+        // against nginx 1.24.0: `[wrong, right]` + the RIGHT key fails
+        // `nginx -t` with a key mismatch, naming the right key — proof it bound
+        // `wrong`. Paired with the WRONG key it passes and serves `wrong`. So a
+        // rule that accepted the bundle because SOME block covered the domain
+        // would wave through the exact mismatch this function exists to stop.
+        let wrong = cert_with_sans(&["wrong.example.com"]);
+        let right = cert_with_sans(&["right.example.com"]);
+        let bundle = format!("{wrong}{right}");
+        assert!(cert_covers_domain(&bundle, "right.example.com").is_err());
+        // The same two blocks the other way round is a normal leaf+chain paste.
+        let bundle = format!("{right}{wrong}");
+        assert!(cert_covers_domain(&bundle, "right.example.com").is_ok());
+    }
+
+    #[test]
+    fn a_private_key_in_the_certificate_field_is_refused() {
+        // The old `contains("BEGIN CERTIFICATE")` check accepted this, and the
+        // certificate field is written with a plain world-readable write — so
+        // the key landed at 0644 and stayed there. It also blinded the expiry
+        // ladder, because the status reader decodes the first PEM block
+        // whatever its label and gets no date out of a key.
+        let key = KeyPair::generate().unwrap();
+        let params = CertificateParams::new(vec!["shop.example.com".to_string()]).unwrap();
+        let cert = params.self_signed(&key).unwrap().pem();
+        let pasted = format!("{}{}", key.serialize_pem(), cert);
+        let err = cert_covers_domain(&pasted, "shop.example.com").unwrap_err();
+        assert!(err.contains("private key"), "{err}");
+    }
+
+    #[test]
+    fn unreadable_input_is_refused_rather_than_installed() {
+        assert!(cert_covers_domain("not a certificate at all", "shop.example.com").is_err());
+        assert!(
+            cert_covers_domain(
+                "-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n",
+                "shop.example.com"
+            )
+            .is_err()
+        );
+    }
 }

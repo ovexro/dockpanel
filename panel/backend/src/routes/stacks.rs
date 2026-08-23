@@ -56,6 +56,13 @@ pub struct CreateStackRequest {
 pub struct UpdateStackRequest {
     pub yaml: String,
     pub domain: Option<String>,
+    /// ACME address. A domain with no address gets a vhost but no certificate —
+    /// and on an EDIT that is destructive rather than neutral, because `update`
+    /// forwards whatever arrives here on every redeploy and never falls back to
+    /// the address already stored. Omitting it for a stack that already HAS a
+    /// certificate rewrites the vhost without its `:443` block, behind a year of
+    /// HSTS. See `expose_domain` in the agent for why a supplied-certificate
+    /// mode (#104) needs a stored mode rather than one more optional field.
     pub ssl_email: Option<String>,
 }
 
@@ -64,7 +71,9 @@ pub struct UpdateStackRequest {
 /// The agent reports per-service outcomes inside a 200 — `deploy_compose`
 /// returns a result, never an `Err` — so a caller that only checks the HTTP
 /// status believes a stack deployed when none of it did.
-fn deployed_service_states(deploy_result: &serde_json::Value) -> (usize, usize, Vec<String>) {
+pub(crate) fn deployed_service_states(
+    deploy_result: &serde_json::Value,
+) -> (usize, usize, Vec<String>) {
     let services = deploy_result
         .get("services")
         .and_then(|s| s.as_array())

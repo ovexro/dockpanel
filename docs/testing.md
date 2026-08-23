@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.147.0.** The version stamp, the template count and every
+> **Reflects v2.148.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -372,7 +372,7 @@ found things from coming back.
 
 **On every commit** (`ci.yml`, `codeql.yml`):
 
-- **634 unit tests** across the crates — 400 in the backend, 234 in the agent.
+- **647 unit tests** across the crates — 403 in the backend, 244 in the agent.
   (The CLI crate carries none of its own today.) Re-derive rather than trust
   this line: `for c in agent backend cli; do (cd panel/$c && cargo test
   --release); done` and sum the `test result:` lines. Nothing recomputes this
@@ -402,12 +402,12 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Eighty-nine suites, **3087 assertions**, all green at the current commit:
+survivable. Eighty-nine suites, **3105 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
 | `carry-sweep-pin-e2e.sh` | 88 |
-| `ssl-controls-pin-e2e.sh` | 89 |
+| `ssl-controls-pin-e2e.sh` | 101 |
 | `db-import-pin-e2e.sh` | 53 |
 | `mail-smtp-dkim-pin-e2e.sh` | 25 |
 | `mail-auth-autosleep-pin-e2e.sh` | 28 |
@@ -444,7 +444,7 @@ survivable. Eighty-nine suites, **3087 assertions**, all green at the current co
 | `mail-client-view-pin-e2e.sh` | 23 |
 | `mail-sender-identity-pin-e2e.sh` | 38 |
 | `ownership-delete-pin-e2e.sh` | 36 |
-| `compose-stack-pin-e2e.sh` | 43 |
+| `compose-stack-pin-e2e.sh` | 49 |
 | `container-identity-pin-e2e.sh` | 42 |
 | `unattended-host-scope-pin-e2e.sh` | 118 |
 | `status-page-gate-pin-e2e.sh` | 17 |

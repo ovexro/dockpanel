@@ -157,6 +157,43 @@ fn proxy_site_config(port: u16) -> SiteConfig {
 /// Failures are reported into `response` as warnings rather than returned: the
 /// container is already up, and losing the whole deploy over a certificate that
 /// can be retried from the panel would be the worse trade.
+///
+/// ⚠ A "the operator supplies the certificate" mode cannot be a new request
+/// field alone, and the reason is the REDEPLOY rather than the first deploy.
+/// `stacks::update` sends the domain and the address from the request on every
+/// edit, and it only tears the vhost down when the domain actually changes — so
+/// an ordinary YAML edit arrives here with the same domain and no address. This
+/// function rewrites the vhost from `proxy_site_config`, which carries no
+/// certificate, and then returns at the address check below. The `:443` server
+/// block is gone, on an edit that never mentioned TLS, and `https.conf` has
+/// already sent a year of `Strict-Transport-Security` — so every browser that
+/// has seen the site refuses the plain-HTTP replacement. That is a hard outage
+/// with no way back for the visitor, not a downgrade anyone can click past.
+///
+/// Two separate repairs hide behind that, and only the second is new work. The
+/// OMISSION half is already solved one door over: the Docker-app deploy path
+/// falls back to the caller's own address rather than treating an absent one as
+/// "no TLS". Stacks have no such fallback. The MODE half is the new part — a
+/// supplied certificate has to be stored and re-read on every redeploy, so that
+/// an absent address stops being the only signal. `external_tls` is the shape to
+/// copy FROM and not the precedent to copy: it declines TLS on this box, so
+/// there is no `:443` block for a redeploy to lose, which is exactly what makes
+/// the rewrite above destructive for a supplied certificate and harmless there.
+///
+/// Reported as #104; the design was accepted in writing on 2026-08-12 and its
+/// three points are binding:
+///   1. Multiple registered certificates from the start, each named at upload
+///      time — not a single default slot. Migrating a one-slot design after
+///      domains have been claimed against it is the expensive version.
+///   2. Referenced by alias, never by filesystem path. A claim naming a path
+///      breaks the first time anything moves.
+///   3. Renewal suppression made explicit for a provided certificate — already
+///      the product's stated position on three other surfaces.
+///
+/// Prospective, not live: `PUT /api/stacks/{id}` has no caller in the shipped
+/// UI or the CLI today. It is documented public API, so "no caller" is not
+/// "unreachable", and the trap arms itself the moment stack editing gets a
+/// screen.
 async fn expose_domain(
     templates: &tera::Tera,
     domain: &str,

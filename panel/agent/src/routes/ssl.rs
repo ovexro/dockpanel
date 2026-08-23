@@ -205,13 +205,38 @@ async fn upload_cert(
         ));
     }
 
-    // Validate cert format
-    if !body.certificate.contains("BEGIN CERTIFICATE") || !body.private_key.contains("BEGIN") {
+    if !body.private_key.contains("BEGIN") {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "Invalid PEM format" })),
         ));
     }
+
+    // Ask what the certificate actually NAMES, before anything is written.
+    //
+    // Until this check the door took any text containing `BEGIN CERTIFICATE`.
+    // A certificate for another site installed cleanly: `nginx -t` passes (it
+    // does not compare the certificate against `server_name`), the panel wrote
+    // `ssl_enabled = true` and drew a padlock, and only the browser ever said
+    // `ERR_CERT_COMMON_NAME_INVALID`. Pasting the wrong `fullchain.pem` is an
+    // ordinary slip, not an attack — this host alone carries 22 of them.
+    //
+    // The refusal is deliberately BEFORE the first write, so a refused upload
+    // leaves the site byte-identical. The failure path below is not a safe
+    // place to arrive: it writes both files first and then re-renders the vhost
+    // from a SiteConfig this handler invents.
+    let covered = match ssl::cert_covers_domain(&body.certificate, &body.domain) {
+        Ok(names) => names,
+        Err(reason) => {
+            // A 400, not a 500: this is an answer to whoever asked, and the
+            // panel passes a 4xx sentence through to the operator's screen
+            // untouched. A 5xx would reach them as an incident id.
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": reason })),
+            ));
+        }
+    };
 
     let ssl_dir = format!("/etc/dockpanel/ssl/{}", body.domain);
     tokio::fs::create_dir_all(&ssl_dir).await
@@ -279,7 +304,11 @@ async fn upload_cert(
     // the column NULL — invisible to all three.
     let status = ssl::get_cert_status(&body.domain).await;
 
-    tracing::info!("Custom SSL certificate uploaded for {}", body.domain);
+    tracing::info!(
+        "Custom SSL certificate uploaded for {} (certificate names: {})",
+        body.domain,
+        covered.join(", ")
+    );
     Ok(Json(serde_json::json!({
         "ok": true,
         "cert_path": cert_path,

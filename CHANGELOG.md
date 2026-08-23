@@ -4,6 +4,72 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.148.0]
+
+### Fixed — an uploaded certificate is now checked against the site it secures
+
+Uploading your own SSL certificate accepted almost anything. The only checks were
+that the domain looked like a domain and that the text contained the words
+`BEGIN CERTIFICATE`; the certificate itself was never opened.
+
+So pasting the wrong `fullchain.pem` — the everyday slip on a server holding a
+few dozen of them — installed cleanly and reported success. nginx does not
+compare a certificate against the site it is serving, so it started without
+complaint, the panel wrote *SSL enabled* and drew a padlock, and the expiry
+countdown and the renewal alerts all treated the site as healthy. The only thing
+that disagreed was the visitor's browser, with `ERR_CERT_COMMON_NAME_INVALID`.
+Nothing in DockPanel would ever have told you.
+
+The upload is now refused, **before anything is written to disk**, if the
+certificate does not name the site: its subjectAltName entries are checked, or
+its Common Name when it carries no SAN, exactly as a browser does. The refusal
+says which names the certificate actually covers, so a mixed-up paste identifies
+itself. A wildcard counts for one level only — `*.example.com` covers
+`app.example.com` and not `app.staging.example.com`.
+
+Two smaller faults on the same door closed with it. A private key pasted into the
+certificate field is now refused instead of being written world-readable and left
+there; and because the expiry reader decodes the first block in the file whatever
+it is, that same paste used to leave the site with no recorded expiry — invisible
+to the countdown, the expiry alerts and the auto-healer alike.
+
+This is an agent-side change, so it reaches a server when that server's agent
+updates.
+
+### Fixed — a Compose deploy that did not happen was reported as running
+
+Adding a `docker-compose.yml` to a Git Deploy switches it onto a different code
+path, and two of that path's failures were silent.
+
+**Services that build from source were dropped without a word.** The Compose
+support runs registry images; it does not build them. Any service that named no
+image was skipped, so a repository with a Dockerfile — exactly the repository
+whose compose file builds from source — deployed without its own application
+while the panel recorded the new commit as running. Such a file is now refused,
+and the refusal names the services it would have skipped.
+
+**A deploy in which nothing came up was recorded as a success.** The agent
+reports each service's outcome inside an otherwise successful response, and
+nothing read those outcomes. This was not a rare case: the Compose engine removes
+nothing, so the *second* Compose deploy of the same deployment collides with its
+own container names and every service fails — and that was written down as a
+successful deploy of the new commit. Both call sites now read the per-service
+results, and a deploy where no service stayed running is recorded as failed with
+the agent's own reason.
+
+The rest of the warning in the Git Deploy guide still stands: a Compose deploy
+does not take over the Domain field, and does not remove the container already
+running, so your domain goes on serving the previous build.
+
+### Added — the accepted-but-unbuilt designs are now recorded in the code
+
+Two designs had been accepted in writing with reporters and existed nowhere a
+contributor would find them. Both are now written beside the code that would
+change: the constraint that a "supply your own certificate" mode for stacks needs
+a stored mode rather than another optional field, together with the three points
+settled on that design; and the five constraints on adding persistent volumes to
+Git Deploys, the first of which turns the obvious patch into data loss.
+
 ## [2.147.0]
 
 ### Fixed — removing a container let it silence the next container of the same name

@@ -56,6 +56,8 @@ TELE_COLL=panel/backend/src/services/telemetry_collector.rs
 TELE_ROUTE=panel/backend/src/routes/telemetry.rs
 UPDATE_ROUTE=panel/backend/src/routes/update.rs
 APPS_TSX=panel/frontend/src/pages/Apps.tsx
+GITDEP=panel/backend/src/routes/git_deploys.rs
+BE_ROUTER=panel/backend/src/routes/mod.rs
 
 for f in "$COMPOSE" "$APPS_ROUTE" "$LOGS_ROUTE" "$STACKS_BE" "$CLAIM" \
          "$TELE_COLL" "$TELE_ROUTE" "$UPDATE_ROUTE" "$APPS_TSX"; do
@@ -486,6 +488,75 @@ else
     ok "H5 the segment-dropping comparator is gone, not merely bypassed"
   else
     bad "H5 compare_versions is still present — a second, wrong answer to the same question"
+  fi
+fi
+
+# ── I. a compose git-deploy may not report a deploy that did not happen (s395) ──
+#
+# Two defects, one shape: the panel wrote `status = 'running'` for work the agent
+# had not done.
+#
+#  * The compose engine SKIPS any service it cannot resolve to a registry image,
+#    so a repository with a Dockerfile — the one whose compose file builds from
+#    source — deployed without its application while the row said running.
+#  * `deploy_compose` reports per-service outcomes INSIDE a 200 and never errors
+#    for a service that failed to start, so both callers took the HTTP status as
+#    the answer. With no teardown in the engine, the SECOND compose deploy of the
+#    same deployment collides with its own container names and every service
+#    fails — still reported as running.
+I_GD=$(subj "$GITDEP")  || { bad "I0 could not extract $GITDEP"; I_GD=""; }
+I_RT=$(subj "$BE_ROUTER") || { bad "I0 could not extract $BE_ROUTER"; I_RT=""; }
+if [ -n "$I_GD" ] && [ -n "$I_RT" ]; then
+  ok "I0 subjects extracted (git_deploys ${#I_GD}, routes/mod ${#I_RT} chars)"
+
+  # ⚠ The predicate must be the AGENT'S question. The agent deserialises `image`
+  # into an Option<String>; this side reads untyped YAML. They disagree about
+  # YAML null, so `image:` left blank — the ordinary way an author switches a
+  # service to `build:` — is Some(Null) here and None there. Pinned as the
+  # derivation: an arm naming the function survives the rule being inverted.
+  if has "$I_RT" 'None \| Some\(serde_yaml_ng::Value::Null\)'; then
+    ok "I1 the dropped-service predicate also treats a blanked image: line as no image"
+  else
+    bad "I1 the dropped-service predicate no longer matches what the agent skips — a compose file whose service says 'image:' with no value would deploy without that service again"
+  fi
+
+  # ⚠ NOT fnbody here: `compose_deploy_refusal` opens with a nested `fn
+  # sentence`, and this file's fnbody is bounded by the next fn declaration at
+  # ANY indent — so its window closes eight lines in, before the arm being
+  # pinned. Counted instead: the name occurs exactly twice, its declaration and
+  # its one call, so deleting the call reads 1 and goes red.
+  D=$(count "$I_GD" 'dropped_service_refusal')
+  if [ "$D" = "2" ]; then
+    ok "I2 the compose door refuses a file whose services name no image (declared once, called once)"
+  else
+    bad "I2 expected the no-image refusal declared once and called once, found $D occurrences — a compose file that builds from source would deploy without those services again"
+  fi
+
+  # BOTH copies of the branch, counted. There are two, they diverged once
+  # already, and fixing one is half a fix that reads exactly like a whole one.
+  N=$(count "$I_GD" 'and_then\(compose_outcome\)')
+  if [ "$N" = "2" ]; then
+    ok "I3 both compose deploy call sites read the per-service outcome (2)"
+  else
+    bad "I3 expected 2 compose call sites reading the per-service outcome, found $N — a 200 whose services all failed would be written as status='running'"
+  fi
+
+  # The reader is SHARED with the stacks door rather than copied, so the two
+  # paths cannot drift apart again.
+  M=$(count "$I_GD" 'stacks::deployed_service_states')
+  if [ "$M" = "1" ]; then
+    ok "I4 the per-service reader is the stacks one, not a second copy"
+  else
+    bad "I4 expected exactly 1 use of the shared per-service reader, found $M"
+  fi
+
+  # An empty report is NOT a failure: an agent reporting no services cannot be
+  # told from one too old to report them. Getting this backwards would fail every
+  # deploy against an older agent.
+  if has "$I_GD" 'total > 0 && running == 0'; then
+    ok "I5 only a report of services that ALL failed counts as a failure"
+  else
+    bad "I5 the empty-report guard is gone — a deploy against an agent that reports no services would be recorded as failed"
   fi
 fi
 

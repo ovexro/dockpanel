@@ -135,14 +135,34 @@ Two things that look like solutions and are not:
 > The presence of a compose file switches the deploy onto a different code path
 > that does not read the Domain field, does not write an nginx vhost, does not
 > issue a certificate, and does not remove the container already running. Your
-> domain would go on serving the previous build indefinitely while the panel
-> reported the deploy as successful. It also skips any compose service that
-> builds from source rather than naming an image — which is exactly what a repo
-> with a Dockerfile will have — and permanently disables blue-green deploys,
-> previews and rollback for that deploy.
+> domain goes on serving the previous build while the new stack runs beside it
+> on its own port. Blue-green deploys and preview environments are unavailable
+> while a compose file is present, and a rollback entry recorded under Compose
+> has no image to roll back to.
 
-Volumes on Git Deploys are tracked as unbuilt work rather than declined; see the
-issue tracker.
+Two parts of that warning were closed in v2.148.0, and the rest of it stands:
+
+- A compose file with a service that **builds from source instead of naming an
+  image** is now **refused**, and the refusal names the services. Previously the
+  compose engine skipped them silently, so a repository with a Dockerfile — the
+  usual case — deployed without its own application. If you see that refusal,
+  either give each of those services an already-built `image:`, or remove the
+  compose file: without it the deployment builds your Dockerfile and also gets
+  the domain, the certificate, zero-downtime swaps, previews and rollback.
+- A compose deploy in which **no service stayed running** is now recorded as
+  **failed**, with the agent's reason. Previously the panel wrote `running` for
+  it, because the per-service outcomes arrive inside a successful HTTP response
+  and nothing read them. This mattered more than it sounds: the compose engine
+  removes nothing, so a *second* compose deploy of the same deployment collides
+  with its own container names and every service fails — and that was reported
+  as a successful deploy of the new commit.
+
+Volumes on Git Deploys are tracked as unbuilt work rather than declined. The
+five constraints that make it bigger than a field — two `HostConfig` literals,
+the blue-green refusal it needs, previews that must not inherit volumes,
+delete-time cleanup that has to read the binds before removal, and a
+container-path-only field shape — are recorded in the agent beside the code that
+would change (`panel/agent/src/services/git_build.rs`).
 
 ## Nixpacks Auto-Detection
 
