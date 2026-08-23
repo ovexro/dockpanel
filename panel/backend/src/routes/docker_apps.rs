@@ -1845,11 +1845,25 @@ pub async fn remove_app(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid container ID"));
     }
 
+    // Resolved BEFORE the removal, because afterwards there is nothing left to
+    // inspect: the agent's response carries the domain it freed, never the
+    // container's name. A removed container is also never listed again, so the
+    // engine's own observation can never clear its expectation — this is the
+    // one door that can do it without a window.
+    let removed_name = resolve_container_name(&agent, &container_id).await;
+
     let agent_path = format!("/apps/{}", container_id);
     let result = agent
         .delete(&agent_path)
         .await
         .map_err(|e| agent_error("Container removal", e))?;
+
+    // Only after the removal succeeded. Clearing first and having the agent
+    // refuse would un-suppress a container that is still deliberately stopped,
+    // and the next sweep would page for it.
+    if let Some(ref name) = removed_name {
+        expected_stops::clear(&state.db, server_id, name).await;
+    }
 
     // Auto-cleanup DNS record if a domain was removed
     if let Some(domain_removed) = result.get("domain_removed").and_then(|v| v.as_str()) {

@@ -1684,6 +1684,25 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
             member.name
         );
     }
+
+    // The same absence, one table over — and it had no sweep at all.
+    //
+    // The clear above the ladder runs from OBSERVING a container alive, so a
+    // REMOVED container never reaches it: its expectation row outlives it, and
+    // the next container to claim that name inherits the silence. Removing an
+    // app and redeploying it under the same name is the supported way to rebuild
+    // one while keeping its data, so the container that inherits it is the one
+    // the operator has just been trying to repair — and if it fails to start,
+    // this engine skips its `container_down`, the auto-heal restart leg skips
+    // it, and the Apps page files it under "stopped on purpose", naming whoever
+    // stopped the container that no longer exists.
+    //
+    // The removal doors clear their own row, which is exact and has no window.
+    // This sweep is what covers a removal the panel did not perform — `docker
+    // rm` on the box — and any door added later, which is the failure the
+    // hardcoded list in this table's own pin suite could not see.
+    let observed_names: Vec<String> = observed.iter().map(|n| (*n).to_string()).collect();
+    expected_stops::clear_absent(pool, server_id, &observed_names, observed_at).await;
 }
 
 // ─── GAP 9: Alert Escalation ────────────────────────────────────────────

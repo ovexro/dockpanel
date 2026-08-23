@@ -97,6 +97,62 @@ pub async fn clear_if_older_than(
     .await;
 }
 
+/// Forget every expectation for a container this host no longer reports.
+///
+/// [`clear_if_older_than`] above runs from OBSERVING a container alive, so it
+/// can only ever reach a container that still exists. A REMOVED one is never
+/// observed again in any state, and nothing else reaches its row: the engine
+/// keeps skipping its `container_down` branch, the auto-heal restart leg keeps
+/// skipping it, and the Apps page keeps calling it "stopped on purpose" and
+/// naming whoever stopped the container that is gone. Not for a container that
+/// is absent — for the NEXT container of that name, which is the one that
+/// crashed.
+///
+/// Removing an app and redeploying it under the same name is the supported way
+/// to rebuild it while keeping its data (the data tree is keyed on the app's own
+/// name, not on the container), so the container this silences is not a corner
+/// case. It is the repair loop: stop it because it is misbehaving, remove it,
+/// redeploy it, and it is still misbehaving.
+///
+/// `alert_engine` runs the identical sweep for `alert_state` at the same call
+/// site, for the identical reason and after an identical live incident that ran
+/// four months. This is that sweep's missing twin.
+///
+/// ⚠ `observed` MUST be the host's complete listing, and an empty one does
+/// nothing. `container_name <> ALL('{}')` is true for every row, so a listing
+/// that is empty because the host could not be read would clear every
+/// expectation at once — and the next sweep would fire `container_down` for
+/// every container the operator had deliberately stopped, which is the defect
+/// this table was created to remove. An empty listing is the one observation
+/// that cannot tell "nothing is here" from "I can see nothing", and the cost of
+/// reading it wrong is not symmetric. A host with no containers has nothing for
+/// an expectation to suppress anyway; the removal doors clear their own row.
+///
+/// `stopped_at < observed_at` is the guard [`clear_if_older_than`] carries, for
+/// the same race: the snapshot is taken once and walked with awaited calls per
+/// container, so an expectation recorded inside that window is NEWER than the
+/// evidence being used to discard it.
+pub async fn clear_absent(
+    pool: &PgPool,
+    server_id: Uuid,
+    observed: &[String],
+    observed_at: chrono::DateTime<chrono::Utc>,
+) {
+    if observed.is_empty() {
+        return;
+    }
+
+    let _ = sqlx::query(
+        "DELETE FROM container_expected_stops \
+         WHERE server_id = $1 AND stopped_at < $2 AND container_name <> ALL($3)",
+    )
+    .bind(server_id)
+    .bind(observed_at)
+    .bind(observed)
+    .execute(pool)
+    .await;
+}
+
 /// Every container this host is expected to be holding stopped.
 ///
 /// Loaded once per member per sweep rather than queried per container: the

@@ -4,6 +4,45 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.147.0]
+
+### Fixed — removing a container let it silence the next container of the same name
+
+When you stop a container from the panel, DockPanel records that the stop was
+deliberate so it does not then alarm about a container being down. That record is
+kept against the container's **name**.
+
+If you went on to *remove* that container, the record stayed behind — and nothing
+was able to clear it. The only automatic clear happens when the panel sees the
+container running again, and a container that has been removed is never seen
+again at all.
+
+That matters because removing an app and deploying it again under the same name
+is the ordinary way to rebuild one while keeping its data. The replacement
+inherited the old record, so if it failed to start:
+
+- no **container down** alert was raised for it, ever;
+- automatic repair skipped it instead of trying to restart it;
+- and the **Apps** page filed it under *stopped on purpose*, attributing it to
+  whoever had stopped the container that no longer existed.
+
+So the one container you were most likely to be watching — the one you had just
+stopped, removed and redeployed because it was misbehaving — was the one the
+panel had quietly stopped reporting on. There was no expiry on this and no
+message anywhere; the record simply stayed until something of that name was
+started successfully, which is precisely what was failing to happen.
+
+**Two things changed.** Removing a container now forgets its record at the moment
+of removal — for a single app, for a whole stack, and for the containers replaced
+during a stack edit. And the alert engine now also clears records for containers
+the machine no longer reports at all, which covers a container removed outside
+the panel and any future way of removing one.
+
+That sweep deliberately does nothing when a machine reports no containers at all,
+because "there is nothing here" and "I could not read this machine" arrive
+looking the same, and acting on the second would clear every deliberate stop on
+that machine at once.
+
 ## [2.146.1]
 
 ### Fixed — the certificate-path repair in 2.146.0 missed the commonest case

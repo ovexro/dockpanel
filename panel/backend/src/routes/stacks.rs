@@ -450,6 +450,26 @@ pub async fn remove(
         )
         .await;
 
+    // Forget the expectation for every container the agent reports gone.
+    //
+    // The stack row is about to be deleted; the expectation is not tied to it.
+    // It is keyed on (server_id, container_name) and would outlive the stack —
+    // and the next container to claim that name would inherit the silence, with
+    // nothing able to clear it, because a removed container is never observed
+    // again. `stack_action` below already does exactly this for its own
+    // `removed` results; this door was handed the same response and dropped it.
+    if let (Some(server_id), Ok(body)) = (server_id, result.as_ref()) {
+        if let Some(results) = body.get("results").and_then(|v| v.as_array()) {
+            for r in results {
+                if r.get("status").and_then(|v| v.as_str()) == Some("removed") {
+                    if let Some(cname) = r.get("name").and_then(|v| v.as_str()) {
+                        expected_stops::clear(&state.db, server_id, cname).await;
+                    }
+                }
+            }
+        }
+    }
+
     // Delete DB record even if container removal had partial failures
     sqlx::query("DELETE FROM docker_stacks WHERE id = $1")
         .bind(id)
@@ -580,7 +600,7 @@ pub async fn update(
     // actually changing — tearing it down on every edit would drop the site for
     // as long as the redeploy takes.
     let vacating = previous_domain.as_deref().filter(|d| Some(*d) != domain.as_deref());
-    let _ = agent
+    let removed = agent
         .post(
             "/apps/stack/action",
             Some(serde_json::json!({
@@ -590,6 +610,23 @@ pub async fn update(
             })),
         )
         .await;
+
+    // These come straight back under the SAME names, which is why the engine's
+    // absence sweep cannot help here: the container is gone and replaced inside
+    // one 120-second tick, so it is never observed missing. If a replacement
+    // fails to start it would inherit the old container's expectation and be
+    // silenced — the one shape this door can produce and the sweep cannot see.
+    if let Ok(ref body) = removed {
+        if let Some(results) = body.get("results").and_then(|v| v.as_array()) {
+            for r in results {
+                if r.get("status").and_then(|v| v.as_str()) == Some("removed") {
+                    if let Some(cname) = r.get("name").and_then(|v| v.as_str()) {
+                        expected_stops::clear(&state.db, stack_server_id, cname).await;
+                    }
+                }
+            }
+        }
+    }
 
     // Deploy new containers with same stack_id
     let deploy_result = agent
@@ -607,14 +644,14 @@ pub async fn update(
     let deploy_result = match deploy_result {
         Ok(r) => r,
         Err(e) => {
-            restore_previous(&agent, id, &previous_yaml, previous_domain.as_deref(), previous_ssl_email.as_deref()).await;
+            restore_previous(&state.db, stack_server_id, &agent, id, &previous_yaml, previous_domain.as_deref(), previous_ssl_email.as_deref()).await;
             return Err(agent_error("Stack redeploy (previous definition restored)", e));
         }
     };
 
     let (running, total, errors) = deployed_service_states(&deploy_result);
     if total > 0 && running == 0 {
-        restore_previous(&agent, id, &previous_yaml, previous_domain.as_deref(), previous_ssl_email.as_deref()).await;
+        restore_previous(&state.db, stack_server_id, &agent, id, &previous_yaml, previous_domain.as_deref(), previous_ssl_email.as_deref()).await;
         return Err(err(
             StatusCode::BAD_GATEWAY,
             &format!(
@@ -654,18 +691,34 @@ pub async fn update(
 /// Best effort — if this also fails the operator still has the stored YAML,
 /// which is the whole point of not having overwritten it yet.
 async fn restore_previous(
+    pool: &sqlx::PgPool,
+    server_id: Uuid,
     agent: &AgentHandle,
     id: Uuid,
     yaml: &str,
     domain: Option<&str>,
     ssl_email: Option<&str>,
 ) {
-    let _ = agent
+    let removed = agent
         .post(
             "/apps/stack/action",
             Some(serde_json::json!({ "stack_id": id.to_string(), "action": "remove" })),
         )
         .await;
+
+    // Same reasoning as the vacate leg above: removed and redeployed under the
+    // same names inside one sweep, so nothing else can ever clear these.
+    if let Ok(ref body) = removed {
+        if let Some(results) = body.get("results").and_then(|v| v.as_array()) {
+            for r in results {
+                if r.get("status").and_then(|v| v.as_str()) == Some("removed") {
+                    if let Some(cname) = r.get("name").and_then(|v| v.as_str()) {
+                        expected_stops::clear(pool, server_id, cname).await;
+                    }
+                }
+            }
+        }
+    }
     match agent
         .post(
             "/apps/compose/deploy",

@@ -392,5 +392,179 @@ if SP=$(subj "$SPA"); then
 fi
 
 echo
+echo "== §J  a REMOVED container's expectation dies with it =="
+
+# §C clears from OBSERVING a container alive, so it can only ever reach one that
+# still exists. A REMOVED container is never observed again in any state, so its
+# row outlives it and the NEXT container of that name inherits the silence —
+# `container_down` skipped, the auto-heal restart leg skipped, and the Apps page
+# calling it "stopped on purpose" and naming whoever stopped the container that
+# is gone. Remove-and-redeploy under the same name is the supported way to
+# rebuild an app and keep its data, so that container is the repair loop's own.
+#
+# Two mechanisms, and they cover different failures. The DOORS clear exactly and
+# with no window, which is the only thing that helps when a container is removed
+# and replaced inside one 120s sweep. The engine's SWEEP is the only thing that
+# can see a removal the panel did not perform, or a door added later — which is
+# how this defect got here, since §E's list of doors is hardcoded and removal was
+# never in it.
+#
+# ⚠ Every door arm below DERIVES BOTH SIDES from the subject and carries a
+# floor, so it cannot go quiet when the population grows (#707/#708: a count of
+# a rule's OBSERVANCE cannot see a violation).
+
+# The top-level fn names of a subject, in order.
+fnnames() {
+  awk '
+    match($0, /^[[:space:]]*(pub )?(pub\(crate\) )?(async )?fn [A-Za-z0-9_]+\(/) {
+      s = substr($0, RSTART, RLENGTH); sub(/.*fn /, "", s); sub(/\(.*/, "", s); print s
+    }
+  ' <<< "$1"
+}
+
+if SV=$(subj "$SVC"); then
+  ABS=$(fnbody "$SV" clear_absent)
+  ABSF=$(flat "$ABS")
+  if [ "${#ABS}" -ge 200 ] && grep -qF 'DELETEFROMcontainer_expected_stops' <<< "$ABSF"; then
+    ok "J1-control clear_absent extracted (${#ABS} chars) and deletes from the table"
+
+    # ⛔ THE INVERSION GUARD, and it is the whole reason this arm exists.
+    # `container_name <> ALL('{}')` is TRUE for every row, so a sweep handed an
+    # empty listing deletes every expectation on the host — and the next sweep
+    # then fires container_down for every container the operator deliberately
+    # stopped, which is the exact defect v2.144.0 shipped this table to remove.
+    # An empty listing is the one observation that cannot tell "nothing is here"
+    # from "I can see nothing".
+    if grep -qF 'ifobserved.is_empty(){return;}' <<< "$ABSF"; then
+      ok "J2 the sweep refuses an EMPTY observation"
+    else
+      bad "J2 the sweep refuses an EMPTY observation — an empty listing would clear the whole host"
+    fi
+
+    # Same race `clear_if_older_than` carries: one snapshot, walked with awaited
+    # calls, so a stop recorded inside that window is NEWER than the evidence.
+    if grep -qF 'stopped_at<$' <<< "$ABSF"; then
+      ok "J3 the sweep will not discard an expectation newer than its own evidence"
+    else
+      bad "J3 the sweep will not discard an expectation newer than its own evidence"
+    fi
+
+    # §D's rule applies here too: this runs every 120s against every member, so
+    # touching the auto-sleep clock would silently disable auto-sleep for ever.
+    BUMPS=""
+    for col in last_activity_at last_woken_at total_sleeps is_sleeping; do
+      if grep -qF "$col" <<< "$ABS"; then BUMPS="$BUMPS $col"; fi
+    done
+    if [ -z "$BUMPS" ]; then
+      ok "J4 the sweep writes none of the auto-sleep columns"
+    else
+      bad "J4 the sweep writes none of the auto-sleep columns — found:$BUMPS"
+    fi
+  else
+    for a in J1-control J2 J3 J4; do bad "$a clear_absent extracted from $SVC"; done
+  fi
+else
+  for a in J1-control J2 J3 J4; do bad "$a $SVC is readable"; done
+fi
+
+if EG=$(subj "$ENGINE"); then
+  CH2=$(fnbody "$EG" check_container_health)
+  CH2F=$(flat "$CH2")
+  NABS=$(grep -oF 'expected_stops::clear_absent(' <<< "$CH2F" | wc -l)
+  if [ "$NABS" -eq 1 ]; then
+    ok "J5 the engine runs the absence sweep exactly once"
+  else
+    bad "J5 the engine runs the absence sweep exactly once — found $NABS"
+  fi
+
+  # ONE observation, read by both sweeps. A second binding of `observed` would
+  # let the expectation sweep be fed a filtered subset while the arm above still
+  # counted one call — and every name missing from that subset would be deleted.
+  NOBS=$(grep -oF 'letobserved:' <<< "$CH2F" | wc -l)
+  if [ "$NOBS" -eq 1 ]; then
+    ok "J6 the host's listing is bound once and both sweeps read that one binding"
+  else
+    bad "J6 the host's listing is bound once and both sweeps read that one binding — found $NOBS"
+  fi
+else
+  for a in J5 J6; do bad "$a $ENGINE is readable"; done
+fi
+
+# ── The doors. Both sides derived from the subject, with a floor. ────────────
+if ST=$(subj "$STACKS"); then
+  SDOORS=0; SCLEARS=0; SMISSING=""
+  while read -r fn; do
+    [ -n "$fn" ] || continue
+    B=$(flat "$(fnbody "$ST" "$fn")")
+    case "$B" in
+      *'"action":"remove"'*)
+        SDOORS=$((SDOORS+1))
+        case "$B" in
+          *'expected_stops::clear('*) SCLEARS=$((SCLEARS+1)) ;;
+          *) SMISSING="$SMISSING $fn" ;;
+        esac
+        ;;
+    esac
+  done <<< "$(fnnames "$ST")"
+
+  if [ "$SDOORS" -ge 3 ]; then
+    ok "J7-control found $SDOORS stack doors that ask the agent to REMOVE containers"
+    if [ "$SDOORS" -eq "$SCLEARS" ]; then
+      ok "J8 every stack removal door forgets the expectations ($SCLEARS/$SDOORS)"
+    else
+      bad "J8 every stack removal door forgets the expectations ($SCLEARS/$SDOORS) — missing:$SMISSING"
+    fi
+  else
+    bad "J7-control found $SDOORS stack removal doors — too few, the extractor is not matching"
+  fi
+else
+  for a in J7-control J8; do bad "$a $STACKS is readable"; done
+fi
+
+if AP=$(subj "$APPS"); then
+  ADOORS=0; ACLEARS=0; AMISSING=""
+  while read -r fn; do
+    [ -n "$fn" ] || continue
+    B=$(flat "$(fnbody "$AP" "$fn")")
+    case "$B" in
+      *'format!("/apps/{}",container_id)'*)
+        ADOORS=$((ADOORS+1))
+        case "$B" in
+          *'expected_stops::clear('*) ACLEARS=$((ACLEARS+1)) ;;
+          *) AMISSING="$AMISSING $fn" ;;
+        esac
+        ;;
+    esac
+  done <<< "$(fnnames "$AP")"
+
+  if [ "$ADOORS" -ge 1 ]; then
+    ok "J9-control found $ADOORS app door(s) that DELETE the container itself"
+    if [ "$ADOORS" -eq "$ACLEARS" ]; then
+      ok "J10 every app removal door forgets the expectation ($ACLEARS/$ADOORS)"
+    else
+      bad "J10 every app removal door forgets the expectation ($ACLEARS/$ADOORS) — missing:$AMISSING"
+    fi
+  else
+    bad "J9-control found $ADOORS app removal doors — too few, the extractor is not matching"
+  fi
+
+  # ORDERING, not presence. The name has to be read while the container still
+  # exists — the agent's removal response carries the freed domain, never the
+  # name — and the row must not be cleared until the removal has succeeded, or a
+  # refusal would un-suppress a container that is still deliberately stopped.
+  RB=$(fnbody "$AP" remove_app)
+  RES=$(grep -n 'resolve_container_name' <<< "$RB" | head -1 | cut -d: -f1)
+  DEL=$(grep -n '.delete(&agent_path)' <<< "$RB" | head -1 | cut -d: -f1)
+  CLR=$(grep -n 'expected_stops::clear(' <<< "$RB" | head -1 | cut -d: -f1)
+  if [ -n "$RES" ] && [ -n "$DEL" ] && [ -n "$CLR" ] && [ "$RES" -lt "$DEL" ] && [ "$DEL" -lt "$CLR" ]; then
+    ok "J11 remove_app resolves BEFORE the removal and clears AFTER it (resolve $RES < delete $DEL < clear $CLR)"
+  else
+    bad "J11 remove_app resolves BEFORE the removal and clears AFTER it (resolve '$RES', delete '$DEL', clear '$CLR')"
+  fi
+else
+  for a in J9-control J10 J11; do bad "$a $APPS is readable"; done
+fi
+
+echo
 printf 'expected-stop: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
