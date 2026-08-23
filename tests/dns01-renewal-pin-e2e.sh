@@ -285,10 +285,19 @@ eq "F3 every door records provenance after a renewal" \
 F_REC=$(fnbody "$BSSL" "pub(crate) async fn record_renewal_provenance(" | subjin)
 [ "$(printf '%s' "$F_REC" | wc -c)" -ge 500 ] || \
   { bad "SETUP" "record_renewal_provenance body extracted too small"; exit 1; }
-has "F4 it records only the two plans that change what is true" "$F_REC" \
-    "RenewalPlan::Http01{record_challenge:true}=>None,"
-has "F4b and the deliberate downgrade" "$F_REC" "RenewalPlan::LastResortHttp01{losing}=>Some(losing.clone()),"
-has "F4c every other plan writes nothing" "$F_REC" "_=>return,"
+# ⛔ TWO DIFFERENT QUESTIONS. "Does this renewal change what is RECORDED about
+# provenance?" is true for two plans. "Did it install a certificate at the site's
+# OWN directory?" is true for all THREE HTTP-01 plans. s393's first draft gated
+# the path on the provenance question and left the COMMONEST population — a row
+# already stamped `http-01` whose stored path names somewhere else — permanently
+# uncorrectable. v2.145.0 manufactured exactly that shape. Found by driving a box.
+has "F4 the recorded-provenance plans are the two that change what is true" "$F_REC" \
+    "RenewalPlan::Http01{record_challenge:true}=>(true,None),"
+has "F4b and the deliberate downgrade" "$F_REC" \
+    "RenewalPlan::LastResortHttp01{losing}=>(true,Some(losing.clone())),"
+has "F4c an ORDINARY recorded renewal still reaches the path write" "$F_REC" \
+    "RenewalPlan::Http01{record_challenge:false}=>(false,None),"
+has "F4d and only DNS-01 writes nothing — a wildcard's path names the ZONE" "$F_REC" "_=>return,"
 # The downgrade leaves a durable record the operator can filter for.
 has "F5 the downgrade is logged at a level the readers can count" "$F_REC" '"warning",'
 
@@ -301,8 +310,16 @@ has "F5 the downgrade is logged at a level the readers can count" "$F_REC" '"war
 # wildcard, with the NEW expiry stamped on the row. The window never reopened.
 # Both plans that reach this function ordered HTTP-01 for the site's own name, so
 # the certificate really is at the site's own directory.
-has "F6 the recorder moves the path with the challenge" "$F_REC" \
-    "ssl_cert_path=\$3,ssl_key_path=\$4,"
+has "F6 the recorder moves the path" "$F_REC" \
+    "ssl_cert_path=\$2,ssl_key_path=\$3,"
+# ⛔ AND UNGATED. The path write must not sit inside the provenance branch — that
+# is the defect this arm exists to prevent, and it is invisible to F6 alone.
+case "${F_REC%%ifrecord_provenance*}" in
+  *"ssl_cert_path=\$2,ssl_key_path=\$3,"*)
+     ok "F6c the path write precedes the provenance branch, so every HTTP-01 plan reaches it" ;;
+  *) bad "F6c the path write precedes the provenance branch" \
+         "it is gated on provenance — a row already stamped http-01 keeps its stale path for ever" ;;
+esac
 has "F6b bound to the directory the HTTP-01 order actually wrote" "$F_REC" \
     'format!("/etc/dockpanel/ssl/{domain}/fullchain.pem")'
 # ⚠ F6b's literal appears elsewhere in this file. It is sound ONLY because

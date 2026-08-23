@@ -4,6 +4,32 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.146.1]
+
+### Fixed — the certificate-path repair in 2.146.0 missed the commonest case
+
+2.146.0 made a renewal record the path of the certificate it had just installed,
+so the site's nginx config could no longer be re-rendered from a path pointing
+somewhere else. That repair was attached to the wrong condition: it ran only when
+the renewal also had something new to record about *how* the certificate had been
+issued.
+
+Those are two different questions. "Did this renewal learn something new about
+the certificate?" is true occasionally. "Did this renewal install a certificate
+under the site's own name?" is true every time. Gated on the first, the repair
+skipped the largest group of affected sites — the ones whose issue method was
+already known — and for those the stored path could never be corrected, so every
+future renewal would install a certificate and go on ignoring it.
+
+2.145.0 is what created that group: it recorded the issue method for sites that
+had none, without correcting their path. The repair now runs for every renewal
+that installs under the site's own name, which is what it should always have
+done. A wildcard is still left alone: its path names the zone, which is correct.
+
+Found by driving a real server, not by reading the code — the panel's own
+automatic first-issue step overwrote the test's setup and put the site straight
+into the group the repair was missing.
+
 ## [2.146.0]
 
 ### Fixed — deleting one certificate could take every site on the server down

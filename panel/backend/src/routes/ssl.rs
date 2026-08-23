@@ -754,9 +754,26 @@ pub(crate) async fn record_renewal_provenance(
     domain: &str,
     plan: &crate::helpers::RenewalPlan,
 ) {
-    let losing = match plan {
-        crate::helpers::RenewalPlan::Http01 { record_challenge: true } => None,
-        crate::helpers::RenewalPlan::LastResortHttp01 { losing } => Some(losing.clone()),
+    // ⛔ TWO DIFFERENT QUESTIONS, and an earlier draft of this fix conflated them.
+    // "Does this renewal change what is RECORDED about provenance?" is true for
+    // only two plans. "Did this renewal install a certificate at the site's OWN
+    // directory?" is true for ALL THREE HTTP-01 plans — including the ordinary
+    // recorded one, which is by far the commonest.
+    //
+    // Gating the path on the provenance question left the biggest population
+    // uncovered: a row ALREADY stamped `http-01` whose stored path still names
+    // somewhere else renews for ever, gets a fresh certificate at its own name
+    // every time, and has its vhost re-rendered from the stale path every time.
+    // v2.145.0 manufactured exactly that shape — it stamped `http-01` on
+    // unrecorded rows without touching the path — so those rows would have been
+    // permanently uncorrectable. Found by driving a real box, not by reading.
+    //
+    // `Dns01` still returns: a wildcard's path names the ZONE, which is correct,
+    // and repointing it at the site would be the defect inverted.
+    let (record_provenance, losing) = match plan {
+        crate::helpers::RenewalPlan::Http01 { record_challenge: true } => (true, None),
+        crate::helpers::RenewalPlan::Http01 { record_challenge: false } => (false, None),
+        crate::helpers::RenewalPlan::LastResortHttp01 { losing } => (true, Some(losing.clone())),
         _ => return,
     };
 
@@ -775,22 +792,32 @@ pub(crate) async fn record_renewal_provenance(
     // successful renewal. That is Shape B of the s392 defect, still live for every
     // row whose provenance was never recorded.
     //
-    // Writing it HERE fixes all three doors at once: every one of them calls this
+    // Writing it HERE fixes all four doors at once: every one of them calls this
     // before its rebuild (`ssl.rs` 962→964, `auto_healer.rs` 1159→1193,
-    // `security_scanner.rs` 655→711). And the scope is already exactly right —
-    // the match above returns early for every plan except the two whose
-    // certificate really does land at the site's own name.
+    // `security_scanner.rs` 655→711).
     let _ = sqlx::query(
-        "UPDATE sites SET ssl_challenge = 'http-01', ssl_cert_subject = $2, \
-         ssl_wildcard = FALSE, ssl_dns_zone_id = NULL, \
-         ssl_cert_path = $3, ssl_key_path = $4, updated_at = NOW() WHERE id = $1",
+        "UPDATE sites SET ssl_cert_path = $2, ssl_key_path = $3, \
+         updated_at = NOW() WHERE id = $1",
     )
     .bind(site_id)
-    .bind(domain)
     .bind(format!("/etc/dockpanel/ssl/{domain}/fullchain.pem"))
     .bind(format!("/etc/dockpanel/ssl/{domain}/privkey.pem"))
     .execute(pool)
     .await;
+
+    // The provenance half, only for the two plans that change what is TRUE about
+    // it. An ordinary recorded HTTP-01 renewal already says `http-01`; rewriting
+    // it would be a no-op that muddies which door last decided.
+    if record_provenance {
+        let _ = sqlx::query(
+            "UPDATE sites SET ssl_challenge = 'http-01', ssl_cert_subject = $2, \
+             ssl_wildcard = FALSE, ssl_dns_zone_id = NULL, updated_at = NOW() WHERE id = $1",
+        )
+        .bind(site_id)
+        .bind(domain)
+        .execute(pool)
+        .await;
+    }
 
     if let Some(losing) = losing {
         // Say exactly what was lost. The defect this ship removes was never the
