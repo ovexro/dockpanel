@@ -18,6 +18,7 @@ use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
 use crate::services::domain_claim;
+use crate::services::expected_stops;
 use crate::services::notifications;
 use crate::AppState;
 
@@ -648,15 +649,21 @@ pub async fn update(
             )
         }
         // Emptying the box is now a real instruction rather than a no-op, so it
-        // has to be answered rather than folded away. It is REFUSED, and the
-        // refusal names the reason: nothing in the git path takes a vhost down.
-        // `unexpose_domain` exists for Docker apps
-        // (panel/agent/src/routes/docker_apps.rs), and `git_build.rs` says in
-        // its own comment that wiring it here is separate work — until it is,
-        // accepting the clear would drop the record of a config still proxying
-        // to this container, which is the one state `services::ownership` was
-        // written to keep out of the tree. Only fires when a domain is actually
-        // stored: a deploy that never had one submits "" on every ordinary save.
+        // has to be answered rather than folded away. It is REFUSED.
+        //
+        // ⚠ THE REFUSAL'S ORIGINAL REASON IS NO LONGER TRUE and the message
+        // below has been reworded to match. "Nothing in the git path takes a
+        // vhost down" was the reason; `/git/release-domain` now does exactly
+        // that, under the same ownership gate, and the RENAME leg below drives
+        // it. The clear leg is deliberately NOT built in the same change: it
+        // needs the `domain` column to accept the '' sentinel the way
+        // `ssl_email` does, and every Option-shaped reader of that column
+        // re-checked — `remove` alone falls back on
+        // `domain.as_deref().unwrap_or(&name)`, where a stored '' would hand
+        // the agent an empty site identifier. That is a separate, named piece
+        // of work, not an oversight; the refusal stays honest until it lands.
+        // Only fires when a domain is actually stored: a deploy that never had
+        // one submits "" on every ordinary save.
         Some(d)
             if d.trim().is_empty()
                 && cur_domain
@@ -667,9 +674,10 @@ pub async fn update(
             return Err(err(
                 StatusCode::BAD_REQUEST,
                 &format!(
-                    "Removing the domain is not supported yet: the nginx vhost for {} would keep \
-                     proxying to this container and the panel has no way to take it down. Enter a \
-                     different domain to move the deploy, or delete the deploy to remove the vhost.",
+                    "Removing the domain is not supported yet: the vhost for {} would be left \
+                     without a replacement to put in its place. Entering a DIFFERENT domain now \
+                     moves the deploy cleanly — the old vhost and its certificate are taken down \
+                     for you — or delete the deploy to remove it entirely.",
                     cur_domain.as_deref().unwrap_or("")
                 ),
             ));
@@ -772,6 +780,50 @@ pub async fn update(
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("update git_deploys", e))?;
+
+    // A RENAME walked away from a vhost that is still serving. Until now the old
+    // config kept proxying to this same container with a certificate that kept
+    // renewing, while the row above released the claim on that name — so another
+    // tenant could claim it and be answered by the previous tenant's app.
+    //
+    // Asked of the agent, not decided here: only the box can see whether the old
+    // vhost still points at THIS container's port. `services::ownership` fails
+    // closed, so a vhost re-claimed by a site since the rename is left alone —
+    // which is the objection `git_build.rs` raised against doing this at all,
+    // and the reason it routes through the same gate the delete path uses.
+    //
+    // Fire-and-forget on purpose: the rename has already been committed and the
+    // operator asked for it. A box that is mid-reboot must not turn their save
+    // into a 502; the leak it leaves is the one that existed before this block.
+    if let (Some(new_domain), Some(old_domain)) = (domain.as_deref(), cur_domain.as_deref()) {
+        if !old_domain.trim().is_empty() && old_domain != new_domain {
+            match crate::helpers::agent_for_site_server(&state, Some(deploy.server_id), old_domain).await {
+                Ok(agent) => {
+                    if let Err(e) = agent
+                        .post(
+                            "/git/release-domain",
+                            Some(serde_json::json!({
+                                "domain": old_domain,
+                                "host_port": deploy.host_port,
+                            })),
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            "Renamed git deploy '{}' to {new_domain} but could not release \
+                             {old_domain} on its host: {e:?}. The old vhost may still be serving.",
+                            deploy.name
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    "Renamed git deploy '{}' to {new_domain} but its host was unreachable, \
+                     so {old_domain} was not released: {e:?}",
+                    deploy.name
+                ),
+            }
+        }
+    }
 
     // Turning the review requirement off is the one edit on this handler that
     // removes a control, and until now it was the only one that left no trace:
@@ -1439,6 +1491,20 @@ pub async fn keygen(
     })))
 }
 
+/// The name the agent's container actually carries, and therefore the key
+/// `container_expected_stops` and the alert engine both use.
+///
+/// The stored `git_deploys.name` is BARE — the agent adds `dockpanel-git-` in
+/// `stop_container`/`start_container` (`agent routes/git_build.rs`) via
+/// `scope_of(..).scoped(..)`, which is the identity for `GitScope::Deploy`, the
+/// scope the lifecycle trio always uses because it sends no `scope` key. So the
+/// prefix belongs HERE and exactly once — see the double-prefix note at the top
+/// of this file for what happens when a caller gets that wrong in either
+/// direction.
+fn expected_stop_key(name: &str) -> String {
+    format!("dockpanel-git-{name}")
+}
+
 /// POST /api/git-deploys/{id}/stop
 pub async fn stop(
     State(state): State<AppState>,
@@ -1463,6 +1529,21 @@ pub async fn stop(
     .await?;
     agent.post("/git/stop", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Stop container", e))?;
+    // The FIFTH deliberate stop door. The other four record here; this one did
+    // not, and it is the oldest of them — so the auto-healer never saw the
+    // operator's Stop in its skip-set and restarted this container within 120s,
+    // silently, while the row below kept saying 'stopped'. Recorded only AFTER
+    // the agent call succeeds, for the reason `expected_stops::record` gives.
+    let container_name = expected_stop_key(&config.name);
+    expected_stops::record(
+        &state.db,
+        config.server_id,
+        &container_name,
+        expected_stops::REASON_OPERATOR_STOP,
+        Some(&claims.email),
+    )
+    .await;
+    expected_stops::resolve_open_container_down(&state.db, config.server_id, &container_name).await;
     if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'stopped', updated_at = NOW() WHERE id = $1")
         .bind(id).execute(&state.db).await
     {
@@ -1491,6 +1572,11 @@ pub async fn start(
     .await?;
     agent.post("/git/start", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Start container", e))?;
+    // Symmetry with `stop()`. The alert engine also clears from observation on
+    // its next sweep, so this is the fast path rather than the only one — but
+    // without it a start followed by a genuine crash inside one poll window
+    // stays suppressed, which is the failure the table exists to avoid.
+    expected_stops::clear(&state.db, config.server_id, &expected_stop_key(&config.name)).await;
     if let Err(e) = sqlx::query("UPDATE git_deploys SET status = 'running', updated_at = NOW() WHERE id = $1")
         .bind(id).execute(&state.db).await
     {

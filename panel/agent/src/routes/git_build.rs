@@ -161,6 +161,17 @@ struct KeygenRequest {
     name: String,
 }
 
+/// The OLD domain a rename is walking away from, plus the port that proves the
+/// vhost is still this deploy's. `host_port` is not optional in spirit: without
+/// it `ownership::app_vhost` cannot tell "still ours" from "re-claimed since",
+/// and it fails CLOSED — so a missing port leaves the vhost in place.
+#[derive(Deserialize)]
+struct ReleaseDomainRequest {
+    domain: String,
+    #[serde(default)]
+    host_port: Option<u16>,
+}
+
 #[derive(Deserialize)]
 struct CleanupRequest {
     name: String,
@@ -369,6 +380,22 @@ async fn cleanup(
     .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// POST /git/release-domain — drop a vhost + certs this deploy no longer holds.
+///
+/// The rename half of `/git/cleanup`. A Git Deploy that changes its domain used
+/// to leave the OLD vhost proxying to the still-running container, with a
+/// certificate that kept renewing, while the panel released the name for anyone
+/// else to claim. Same ownership gate as the delete path, for the same reason.
+async fn release_domain(
+    Json(body): Json<ReleaseDomainRequest>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.domain.is_empty() || !is_safe_nginx_domain(&body.domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
+    }
+    git_build::release_domain_artifacts(&body.domain, body.host_port).await;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -660,6 +687,7 @@ pub fn router() -> Router<AppState> {
         .route("/git/deploy", post(deploy_container))
         .route("/git/keygen", post(keygen))
         .route("/git/cleanup", post(cleanup))
+        .route("/git/release-domain", post(release_domain))
         .route("/git/prune", post(prune))
         .route("/git/stop", post(stop_container))
         .route("/git/start", post(start_container))

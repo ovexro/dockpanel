@@ -25,6 +25,31 @@ Git Deploy lets you push code to a Git repository and have DockPanel automatical
 
 DockPanel will clone the repository, detect the build method, build a Docker image, and start the container.
 
+### Changing the domain later
+
+Editing the **Domain** field moves the deploy to the new hostname and takes the
+old one down for you: the previous nginx vhost is removed and its certificate
+directory deleted, so the old name stops answering and becomes available for
+another site or deploy to claim.
+
+Both removals are conditional, and deliberately so. The old vhost is removed
+only while it still proxies to *this* deploy's container; if something else has
+since taken that hostname over, the config is left exactly where it is and the
+panel logs why. The certificate directory is kept if another vhost still points
+at it — a wildcard shared across the zone, for example.
+
+> **Clearing the Domain field entirely is still refused.** Moving a deploy from
+> one hostname to another is supported; removing its hostname without supplying
+> a replacement is not yet, and the panel says so rather than accepting the edit
+> and silently keeping the old value.
+
+### Stopping a deploy
+
+**Stop** stops the container and it stays stopped. The panel records the stop as
+deliberate, so the health monitor leaves it alone instead of restarting it, and
+no "container down" alert is raised for a container you turned off yourself.
+**Start** clears that expectation, so a genuine crash afterwards alerts normally.
+
 ## Webhook Setup
 
 Webhooks trigger automatic deploys when you push to your repository.

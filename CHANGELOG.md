@@ -4,6 +4,32 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.150.0]
+
+### Fixed
+
+- **Stopping a Git Deploy did not stick.** The Stop button on a Git Deploy asked
+  the agent to stop the container and marked the row `stopped`, but — alone
+  among the panel's five deliberate-stop paths — it did not record the stop as
+  intentional. The health monitor therefore saw an exited container it had no
+  expectation for and restarted it, within 120 seconds, silently, while the
+  panel went on displaying "stopped". Start now clears that expectation, so a
+  genuine crash after a manual start still alerts.
+
+- **Renaming a Git Deploy's domain left the old hostname serving.** Changing the
+  Domain field pointed the deploy at its new hostname but left the previous
+  nginx vhost proxying to the same running container, with a certificate that
+  kept renewing — while the panel released its claim on that name. Another
+  account could then claim the old hostname and be answered by the previous
+  tenant's application. The old vhost and its certificate directory are now
+  taken down as part of the rename, but only when they still belong to this
+  deploy: a hostname something else has taken over since is left untouched, as
+  is a certificate directory another vhost still points at.
+
+  Clearing the Domain field entirely is still refused; the refusal's wording has
+  been corrected, because the reason it used to give — that nothing in the Git
+  Deploy path could take a vhost down — is no longer true.
+
 ## [2.149.0]
 
 ### Fixed — the public status page published monitor URLs, and the guide said it did not

@@ -470,12 +470,22 @@ pub async fn deploy_or_update(
             // reported success and the hostname served nothing, permanently,
             // because every later deploy took this same branch.
             //
-            // The PREVIOUS domain's vhost is deliberately left alone: it may
-            // have been re-claimed by a site since, and tearing down a config
-            // this deploy cannot prove it still owns is the mistake
-            // `services::ownership` exists to prevent. It is stale, not
-            // dangerous, and `unexpose`-on-rename is the separate piece of work
-            // tracked for the domain-rename feature.
+            // The PREVIOUS domain's vhost is not touched HERE, and that is
+            // still right: this function cannot prove the old config is still
+            // this deploy's, and tearing down one it does not own is the
+            // mistake `services::ownership` exists to prevent.
+            //
+            // ⛔ But "it is stale, not dangerous" was WRONG, and this comment
+            // said it for five months. The container keeps its host port across
+            // a rename, so the old vhost went on proxying to a LIVE app with a
+            // certificate that went on renewing — while the panel released the
+            // claim on that name, leaving it claimable by another tenant who
+            // would then be answered by the previous tenant's application.
+            //
+            // The teardown now exists as `release_domain_artifacts`, asks the
+            // ownership question this function could not, and is driven from
+            // the panel's update handler, which is the only caller that knows
+            // both the old name and the new one.
             if let Some(d) = domain {
                 let config_path = format!("/etc/nginx/sites-enabled/{d}.conf");
                 if !domain_unchanged || !std::path::Path::new(&config_path).exists() {
@@ -554,6 +564,55 @@ pub async fn deploy_or_update(
                 container_id,
                 blue_green: false,
             })
+        }
+    }
+}
+
+/// Take down the nginx vhost and certificates for `domain`, but ONLY while they
+/// still belong to the container on `host_port`.
+///
+/// Extracted from [`cleanup_container`] so the DELETE path and the RENAME path
+/// cannot drift: both must answer the same ownership question, and it is the
+/// question `services::ownership` exists to ask. A vhost that no longer proxies
+/// to this port has been re-claimed by something else since — a site, another
+/// deploy — and removing it would be an outage for a third party.
+///
+/// ⚠ Deliberately infallible: every caller is finishing an operation the
+/// operator already asked for, and failing their rename because a config file
+/// was already gone would be worse than the leak. Each branch says what it did.
+pub async fn release_domain_artifacts(domain: &str, host_port: Option<u16>) {
+    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    if std::path::Path::new(&config_path).exists() {
+        if crate::services::ownership::app_vhost(&config_path, host_port).may_delete() {
+            std::fs::remove_file(&config_path).ok();
+            tracing::info!("Removed nginx config: {config_path}");
+
+            match crate::services::nginx::test_config().await {
+                Ok(output) if output.success => {
+                    crate::services::nginx::reload().await.ok();
+                }
+                _ => {
+                    tracing::warn!("Nginx test failed after removing config for {domain}");
+                }
+            }
+        } else {
+            tracing::warn!(
+                "Leaving {config_path} in place: it does not proxy to this \
+                 container's port, so {domain} is now served by something else. \
+                 This runs unattended — taking that down would be an outage \
+                 nobody was present for."
+            );
+        }
+    }
+
+    // SSL certificates — not if a wildcard is shared across the zone.
+    let ssl_dir = format!("/etc/dockpanel/ssl/{domain}");
+    if std::path::Path::new(&ssl_dir).exists() {
+        if crate::services::ownership::cert_dir_in_use_elsewhere(domain) {
+            tracing::warn!("Leaving {ssl_dir} in place: another vhost still points at it.");
+        } else {
+            std::fs::remove_dir_all(&ssl_dir).ok();
+            tracing::info!("Removed SSL certs: {ssl_dir}");
         }
     }
 }
@@ -653,45 +712,9 @@ pub async fn cleanup_container(
 
     tracing::info!("Removed git container: {container_name}");
 
-    // Remove nginx config — only while it is still fronting THIS container.
+    // Remove nginx config + certs — only while they are still THIS container's.
     if let Some(ref d) = domain {
-        let config_path = format!("/etc/nginx/sites-enabled/{d}.conf");
-        if std::path::Path::new(&config_path).exists() {
-            if crate::services::ownership::app_vhost(&config_path, host_port).may_delete() {
-                std::fs::remove_file(&config_path).ok();
-                tracing::info!("Removed nginx config: {config_path}");
-
-                // Reload nginx after removing config
-                match crate::services::nginx::test_config().await {
-                    Ok(output) if output.success => {
-                        crate::services::nginx::reload().await.ok();
-                    }
-                    _ => {
-                        tracing::warn!("Nginx test failed after removing config for {d}");
-                    }
-                }
-            } else {
-                tracing::warn!(
-                    "Leaving {config_path} in place: it does not proxy to this \
-                     container's port, so {d} is now served by something else. \
-                     This cleanup runs unattended — taking that down would be \
-                     an outage nobody was present for."
-                );
-            }
-        }
-
-        // Remove SSL certificates — not if a wildcard shared across the zone.
-        let ssl_dir = format!("/etc/dockpanel/ssl/{d}");
-        if std::path::Path::new(&ssl_dir).exists() {
-            if crate::services::ownership::cert_dir_in_use_elsewhere(d) {
-                tracing::warn!(
-                    "Leaving {ssl_dir} in place: another vhost still points at it."
-                );
-            } else {
-                std::fs::remove_dir_all(&ssl_dir).ok();
-                tracing::info!("Removed SSL certs: {ssl_dir}");
-            }
-        }
+        release_domain_artifacts(d, host_port).await;
     }
 
     // Remove git repo / volume directory

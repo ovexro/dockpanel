@@ -56,12 +56,13 @@ ENGINE=panel/backend/src/services/alert_engine.rs
 HEALER=panel/backend/src/services/auto_healer.rs
 APPS=panel/backend/src/routes/docker_apps.rs
 STACKS=panel/backend/src/routes/stacks.rs
+GIT=panel/backend/src/routes/git_deploys.rs
 SVC=panel/backend/src/services/expected_stops.rs
 DEFAULTS=panel/backend/src/services/alert_runbook_defaults.rs
 MIG=panel/backend/migrations/20260822000000_container_expected_stops.sql
 SPA=panel/frontend/src/pages/Apps.tsx
 
-for f in "$ENGINE" "$HEALER" "$APPS" "$STACKS" "$SVC" "$DEFAULTS" "$MIG" "$SPA"; do
+for f in "$ENGINE" "$HEALER" "$APPS" "$STACKS" "$GIT" "$SVC" "$DEFAULTS" "$MIG" "$SPA"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
 
@@ -286,6 +287,79 @@ if ST=$(subj "$STACKS"); then
   fi
 else
   bad "E4 $STACKS is readable"
+fi
+
+# ⛔ THE LIST ABOVE IS A LITERAL, AND A LITERAL CANNOT SEE A DOOR IT DOES NOT
+# NAME. That is not a stylistic note: `git_deploys::stop` shipped 2026-03-18,
+# this table arrived 2026-08-22, and E1-E5 were green for the whole gap because
+# a fifth door is unrepresentable in an assertion that enumerates four. Every
+# NEW deliberate stop path owes an arm here in the same commit. A derived census
+# was attempted and is NOT available: the three doors post the agent call in
+# three different shapes (a computed `agent_path`, an inline `format!`, a
+# literal), and only ONE of the three modules persists a status column at all —
+# so any repo-wide grep would report a confident, false, all-clear.
+if GD=$(subj "$GIT"); then
+  GB=$(fnbody "$GD" "stop")
+  # FLOOR the subject: an fnbody whose pattern stops matching yields an EMPTY
+  # string, under which every `grep -q` below fails OPEN in the wrong direction.
+  if [ "$(wc -l <<< "$GB")" -lt 8 ]; then
+    bad "E7 git_deploys::stop body resolved ($(wc -l <<< "$GB") lines — subject lost)"
+  else
+    GBF=$(flat "$GB")
+    if grep -qF 'expected_stops::record(' <<< "$GBF"; then
+      ok "E7 git_deploys::stop records the expectation"
+    else
+      bad "E7 git_deploys::stop records the expectation"
+    fi
+
+    # Same ordering assertion as E3, for the same reason: recorded before the
+    # agent call succeeds would mark a container that is still running.
+    POSTG=$(grep -n 'agent_error("Stop container"' <<< "$GB" | head -1 | cut -d: -f1)
+    RECG=$(grep -n 'expected_stops::record' <<< "$GB" | head -1 | cut -d: -f1)
+    if [ -n "$POSTG" ] && [ -n "$RECG" ] && [ "$POSTG" -lt "$RECG" ]; then
+      ok "E7b git_deploys::stop records only after the stop succeeded (post $POSTG < record $RECG)"
+    else
+      bad "E7b git_deploys::stop records only after the stop succeeded (post '$POSTG', record '$RECG')"
+    fi
+  fi
+
+  GS=$(fnbody "$GD" "start")
+  if [ "$(wc -l <<< "$GS")" -lt 8 ]; then
+    bad "E7c git_deploys::start body resolved ($(wc -l <<< "$GS") lines — subject lost)"
+  elif grep -qF 'expected_stops::clear(' <<< "$(flat "$GS")"; then
+    ok "E7c git_deploys::start clears the expectation"
+  else
+    bad "E7c git_deploys::start clears the expectation"
+  fi
+
+  # The KEY is the whole fix. The stored name is bare; the healer matches the
+  # agent's container name. A record under the wrong key is silently inert — it
+  # writes a row nothing ever reads, which looks exactly like working.
+  #
+  # ⛔ SCOPED TO THE HELPER'S OWN BODY, and this arm was FILE-scoped when first
+  # written: dropping the prefix left it GREEN, because
+  # `format!("dockpanel-git-{name}-pr-{branch_slug}")` 2000 lines away CONTAINS
+  # the literal once whitespace is squeezed. Twelve occurrences of the prefix
+  # live in this file. A whole-file `has` here is unfalsifiable.
+  KB=$(fnbody "$GD" "expected_stop_key")
+  if [ "$(wc -l <<< "$KB")" -lt 2 ]; then
+    bad "E7d expected_stop_key body resolved ($(wc -l <<< "$KB") lines — subject lost)"
+  elif grep -qF 'format!("dockpanel-git-{name}")' <<< "$(flat "$KB")"; then
+    ok "E7d the recorded key carries the agent's dockpanel-git- prefix"
+  else
+    bad "E7d the recorded key carries the agent's dockpanel-git- prefix"
+  fi
+
+  # ...and that `stop()` actually routes its key through that helper, rather
+  # than spelling a bare name inline. E7d alone would pass with the helper
+  # correct and unused — the #732 shape this whole session exists to not repeat.
+  if grep -qF 'expected_stop_key(&config.name)' <<< "$(flat "$GB")"; then
+    ok "E7e git_deploys::stop derives its key through expected_stop_key"
+  else
+    bad "E7e git_deploys::stop derives its key through expected_stop_key"
+  fi
+else
+  bad "E7 $GIT is readable"
 fi
 
 if HL=$(subj "$HEALER"); then
