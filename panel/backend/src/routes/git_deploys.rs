@@ -1530,10 +1530,26 @@ pub async fn stop(
     agent.post("/git/stop", Some(serde_json::json!({ "name": config.name }))).await
         .map_err(|e| agent_error("Stop container", e))?;
     // The FIFTH deliberate stop door. The other four record here; this one did
-    // not, and it is the oldest of them — so the auto-healer never saw the
-    // operator's Stop in its skip-set and restarted this container within 120s,
-    // silently, while the row below kept saying 'stopped'. Recorded only AFTER
-    // the agent call succeeds, for the reason `expected_stops::record` gives.
+    // not, and it is the oldest of them.
+    //
+    // ⛔ READ THIS BEFORE BELIEVING THE CHANGELOG FOR v2.150.0. That entry said
+    // the auto-healer restarted the operator's Stop within 120s. **It does not,
+    // and it never did** — measured on a box, both versions, not reasoned:
+    // `list_deployed_apps` (agent `services/docker_apps.rs`) keeps only
+    // containers carrying `dockpanel.app.template`, and a git container carries
+    // no template label at all. So `/apps` never lists one, and BOTH readers of
+    // this table — the healer's container leg and `alert_engine` — walk exactly
+    // that listing. A git deploy is invisible to container healing and to
+    // `container_down` alerting alike. v2.150.1 corrects the claim.
+    //
+    // This recording is therefore INERT today, and `clear_absent` sweeps the row
+    // on the next tick precisely because the container is never observed. It is
+    // kept deliberately: the door genuinely is a deliberate stop, the arms in
+    // `expected-stop-pin-e2e.sh` §E7 hold it, and on the day a git container
+    // enters `/apps` this is the one line that stops the healer from reverting
+    // an operator's Stop. Removing it would re-open the fifth door silently.
+    //
+    // Recorded only AFTER the agent call succeeds, per `expected_stops::record`.
     let container_name = expected_stop_key(&config.name);
     expected_stops::record(
         &state.db,

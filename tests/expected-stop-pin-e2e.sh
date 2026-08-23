@@ -290,9 +290,16 @@ else
 fi
 
 # ⛔ THE LIST ABOVE IS A LITERAL, AND A LITERAL CANNOT SEE A DOOR IT DOES NOT
-# NAME. That is not a stylistic note: `git_deploys::stop` shipped 2026-03-18,
-# this table arrived 2026-08-22, and E1-E5 were green for the whole gap because
-# a fifth door is unrepresentable in an assertion that enumerates four. Every
+# NAME. `git_deploys::stop` shipped 2026-03-18, this table arrived 2026-08-22,
+# and E1-E5 were green for the whole gap because a fifth door is unrepresentable
+# in an assertion that enumerates four.
+#
+# ⚠ HONEST SCOPE (measured on a box at s397, both versions): closing that fifth
+# door changes NO observable behaviour today. `/apps` keeps only containers with
+# `dockpanel.app.template` and a git container has none, so neither the healer
+# nor the alert engine can see one. E7 pins a door that is correct and currently
+# inert — which is worth pinning, because the day `/apps` includes git
+# containers the pin is what stops the door regressing unnoticed. Every
 # NEW deliberate stop path owes an arm here in the same commit. A derived census
 # was attempted and is NOT available: the three doors post the agent call in
 # three different shapes (a computed `agent_path`, an inline `format!`, a

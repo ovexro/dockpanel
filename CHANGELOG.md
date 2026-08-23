@@ -4,6 +4,30 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.150.1]
+
+### Fixed
+
+- **Corrects a claim this project made one release ago.** The v2.150.0 note below
+  said that stopping a Git Deploy was reverted by the health monitor within 120
+  seconds. That is not true, and it never was. A fresh-box drive of both versions
+  established why: the agent's app listing keeps only containers carrying a
+  `dockpanel.app.template` label, and a Git Deploy's container carries no such
+  label — so it never appears in that listing, and both the auto-healer and the
+  alert engine read exactly that listing.
+
+  The recording added in v2.150.0 is correct and is kept, but it changes no
+  behaviour today. The v2.150.0 rename fix is unaffected and was driven on the
+  same box, in both directions.
+
+### Known limitation, now documented rather than implied
+
+- **A Git Deploy is not covered by container monitoring.** If its container
+  exits on its own, no `container_down` alert is raised and nothing restarts it.
+  Docker Apps get both. This is long-standing behaviour that no document stated;
+  the Git Deploy guide now says it plainly. Use an uptime monitor against the
+  deploy's URL if you need to be told when it stops serving.
+
 ## [2.150.0]
 
 ### Fixed

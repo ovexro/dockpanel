@@ -45,10 +45,14 @@ at it — a wildcard shared across the zone, for example.
 
 ### Stopping a deploy
 
-**Stop** stops the container and it stays stopped. The panel records the stop as
-deliberate, so the health monitor leaves it alone instead of restarting it, and
-no "container down" alert is raised for a container you turned off yourself.
-**Start** clears that expectation, so a genuine crash afterwards alerts normally.
+**Stop** stops the container and it stays stopped; **Start** brings it back.
+
+Be aware of what this does *not* give you, because the difference matters if you
+are used to Docker Apps: **a Git Deploy is not covered by container monitoring.**
+If its container exits on its own, no "container down" alert is raised and
+nothing restarts it automatically. Docker Apps get both; Git Deploys get
+neither. Use an uptime monitor against the deploy's URL if you need to be told
+when it stops serving.
 
 ## Webhook Setup
 
