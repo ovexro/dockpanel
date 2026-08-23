@@ -121,12 +121,19 @@ fn presented_dns_names(cert: &x509_parser::certificate::X509Certificate<'_>) -> 
 ///    block covered the domain would wave through exactly the silent mismatch
 ///    this function exists to stop.
 /// 2. **Blocks are filtered by label, and a non-certificate block is refused
-///    outright.** The certificate field is checked today with a bare
+///    outright.** The certificate field was checked with a bare
 ///    `contains("BEGIN CERTIFICATE")`, which a key-then-certificate paste
-///    satisfies — and that paste is written with a plain world-readable write,
-///    putting the private key at 0644 on disk permanently. It also blinds the
-///    expiry ladder, because the status reader decodes the first PEM block
-///    whatever its label and gets no date from a key.
+///    satisfies. That paste lands in `fullchain.pem`, written with a plain
+///    `fs::write` at **0644** while the key beside it is deliberately 0600 —
+///    driven on a fresh box and confirmed. ⚠ Do NOT overstate this: the key is
+///    not actually reachable by other local accounts, because `/etc/dockpanel`
+///    and `/etc/dockpanel/ssl` are both **0700**, so traversal stops above the
+///    file. The protection comes from the directory, not from the write, and it
+///    survives only as long as that stays true. The sharper half of the same
+///    paste is that it blinds the expiry ladder: the status reader decodes the
+///    first PEM block whatever its label and gets no date out of a key, so a
+///    first upload in that shape records no expiry at all — the row the
+///    countdown, the alerts and the healer all filter OUT.
 /// 3. **There is no `is_ca()` filter.** `openssl req -x509` stamps
 ///    `basicConstraints CA:TRUE` on its output, so every self-signed staging
 ///    certificate is a "CA" by that test and an `is_ca()` leaf filter refuses
@@ -141,9 +148,10 @@ pub fn cert_covers_domain(cert_pem: &str, domain: &str) -> Result<Vec<String>, S
         let block = block.map_err(|e| format!("the certificate could not be read: {e}"))?;
         if block.label != "CERTIFICATE" {
             return Err(format!(
-                "the certificate field contains a {} block. Paste only the certificate (and its \
-                 chain) here — the private key goes in its own field, and storing it here would \
-                 leave it readable by every account on this server.",
+                "the certificate field contains a {} block. Paste only the certificate here, with \
+                 its chain if it has one — the private key belongs in its own field, where it is \
+                 stored with the permissions a key needs and where this site's expiry can still \
+                 be read.",
                 block.label.to_ascii_lowercase()
             ));
         }
@@ -1039,11 +1047,13 @@ mod cert_coverage_tests {
 
     #[test]
     fn a_private_key_in_the_certificate_field_is_refused() {
-        // The old `contains("BEGIN CERTIFICATE")` check accepted this, and the
-        // certificate field is written with a plain world-readable write — so
-        // the key landed at 0644 and stayed there. It also blinded the expiry
-        // ladder, because the status reader decodes the first PEM block
-        // whatever its label and gets no date out of a key.
+        // The old `contains("BEGIN CERTIFICATE")` check accepted this. Driven on
+        // a fresh box: the key landed in `fullchain.pem` at 0644 beside a key
+        // file deliberately written 0600 — reachable by nobody else only because
+        // the enclosing directories are 0700, which is the directory's doing and
+        // not the write's. The sharper half is that it blinded the expiry
+        // ladder: the status reader decodes the first PEM block whatever its
+        // label and gets no date out of a key.
         let key = KeyPair::generate().unwrap();
         let params = CertificateParams::new(vec!["shop.example.com".to_string()]).unwrap();
         let cert = params.self_signed(&key).unwrap().pem();

@@ -4,6 +4,23 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.148.1]
+
+### Fixed — a refusal message that overstated what it was protecting
+
+v2.148.0's new certificate-upload check refuses a private key pasted into the
+certificate field, and told the operator that storing it there *"would leave it
+readable by every account on this server."* Driving the case on a fresh install
+showed that is not true: the key does land in `fullchain.pem` at 0644 while the
+key file beside it is deliberately 0600, but `/etc/dockpanel` and
+`/etc/dockpanel/ssl` are both 0700, so no other local account can reach it. The
+protection comes from the directory rather than from the write.
+
+The refusal stands — the certificate field should hold a certificate, and that
+paste also leaves the site with no readable expiry, which is the half that
+actually bites. Only the sentence changed, to say what is true. The same
+overstatement is corrected in v2.148.0's entry above and in the monitoring guide.
+
 ## [2.148.0]
 
 ### Fixed — an uploaded certificate is now checked against the site it secures
@@ -27,11 +44,14 @@ says which names the certificate actually covers, so a mixed-up paste identifies
 itself. A wildcard counts for one level only — `*.example.com` covers
 `app.example.com` and not `app.staging.example.com`.
 
-Two smaller faults on the same door closed with it. A private key pasted into the
-certificate field is now refused instead of being written world-readable and left
-there; and because the expiry reader decodes the first block in the file whatever
-it is, that same paste used to leave the site with no recorded expiry — invisible
-to the countdown, the expiry alerts and the auto-healer alike.
+Two smaller faults on the same door closed with it, both from a key-then-certificate
+paste that the old substring check accepted. The key landed in `fullchain.pem` at
+0644 while the key file beside it is deliberately 0600 — not reachable by other
+local accounts, because the enclosing directories are 0700, but protected by the
+directory rather than by the write. And because the expiry reader decodes the
+first block in the file whatever it is, that paste left the site with no recorded
+expiry — the row the countdown, the expiry alerts and the auto-healer all filter
+out.
 
 This is an agent-side change, so it reaches a server when that server's agent
 updates.

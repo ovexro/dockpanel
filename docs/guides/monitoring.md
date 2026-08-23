@@ -163,7 +163,8 @@ tells you which names it does cover. A wildcard counts for exactly one level, so
 check existed, pasting the wrong `fullchain.pem` installed cleanly: nginx does not
 compare a certificate against `server_name`, so the panel showed a padlock and only the
 browser disagreed, with `ERR_CERT_COMMON_NAME_INVALID`. The same check refuses a private
-key pasted into the certificate field, which used to be stored world-readable.
+key pasted into the certificate field — which used to be stored with the certificate's
+permissions rather than the key's, and left the site with no recorded expiry at all.
 
 **DockPanel renews only the Let's Encrypt certificates it issued itself.** Its ACME
 client can produce nothing else, so a certificate from any other issuer — a commercial
