@@ -230,60 +230,155 @@ pub struct CertStatus {
     pub days_remaining: Option<i64>,
 }
 
-/// Load existing ACME account or create a new one.
+/// Outcome of persisting freshly-minted ACME account credentials.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Persisted {
+    /// These credentials are the ones now on disk.
+    Written,
+    /// Somebody else's credentials were already there. Ours are abandoned, and
+    /// the caller MUST adopt what is on disk instead of using what it minted.
+    Adopted,
+}
+
+/// Write account credentials only if no account file exists yet.
+///
+/// `create_new` is the whole point: the create-or-fail is atomic in the kernel,
+/// so however many writers race, exactly one is told `Written` and every other
+/// is told `Adopted`. A plain write would let the last one silently overwrite
+/// the account every earlier certificate was issued under.
+///
+/// The 0600 is applied AT CREATION rather than by a following `set_permissions`,
+/// for the reason `write_key_file` above already documents: this file is an ACME
+/// account key, so the write-then-chmod window left the credential that can
+/// order and revoke this box's certificates briefly world-readable.
+pub(crate) async fn persist_account_credentials(
+    path: &str,
+    json: &str,
+) -> Result<Persisted, String> {
+    if let Some(parent) = Path::new(path).parent() {
+        tokio::fs::create_dir_all(parent).await.ok();
+    }
+
+    let mut opts = tokio::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    // `mode` here is tokio's own inherent method on its OpenOptions, so this
+    // needs no `OpenOptionsExt` import — adding one is an unused-import warning,
+    // not a fix. The permission is asserted on the file that lands, in
+    // `the_account_file_is_owner_only_from_creation`, because reading this line
+    // cannot tell you which `mode` resolved.
+    #[cfg(unix)]
+    opts.mode(0o600);
+
+    match opts.open(path).await {
+        Ok(mut f) => {
+            use tokio::io::AsyncWriteExt;
+            f.write_all(json.as_bytes())
+                .await
+                .map_err(|e| format!("Failed to save ACME account: {e}"))?;
+            f.flush()
+                .await
+                .map_err(|e| format!("Failed to save ACME account: {e}"))?;
+            Ok(Persisted::Written)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(Persisted::Adopted),
+        Err(e) => Err(format!("Failed to save ACME account: {e}")),
+    }
+}
+
+/// Read the stored ACME account, or `None` when no account file exists.
+async fn stored_account() -> Result<Option<Account>, String> {
+    if !Path::new(ACME_ACCOUNT_PATH).exists() {
+        return Ok(None);
+    }
+    let json = tokio::fs::read_to_string(ACME_ACCOUNT_PATH)
+        .await
+        .map_err(|e| format!("Failed to read ACME account: {e}"))?;
+    let creds: AccountCredentials = serde_json::from_str(&json)
+        .map_err(|e| format!("Failed to parse ACME account: {e}"))?;
+    let account = Account::builder()
+        .map_err(|e| format!("Failed to build ACME client: {e}"))?
+        .from_credentials(creds)
+        .await
+        .map_err(|e| format!("Failed to load ACME account: {e}"))?;
+    Ok(Some(account))
+}
+
+/// Load the existing ACME account or create one.
+///
+/// ⛔ THE INVARIANT: the account handed back is ALWAYS the one whose credentials
+/// are on disk. It is not a tidiness property — a certificate issued under an
+/// account key that is nowhere on disk can never be renewed. Every renewal door
+/// attaches the prior certificate as an RFC 9773 ARI `replaces` hint, the CA
+/// answers `unauthorized` because that account did not request the certificate
+/// being replaced, and `provision_cert` has no path that retries without the
+/// hint — so the order is refused, every cycle, until the certificate expires
+/// and the site goes dark behind a panel that reported a successful issuance.
+///
+/// ⭐ HOW THAT USED TO HAPPEN, and it needed no operator mistake: this was a
+/// check-then-act with a network round trip in the middle. Two sites created
+/// together on a fresh box each spawn an auto-SSL task; both looked, both saw no
+/// account file, both created a DIFFERENT account at Let's Encrypt, and the
+/// second `write` clobbered the first. Measured on a throwaway box: two
+/// "Created new ACME account" lines 443 ms apart, after which the certificates
+/// issued inside that window answered 422 to every renewal for ever, while one
+/// issued after it renewed 200. The window is the whole account-creation round
+/// trip, and creating two sites at once is ordinary first-run behaviour.
+///
+/// Two mechanisms, because they cover different racers:
+///   1. The mutex serialises the doors inside THIS process, which is where the
+///      race actually happened — seven call sites, all of them reachable from a
+///      `tokio::spawn`.
+///   2. `create_new` covers a second process (an agent restart overlapping a
+///      running one), which no in-process lock can see. Losing that race is not
+///      an error: the loser adopts the winner's account and abandons its own.
 pub async fn load_or_create_account(email: &str) -> Result<Account, String> {
-    if Path::new(ACME_ACCOUNT_PATH).exists() {
-        let json = tokio::fs::read_to_string(ACME_ACCOUNT_PATH)
-            .await
-            .map_err(|e| format!("Failed to read ACME account: {e}"))?;
-        let creds: AccountCredentials = serde_json::from_str(&json)
-            .map_err(|e| format!("Failed to parse ACME account: {e}"))?;
-        let account = Account::builder()
-            .map_err(|e| format!("Failed to build ACME client: {e}"))?
-            .from_credentials(creds)
-            .await
-            .map_err(|e| format!("Failed to load ACME account: {e}"))?;
+    // Held across the whole load-or-create, including the round trip to the CA.
+    // It is taken once per boot in practice; the cost is bounded by the very
+    // thing it prevents happening twice.
+    static ACCOUNT_INIT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _serialise = ACCOUNT_INIT.lock().await;
+
+    if let Some(account) = stored_account().await? {
         tracing::info!("Loaded existing ACME account");
-        Ok(account)
-    } else {
-        let (account, creds) = Account::builder()
-            .map_err(|e| format!("Failed to build ACME client: {e}"))?
-            .create(
-                &NewAccount {
-                    contact: &[&format!("mailto:{email}")],
-                    terms_of_service_agreed: true,
-                    only_return_existing: false,
-                },
-                LetsEncrypt::Production.url().to_string(),
-                None,
-            )
-            .await
-            .map_err(|e| format!("Failed to create ACME account: {e}"))?;
+        return Ok(account);
+    }
 
-        // Save credentials
-        let json = serde_json::to_string_pretty(&creds)
-            .map_err(|e| format!("Failed to serialize ACME creds: {e}"))?;
-        if let Some(parent) = Path::new(ACME_ACCOUNT_PATH).parent() {
-            tokio::fs::create_dir_all(parent).await.ok();
+    let (account, creds) = Account::builder()
+        .map_err(|e| format!("Failed to build ACME client: {e}"))?
+        .create(
+            &NewAccount {
+                contact: &[&format!("mailto:{email}")],
+                terms_of_service_agreed: true,
+                only_return_existing: false,
+            },
+            LetsEncrypt::Production.url().to_string(),
+            None,
+        )
+        .await
+        .map_err(|e| format!("Failed to create ACME account: {e}"))?;
+
+    let json = serde_json::to_string_pretty(&creds)
+        .map_err(|e| format!("Failed to serialize ACME creds: {e}"))?;
+
+    match persist_account_credentials(ACME_ACCOUNT_PATH, &json).await? {
+        Persisted::Written => {
+            tracing::info!("Created new ACME account for {email}");
+            Ok(account)
         }
-        tokio::fs::write(ACME_ACCOUNT_PATH, json)
-            .await
-            .map_err(|e| format!("Failed to save ACME account: {e}"))?;
-
-        // Restrict ACME account key permissions to owner-only (0o600)
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Err(e) = tokio::fs::set_permissions(
-                ACME_ACCOUNT_PATH,
-                std::fs::Permissions::from_mode(0o600),
-            ).await {
-                tracing::error!("Failed to set ACME account key permissions: {e}");
-            }
+        Persisted::Adopted => {
+            // Another PROCESS wrote first. Returning the account just minted
+            // would issue certificates under a key that is nowhere on disk,
+            // which is precisely the defect this function was rewritten to
+            // remove — so adopt the stored one and let ours go unused.
+            tracing::warn!(
+                "An ACME account was written by another process first — adopting it and \
+                 abandoning the one just created, so every certificate is issued under the \
+                 account whose key is on disk"
+            );
+            stored_account().await?.ok_or_else(|| {
+                "ACME account file disappeared between creation and read".to_string()
+            })
         }
-
-        tracing::info!("Created new ACME account for {email}");
-        Ok(account)
     }
 }
 
@@ -932,10 +1027,11 @@ fn offset_to_chrono(dt: time::OffsetDateTime) -> Option<chrono::DateTime<chrono:
     chrono::DateTime::<chrono::Utc>::from_timestamp(dt.unix_timestamp(), dt.nanosecond())
 }
 
-// ⚠ This module must stay the LAST thing in this file. The pin suites blank
-// from the first `#[cfg(test)]` to EOF and never resume, so a test module
+// ⚠ These test modules must stay the LAST thing in this file. The pin suites
+// blank from the first `#[cfg(test)]` to EOF and never resume, so a test module
 // placed mid-file hides every production line below it from every `prod_*` arm
-// in every suite that reads this file.
+// in every suite that reads this file. Adding a module is fine; adding
+// PRODUCTION code below one is not.
 #[cfg(test)]
 mod cert_coverage_tests {
     use super::*;
@@ -1072,5 +1168,99 @@ mod cert_coverage_tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod acme_account_persist_tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("dp-acme-{tag}-{}", uuid::Uuid::new_v4()))
+    }
+
+    /// The defect, reproduced directly: many doors reach for the account at
+    /// once on a fresh box, and each of them has DIFFERENT credentials to
+    /// write, because each minted its own account at the CA.
+    ///
+    /// Exactly one may win. Before `create_new`, every one of them reported
+    /// success and the last write decided which account survived — leaving the
+    /// certificates issued under the others permanently unrenewable.
+    #[tokio::test]
+    async fn exactly_one_of_many_concurrent_writers_wins() {
+        let dir = scratch("race");
+        let path = dir.join("acme-account.json");
+        let path = path.to_str().unwrap().to_string();
+
+        let mut set = tokio::task::JoinSet::new();
+        for i in 0..12 {
+            let path = path.clone();
+            set.spawn(async move {
+                let creds = format!("{{\"account\":{i}}}");
+                (i, persist_account_credentials(&path, &creds).await.unwrap())
+            });
+        }
+
+        let mut written = Vec::new();
+        let mut adopted = 0;
+        while let Some(r) = set.join_next().await {
+            let (i, outcome) = r.unwrap();
+            match outcome {
+                Persisted::Written => written.push(i),
+                Persisted::Adopted => adopted += 1,
+            }
+        }
+
+        assert_eq!(written.len(), 1, "exactly one writer may win, got {written:?}");
+        assert_eq!(adopted, 11, "every other writer must be told to adopt");
+
+        // …and the file holds the WINNER's bytes. Not a loser's, and not a mix:
+        // the winner is the account whose key every later certificate is bound
+        // to, so "somebody won" is not enough — it has to be the one that was
+        // told it won.
+        let on_disk = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(on_disk, format!("{{\"account\":{}}}", written[0]));
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn an_existing_account_is_adopted_never_overwritten() {
+        let dir = scratch("adopt");
+        let path = dir.join("acme-account.json");
+        let path = path.to_str().unwrap().to_string();
+
+        assert_eq!(
+            persist_account_credentials(&path, "{\"account\":\"first\"}").await.unwrap(),
+            Persisted::Written
+        );
+        assert_eq!(
+            persist_account_credentials(&path, "{\"account\":\"second\"}").await.unwrap(),
+            Persisted::Adopted
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&path).await.unwrap(),
+            "{\"account\":\"first\"}",
+            "the incumbent account must survive a later writer"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    /// The account key can order and revoke every certificate on this box, so
+    /// it must never exist even briefly at the default mode.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_account_file_is_owner_only_from_creation() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("mode");
+        let path = dir.join("acme-account.json");
+        let path = path.to_str().unwrap().to_string();
+
+        persist_account_credentials(&path, "{}").await.unwrap();
+        let mode = tokio::fs::metadata(&path).await.unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "got {mode:o}");
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }

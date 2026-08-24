@@ -4,6 +4,50 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.152.0]
+
+### Fixed — two sites created at once could leave both certificates unrenewable
+
+Creating two sites at the same moment on a fresh install could mint **two
+different Let's Encrypt accounts**, and every certificate issued under the one
+that lost the race then failed to renew — permanently, and silently.
+
+Each site's automatic SSL runs in its own background task, and both tasks ask
+for the ACME account the same way: look for the account file, and create an
+account if it is not there. Creating one is a round trip to Let's Encrypt, so on
+a fresh box both tasks looked before either had finished writing, both created a
+distinct account, and the second write replaced the first. The certificate
+issued under the replaced account was still valid and still served — but its
+account key was no longer anywhere on disk.
+
+That only surfaced later, at renewal. Every renewal names the certificate it is
+replacing (RFC 9773 ARI), the CA answered *"requester account did not request
+the certificate being replaced"*, and the order was refused. There is no path
+that retries without that hint, so the renewal failed on every attempt until the
+certificate expired and the site stopped loading, behind a panel that had
+reported the original issuance as successful.
+
+Measured on a throwaway box with real DNS and real Let's Encrypt issuance,
+before and after, with the agent binary as the only variable. Before: two sites
+created together produced **two** accounts 163 ms apart, both sites got real
+certificates, and renewal was refused with the ARI error. After: **one** account,
+the second task logging *"Loaded existing ACME account"*, both sites again
+holding real certificates, and both renewing normally.
+
+The account is now resolved under a lock, so the two tasks cannot both create
+one, and the account file is created atomically, so a second *process* — an
+agent restart overlapping a running one — loses the race cleanly and adopts the
+account that is already on disk rather than using the one it just made. The
+guarantee is now explicit: the account a certificate is issued under is always
+the account whose key is stored.
+
+### Security — the ACME account key is owner-only from creation
+
+The same file was written and then `chmod`-ed, leaving the credential that can
+order and revoke this server's certificates briefly readable by any local user.
+It is now created with its permissions already set, the way the TLS private-key
+writer beside it already was.
+
 ## [2.151.0]
 
 ### Fixed — adding a mail domain silently rewrote the website of the same name
