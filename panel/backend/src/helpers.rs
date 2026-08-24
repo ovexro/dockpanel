@@ -1054,10 +1054,38 @@ fn strip_zero_offset_seconds(s: &str) -> Option<String> {
 /// same moment, so a pure refusal would ENLARGE the blast radius of the very
 /// defect it was written to remove.
 ///
-/// Seven days sits under every profile's fallback margin
-/// (`auto_healer::fallback_renewal_margin`: 2 / 15 / 30), so the ladder has
-/// already been climbed by the time this rung is reached.
+/// Seven days sits under the `tlsserver` and `classic` fallback margins
+/// (`auto_healer::fallback_renewal_margin`: 15 / 30), so for those the ladder
+/// has already been climbed by the time this rung is reached.
+///
+/// ⚠ It does NOT sit under `shortlived`'s margin of two days, and that sentence
+/// used to claim it did while citing the very number that refutes it. See
+/// [`dns01_last_resort_days`] — this constant is the DEFAULT, not the rung.
 pub const DNS01_LAST_RESORT_DAYS: i64 = 7;
+
+/// The last-resort rung for one site, which depends on its ACME profile.
+///
+/// ⚠ A single constant was not merely imprecise here, it was arithmetically
+/// unreachable. `days_remaining` is `num_days()` of what is left, and a
+/// `shortlived` certificate is ~160 hours — so that value is at most SIX from
+/// the instant of issuance and can never exceed seven. The `Refuse` rung was
+/// therefore dead code for the entire profile: every DNS-01 renewal for a
+/// shortlived site whose zone had gone took the silent single-name downgrade,
+/// and the operator was never told while the zone was still repairable.
+///
+/// The rung must sit STRICTLY BELOW the profile's renewal margin, or the door
+/// never runs in a window where `Refuse` can be returned — renewal begins at
+/// the margin, so a rung at or above it is unreachable by construction. That
+/// invariant, not the number, is what `dns01-renewal` §D pins.
+///
+/// Mirrors the shape of `auto_healer::fallback_renewal_margin` on purpose: the
+/// two are read together and must stay in step.
+pub fn dns01_last_resort_days(profile: Option<&str>) -> i64 {
+    match profile {
+        Some("shortlived") => 1,
+        _ => DNS01_LAST_RESORT_DAYS,
+    }
+}
 
 /// What a renewal door should DO with a site, decided before any ACME order.
 #[derive(Debug, Clone, PartialEq)]
@@ -1171,7 +1199,8 @@ pub async fn renewal_plan(
 
     // No reachable zone. Refuse while that is still repairable; downgrade
     // deliberately once it is not.
-    if days_remaining.is_some_and(|d| d <= DNS01_LAST_RESORT_DAYS) {
+    let last_resort = dns01_last_resort_days(site.ssl_profile.as_deref());
+    if days_remaining.is_some_and(|d| d <= last_resort) {
         RenewalPlan::LastResortHttp01 { losing: names }
     } else {
         RenewalPlan::Refuse {

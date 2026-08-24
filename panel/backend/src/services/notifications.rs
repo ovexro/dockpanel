@@ -949,6 +949,40 @@ pub async fn fire_alert(
     let _ = try_fire_alert(pool, user_id, server_id, site_id, alert_type, state_key, severity, title, message).await;
 }
 
+/// The `state_key`s raised under `alert_type = "ssl_renewal_failure"`.
+///
+/// Both SSL loops raise FIVE different conditions under that one type, and
+/// `fire_alert_deduped` below dedups on `(alert_type, site_id, state_key)`.
+/// Feeding it the whole-server key made all five one subject, so whichever
+/// fired first muted the other four for twelve hours — four of them `critical`.
+///
+/// The pairing that made this fatal is sequential, not coincidental.
+/// `RenewalPlan::Refuse` alerts every twelve hours for as long as a DNS-01 zone
+/// stays unreachable, and the downgrade it ends in fires only once that same
+/// refusal reaches the certificate's last week. The warning is therefore always
+/// inside the window that hid the critical, and the alert saying which names
+/// stopped being covered could not be delivered to the only people who could
+/// ever receive it.
+///
+/// Keyed per CONDITION, not per certificate: `site_id` already names the
+/// certificate, and the two loops must still collapse to ONE alert when they
+/// reach the same condition on the same site — which is the flood control the
+/// dedup was added for and which these keys preserve exactly.
+pub mod ssl_renewal_key {
+    /// The installed certificate was issued by somebody else, so renewing it
+    /// would replace it. Announced, not failed.
+    pub const DECLINED: &str = "declined";
+    /// A renewal was attempted and failed.
+    pub const FAILED: &str = "failed";
+    /// A renewal could not be attempted at all — a configuration problem, so
+    /// deliberately a different sentence from FAILED.
+    pub const BLOCKED: &str = "blocked";
+    /// A DNS-01 renewal refused while there is still time to fix the zone.
+    pub const DNS01_DECLINED: &str = "dns01_declined";
+    /// A DNS-01 certificate downgraded to a single name in its last week.
+    pub const DNS01_DOWNGRADED: &str = "dns01_downgraded";
+}
+
 /// Fire an alert unless one of the same type already fired for the same site
 /// inside `within_hours`.
 ///

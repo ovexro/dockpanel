@@ -735,7 +735,7 @@ async fn ssl_renewal_blocked(
         None,
         Some(site_id),
         "ssl_renewal_failure",
-        "",
+        notifications::ssl_renewal_key::BLOCKED,
         "critical",
         &format!("SSL renewal blocked: {domain}"),
         &format!(
@@ -774,7 +774,7 @@ async fn ssl_dns01_declined_alert(
         server_id,
         Some(site_id),
         "ssl_renewal_failure",
-        "",
+        notifications::ssl_renewal_key::DNS01_DECLINED,
         "warning",
         &format!("SSL certificate for {domain} needs a Cloudflare zone"),
         reason,
@@ -803,7 +803,7 @@ async fn ssl_dns01_downgraded_alert(
         server_id,
         Some(site_id),
         "ssl_renewal_failure",
-        "",
+        notifications::ssl_renewal_key::DNS01_DOWNGRADED,
         "critical",
         &format!("SSL certificate downgraded: {domain}"),
         &format!(
@@ -1226,7 +1226,7 @@ async fn auto_renew_ssl(pool: &PgPool, agents: &AgentRegistry) {
                 Some(*server_id),
                 Some(*site_id),
                 "ssl_renewal_failure",
-                "",
+                notifications::ssl_renewal_key::FAILED,
                 "critical",
                 &format!("SSL renewal failed: {domain}"),
                 &format!(

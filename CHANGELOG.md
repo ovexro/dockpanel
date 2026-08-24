@@ -4,6 +4,56 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.154.0]
+
+### Fixed — a warning about one certificate problem silenced the alarm about a worse one
+
+Every alert about a certificate that will not renew was filed under the same
+subject. DockPanel raises five different ones for a site — the certificate was
+issued by somebody else, the renewal failed, the renewal could not be attempted,
+the Cloudflare zone is missing, the certificate was downgraded — and four of the
+five are critical. Because they shared a subject, the alert system treated them
+as repeats of each other and sent only the first for twelve hours.
+
+The first one is usually the least serious. A site whose Cloudflare zone has gone
+gets a warning saying so, roughly twice a day, for as long as the zone stays
+missing. That warning was enough to suppress the critical alert that follows it:
+the one that says the certificate has just been reissued **without** the extra
+hostnames it used to cover. Because the warning repeats until the moment the
+downgrade happens, the downgrade alert was always inside the silenced window, and
+that alert only ever fires once per site — so it was not delayed, it was lost.
+Nothing else reported it: the alert is suppressed before every channel, the panel
+bell included, and the certificate list only ever shows an expiry date.
+
+Worse, the downgrade renews the certificate, so the separate expiry alert saw a
+healthy date again and announced *"SSL certificate renewed"*. The only message
+that arrived said everything was fine.
+
+The five conditions are now five separate subjects. Repeat suppression still
+works exactly as before within each one, and both background loops still
+collapse to a single alert when they notice the same problem on the same
+certificate — you will not get duplicates. What changed is that a warning can no
+longer stand in for a critical.
+
+### Fixed — six-day certificates skipped the warning and went straight to the downgrade
+
+When a certificate issued over DNS-01 comes up for renewal and its Cloudflare
+zone is no longer reachable, DockPanel refuses the renewal while there is still
+time to fix it and tells you what to repair. Only in the certificate's last week
+does it give up and reissue a reduced, single-name certificate on purpose.
+
+"Last week" was seven days for every ACME profile, including `shortlived`, whose
+certificates only live about six days in total. A certificate that never has more
+than six days left is always inside its last seven, so the refusal could never
+happen: every such renewal went straight to the silent downgrade, and the owner
+was never told while the zone was still repairable.
+
+The threshold now depends on the profile, and the rule it has to satisfy is
+pinned rather than the number: the cut-off must sit below the point where
+renewals start for that profile, or the warning can never be reached. Nothing
+changes for the default profiles, and the last-resort downgrade still happens
+before expiry, so a site never loses its certificate entirely.
+
 ## [2.153.0]
 
 ### Fixed — the panel told you to replace a certificate on a page with no way to replace it

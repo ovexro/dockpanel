@@ -456,8 +456,16 @@ eq "F12 the declined case has its own helper" \
 # zone it cannot reach. The count is what stops a THIRD outcome being wired into
 # the warning wording without a decision — and `ssl-correctness` guards the other
 # direction, that neither decline borrows the failure helper.
+#
+# ⚠ This arm used to read the two declines as `"ssl_renewal_failure","","warning",`
+# twice, which pinned the EMPTY dedup key as correct — the very defect fixed here.
+# Both declines are still warnings, but they are now SEPARATE dedup subjects, so
+# the arm names each one instead of counting an indistinguishable pair. Keying
+# them apart is what `alert-resolve-scope` §G pins; this arm keeps the severity
+# and wording half.
 eq "F13 both declines are worded as the operator's job, at warning severity" \
-   "$([ "$(occ "$F_SCAN" '"ssl_renewal_failure","","warning",')" = 2 ] && \
+   "$([ "$(occ "$F_SCAN" '"ssl_renewal_failure",notifications::ssl_renewal_key::DECLINED,"warning",')" = 1 ] && \
+      [ "$(occ "$F_SCAN" '"ssl_renewal_failure",notifications::ssl_renewal_key::DNS01_DECLINED,"warning",')" = 1 ] && \
       [ "$(occ "$F_SCAN" 'SSLcertificatefor{domain}needsrenewingbyyou')" = 1 ] && \
       [ "$(occ "$F_SCAN" 'SSLcertificatefor{domain}needsaCloudflarezone')" = 1 ] && echo yes || echo no)" "yes"
 # The four genuine failure paths keep the helper that names a failure — the split

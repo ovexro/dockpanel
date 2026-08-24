@@ -415,5 +415,102 @@ else
 fi
 
 echo
+echo "── s401 §G: the DEDUP guard is keyed per condition, not per site ────────────"
+
+# §C asserts that every per-entity caller of `resolve_alert` passes a real key,
+# and states the principle it was written for: a scoped query all of whose
+# callers feed the whole-server key is the same bug with more steps. That is
+# exactly what `fire_alert_deduped` was — the OTHER function keyed on
+# `state_key`, whose callers were never enumerated.
+#
+# All eight of its call sites raise `ssl_renewal_failure`, covering FIVE
+# different conditions, and every one passed the whole-server key. The guard
+# dedups on (alert_type, site_id, state_key), so the five collapsed into one
+# subject and whichever fired first muted the other four for twelve hours —
+# four of the five being `critical`.
+#
+# The pairing that made it fatal is sequential, not coincidental: while a DNS-01
+# zone is unreachable `RenewalPlan::Refuse` re-alerts every twelve hours, and the
+# downgrade it ends in fires only once that same refusal reaches the last week —
+# so a warning is ALWAYS inside the window hiding the critical, and the alert
+# naming which hostnames stopped being covered could never reach anybody.
+#
+# ⚠ The fix must NOT key on the loop. Two comments in the subjects say the
+# scanner and the healer deliberately share a bucket for the same certificate
+# (`security_scanner.rs` "Deduped per site so the six-hourly scan cannot stack up
+# duplicates alongside the auto-healer's own alert"), so the SAME condition in
+# both loops must keep collapsing to one alert. G4 pins that direction; without
+# it a "fix" that keyed per call site would pass G2 and G3 and reintroduce the
+# flood the dedup exists to stop.
+
+SCANNER=panel/backend/src/services/security_scanner.rs
+
+DEDUP_H=$(calls "$HEALER" notifications::fire_alert_deduped 2>/dev/null)
+DEDUP_S=$(calls "$SCANNER" notifications::fire_alert_deduped 2>/dev/null)
+DEDUP_ALL=$(printf '%s\n%s\n' "$DEDUP_H" "$DEDUP_S" | grep -c .)
+
+# Assert the enumeration BEFORE trusting it (#143, and §C1's own precedent): an
+# empty call list makes every arm below vacuously green, which is precisely how
+# this defect survived two suites that both mention `fire_alert_deduped`.
+if [ "$DEDUP_ALL" -ge 8 ]; then
+  ok "G1 enumeration is sound — $DEDUP_ALL fire_alert_deduped call sites found"
+else
+  bad "G1 enumeration is sound — only $DEDUP_ALL fire_alert_deduped call sites found (expected >= 8)"
+fi
+
+# G2 is C2 for the other keyed function. A dedup guard scoped by a key that every
+# caller leaves empty is scoped to nothing.
+UNKEYED_D=$(printf '%s\n%s\n' "$DEDUP_H" "$DEDUP_S" | grep -E '"ssl_renewal_failure", ""')
+NUNKEYED_D=$(grep -c . <<< "$UNKEYED_D")
+if [ "$NUNKEYED_D" -eq 0 ]; then
+  ok "G2 no fire_alert_deduped call passes the whole-server key for a per-certificate condition"
+else
+  bad "G2 fire_alert_deduped calls pass a real key — $NUNKEYED_D pass the empty key"
+  while IFS= read -r c; do [ -n "$c" ] && printf '        unkeyed: %.140s\n' "$c"; done <<< "$UNKEYED_D"
+fi
+
+# G3: the conditions are distinct SUBJECTS. Counting the keys rather than
+# asserting a fixed list means a sixth condition must pick a key of its own
+# instead of borrowing one, and the count moves when it does.
+KEYS=$(printf '%s\n%s\n' "$DEDUP_H" "$DEDUP_S" \
+       | grep -oE '"ssl_renewal_failure", [A-Za-z0-9_:]+' \
+       | sed -E 's/.*:://' | sort -u)
+NKEYS=$(grep -c . <<< "$KEYS")
+if [ "$NKEYS" -eq 5 ]; then
+  ok "G3 the five renewal conditions are five dedup subjects: $(paste -sd' ' <<< "$KEYS")"
+else
+  bad "G3 the five renewal conditions are five dedup subjects — found $NKEYS: $(paste -sd' ' <<< "$KEYS")"
+fi
+
+# G4 — the still-member direction, and the one a per-call-site "fix" would fail.
+# Each condition raised by BOTH loops must carry the SAME key in both, or the
+# six-hourly scan stacks a duplicate on top of the healer's alert for one cert.
+SHARED_OK=1
+for k in FAILED DNS01_DECLINED DNS01_DOWNGRADED; do
+  inh=$(grep -cE "ssl_renewal_key::$k\b" <<< "$DEDUP_H")
+  ins=$(grep -cE "ssl_renewal_key::$k\b" <<< "$DEDUP_S")
+  if [ "$inh" -lt 1 ] || [ "$ins" -lt 1 ]; then
+    SHARED_OK=0
+    printf '        %s: healer=%s scanner=%s\n' "$k" "$inh" "$ins"
+  fi
+done
+if [ "$SHARED_OK" -eq 1 ]; then
+  ok "G4 every condition both loops raise shares one key, so one certificate is still one alert"
+else
+  bad "G4 every condition both loops raise shares one key — a loop-scoped key would reflood"
+fi
+
+# G5: one home for the keys. An inline literal at a call site is how a sixth
+# condition quietly rejoins an existing subject, and it is invisible to G3
+# because a literal that matches an existing key changes no count.
+KEYDEFS=$(sed -n '/^pub mod ssl_renewal_key {/,/^}/p' "$NOTIF" | grep -cE '^\s*pub const [A-Z0-9_]+: &str = ')
+INLINE=$(printf '%s\n%s\n' "$DEDUP_H" "$DEDUP_S" | grep -E '"ssl_renewal_failure", "' | grep -c .)
+if [ "$KEYDEFS" -eq 5 ] && [ "$INLINE" -eq 0 ]; then
+  ok "G5 all five keys are named constants in one module, and no call site inlines a literal"
+else
+  bad "G5 all five keys are named constants in one module — $KEYDEFS defined, $INLINE inline literal(s) at call sites"
+fi
+
+echo
 printf 'alert-resolve-scope: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

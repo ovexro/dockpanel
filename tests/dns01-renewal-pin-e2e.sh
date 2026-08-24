@@ -180,7 +180,57 @@ echo "── §D  refusal is a RUNG, not a terminus"
 # recorded, alerted downgrade instead — never worse than the behaviour it replaced.
 has "D1 the ladder has a last rung" "$F_HELP" "pubconstDNS01_LAST_RESORT_DAYS:i64=7;"
 has "D2 the rung is reached by time remaining" "$F_PLAN" \
-    "days_remaining.is_some_and(|d|d<=DNS01_LAST_RESORT_DAYS)"
+    "days_remaining.is_some_and(|d|d<=last_resort)"
+has "D2a the rung is chosen PER PROFILE, not from the bare constant" "$F_PLAN" \
+    "dns01_last_resort_days(site.ssl_profile.as_deref())"
+
+# ⭐ D2b — THE INVARIANT, which is what actually failed. The rung is only
+# reachable if it sits STRICTLY BELOW the profile's renewal margin: renewal does
+# not begin until the margin, so a rung at or above it means `Refuse` is never
+# returned for that profile and the ladder silently loses its top step.
+#
+# It failed for `shortlived` from the day the profile shipped. A `shortlived`
+# certificate is ~160 hours, so `num_days()` of the remainder is at most SIX and
+# a rung of seven was never exceeded — the whole profile went straight to the
+# single-name downgrade, and the operator was never warned while the zone was
+# still repairable. The old constant's own docstring named the counterexample it
+# was refuted by ("sits under every profile's fallback margin: 2 / 15 / 30").
+#
+# Pinned as a COMPARISON of the two tables rather than as literals, so the arm
+# survives a deliberate re-tuning of either number and still fails the moment
+# they cross. Both tables are asserted non-empty first: a parse that finds
+# nothing would otherwise compare zero pairs and pass (#143).
+LR_TBL=$(sed -n '/pub fn dns01_last_resort_days/,/^}/p' "$HELP")
+FM_TBL=$(sed -n '/fn fallback_renewal_margin/,/^}/p' "$HEAL")
+lr_for() { # $1=profile ; falls through to the default arm like the match does
+  local v
+  v=$(printf '%s' "$LR_TBL" | grep -oE "Some\(\"$1\"\) => [0-9]+" | grep -oE '[0-9]+$')
+  [ -n "$v" ] && { printf '%s' "$v"; return; }
+  printf '%s' "$(grep -oE 'pub const DNS01_LAST_RESORT_DAYS: i64 = [0-9]+' "$HELP" | grep -oE '[0-9]+$')"
+}
+fm_for() {
+  local v
+  v=$(printf '%s' "$FM_TBL" | grep -oE "Some\(\"$1\"\) => chrono::Duration::days\([0-9]+\)" | grep -oE '[0-9]+')
+  [ -n "$v" ] && { printf '%s' "$v"; return; }
+  printf '%s' "$(printf '%s' "$FM_TBL" | grep -oE '_ => chrono::Duration::days\([0-9]+\)' | grep -oE '[0-9]+')"
+}
+if [ "$(printf '%s' "$LR_TBL" | wc -c)" -lt 60 ] || [ "$(printf '%s' "$FM_TBL" | wc -c)" -lt 60 ]; then
+  bad "D2b-control both rung tables parse" "last-resort=$(printf '%s' "$LR_TBL" | wc -c)B margin=$(printf '%s' "$FM_TBL" | wc -c)B"
+else
+  ok "D2b-control both rung tables parse ($(printf '%s' "$LR_TBL" | wc -c)B / $(printf '%s' "$FM_TBL" | wc -c)B)"
+  D2B_OK=1; D2B_MSG=""
+  for prof in shortlived tlsserver classic; do
+    lr=$(lr_for "$prof"); fm=$(fm_for "$prof")
+    if [ -z "$lr" ] || [ -z "$fm" ] || [ "$lr" -ge "$fm" ]; then
+      D2B_OK=0; D2B_MSG="$D2B_MSG $prof(rung=${lr:-?} margin=${fm:-?})"
+    fi
+  done
+  if [ "$D2B_OK" -eq 1 ]; then
+    ok "D2b every profile's rung sits below its renewal margin, so Refuse is reachable"
+  else
+    bad "D2b every profile's rung sits below its renewal margin" "unreachable for:$D2B_MSG"
+  fi
+fi
 has "D3 and it names what stops being covered" "$F_PLAN" "RenewalPlan::LastResortHttp01{losing:names}"
 has "D3b the wildcard's names are spelled out for the operator" "$F_PLAN" \
     'format!("{subject}and*.{subject}")'
