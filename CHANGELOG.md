@@ -4,6 +4,51 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.153.0]
+
+### Fixed — the panel told you to replace a certificate on a page with no way to replace it
+
+When DockPanel declines to renew a certificate it did not issue — a commercial
+certificate, a Cloudflare Origin CA certificate, a corporate PKI certificate —
+it says so and tells you to *"install a replacement under the site's SSL tab
+instead"*. It says it in three places: the Renew button's refusal, the
+security scanner's alert when it finds such a certificate expiring, and the
+DNS-01 renewal refusal.
+
+There was nothing on that tab to do it with. Every SSL control on the site page,
+the upload form included, only appeared while SSL was **off**. Once a site had a
+certificate the page showed a padlock and an expiry date and nothing else — so
+the one instruction the panel gives you at exactly the moment it matters could
+not be followed. Renewing from the certificate list and revoking are both
+admin-only, which meant a site's own owner, on a non-admin account, holding a
+certificate about to expire, had no way forward at all.
+
+The upload form is now shared by both states rather than living inside the
+"not configured" branch, and an SSL-enabled site has a **Replace certificate**
+control that opens it. Nothing about how certificates are renewed has changed,
+and the refusals are still correct: renewing a certificate DockPanel did not
+issue would replace it. You can now do what they ask.
+
+### Fixed — every secured site was labelled "Let's Encrypt", including ones that were not
+
+The SSL row asserted `Enabled (Let's Encrypt)` for every site with a certificate
+installed, whoever issued it. So a site carrying an uploaded commercial
+certificate was described as holding a Let's Encrypt one — on the same panel
+that had already refused to renew it *because* it came from somewhere else, in a
+message naming the real issuer.
+
+The row now shows the issuer the certificate actually carries, and a certificate
+DockPanel did not issue is labelled with its own issuer plus a line saying the
+panel will not renew it. The backend already knew this: the answer is computed
+from the certificate status it was already fetching, so the honesty costs no
+extra work.
+
+**"We could not tell" is now its own answer.** If the agent cannot be reached,
+or the site is served by a wildcard certificate stored under its zone's name
+rather than its own, the row reads a plain `Enabled` — never a CA's name.
+Guessing there is what produced the original claim, and it would have looked
+right in every test, because in a test the agent is up.
+
 ## [2.152.0]
 
 ### Fixed — two sites created at once could leave both certificates unrenewable

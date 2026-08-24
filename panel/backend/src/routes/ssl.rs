@@ -690,6 +690,36 @@ pub async fn status(
     // certificate is real and is installed under the zone's name, not this
     // site's. The provenance below is what tells those two cases apart, and it
     // is the only place the panel says what the certificate actually covers.
+
+    // WHO ISSUED IT, decided ONCE, here — not re-derived by every display.
+    //
+    // The renewal doors have been able to answer this since `foreign_cert_issuer`
+    // shipped; nothing ever told the operator. So the site detail page asserted
+    // "Enabled (Let's Encrypt)" over every enabled certificate, including one the
+    // operator uploaded from a commercial CA, and the panel that had just DECLINED
+    // to renew it — correctly, and with a sentence naming the issuer — went on
+    // describing it as its own.
+    //
+    // ⛔ This is derived from the `agent_status` ALREADY IN HAND, so the honesty
+    // costs no extra round trip. And it is computed HERE rather than shipped as a
+    // raw issuer string for the client to match on, because "does this issuer
+    // string mean Let's Encrypt" is the same question `foreign_cert_issuer` asks
+    // for renewal — two spellings of the apostrophe included. A second copy of
+    // that test in TypeScript is a severed pair from the day it lands.
+    //
+    // `unknown` is a first-class answer and MUST NOT be rendered as a CA name:
+    // an unreachable agent and a wildcard child both arrive here, and both held
+    // a real certificate. See `helpers::CertProvenance`.
+    let (provenance, issuer) = match agent_status
+        .as_ref()
+        .map(crate::helpers::cert_provenance)
+        .unwrap_or(crate::helpers::CertProvenance::Unknown)
+    {
+        crate::helpers::CertProvenance::Foreign(i) => ("foreign", Some(i)),
+        crate::helpers::CertProvenance::DockPanelIssued => ("dockpanel", None),
+        crate::helpers::CertProvenance::Unknown => ("unknown", None),
+    };
+
     Ok(Json(serde_json::json!({
         "ssl_enabled": site.ssl_enabled,
         "cert_path": site.ssl_cert_path,
@@ -699,6 +729,8 @@ pub async fn status(
         "cert_subject": site.ssl_cert_subject,
         "wildcard": site.ssl_wildcard,
         "agent_status": agent_status,
+        "provenance": provenance,
+        "issuer": issuer,
     })))
 }
 

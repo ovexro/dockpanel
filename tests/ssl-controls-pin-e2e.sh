@@ -576,6 +576,126 @@ eq "H8 the wildcard rule compares exactly one label" \
 eq "H9 the Common Name is used only when no SAN name was found" \
    "$(occ "$F_ASSL" 'if!names.is_empty(){returnnames;}')" "1"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# §I  THE CONTROL THAT WAS NAMED BUT NOT RENDERED (s400)
+#
+# THREE separate sentences in this product tell the operator to install a
+# replacement certificate "under the site's SSL tab" — the hand-driven renew
+# refusal, the scanner's declined-renewal alert, and the DNS-01 renewal plan's
+# refusal. §F (above) pins all three, and they are RIGHT to refuse: renewing a
+# certificate DockPanel did not issue replaces it.
+#
+# Nothing rendered the tab they name. `SiteDetail.tsx` put EVERY SSL control,
+# the upload form included, inside the `else` branch of `{site.ssl_enabled ? …}`,
+# so the moment SSL was on the page offered a badge and a date. The certificate
+# list's Renew/Delete are admin-only and revoke is `AdminUser`, so a site's own
+# NON-ADMIN owner holding a commercial certificate had zero reachable paths: the
+# panel correctly declined to renew, then named a control that did not exist.
+#
+# ⛔⛔ WHY THESE ARMS USE AN EXTRACTOR AND NOT `subj`. The defect is a control
+# that is PRESENT IN THE FILE and UNREACHABLE IN A STATE. A whole-file arm
+# asserting SiteDetail calls `/ssl/upload` IS GREEN WITH THE DEFECT FULLY
+# RESTORED — the caller exists, it is merely in the other branch. Every arm below
+# reads ONE BRANCH, via `tests/helpers/ssl-enabled-branch.py`, which also strips
+# `{/* … */}` JSX comments that `subj` does not (the true branch carries a long
+# comment naming these very controls — [[feedback_source_pin_prose_trap]]).
+#
+# And the badge: the row asserted ONE CA's name over every enabled certificate,
+# including one the panel had just refused to renew BECAUSE it came from another
+# CA. It now renders what the backend decided. `unknown` is a real answer and
+# must stay neutral — an unreachable agent and a zone-wildcard child both land
+# there holding real certificates, and rendering either as a CA name is the
+# original lie re-emitted on every hiccup.
+
+DETAIL=panel/frontend/src/pages/SiteDetail.tsx
+BRANCH=tests/helpers/ssl-enabled-branch.py
+FRONT=panel/frontend/src
+[ -f "$DETAIL" ] || { bad "SETUP" "$DETAIL missing"; exit 1; }
+[ -f "$BRANCH" ] || { bad "SETUP" "$BRANCH missing"; exit 1; }
+
+# The extractor exits 2 and says why if the ternary moves, so a restructure is a
+# LOUD failure rather than an empty subject every absence arm passes.
+B_TRUE=$(python3 "$BRANCH" "$DETAIL" true)  || { bad "SETUP" "cannot extract the ssl_enabled TRUE branch"; exit 1; }
+B_FALSE=$(python3 "$BRANCH" "$DETAIL" false) || { bad "SETUP" "cannot extract the ssl_enabled FALSE branch"; exit 1; }
+
+# Floors on BOTH branches. Without them an arm that reads a shrunken subject
+# reports every absence as satisfied (lesson #143), and the true branch is small
+# enough that a floor is the only thing standing between "hoisted correctly" and
+# "deleted".
+n=$(printf '%s' "$B_TRUE" | wc -c)
+[ "$n" -ge 600 ] || { bad "SETUP" "ssl_enabled TRUE branch has $n chars, expected >= 600"; exit 1; }
+n=$(printf '%s' "$B_FALSE" | wc -c)
+[ "$n" -ge 1500 ] || { bad "SETUP" "ssl_enabled FALSE branch has $n chars, expected >= 1500"; exit 1; }
+
+# ── The reachable exit ───────────────────────────────────────────────────────
+eq "I1 an SSL-enabled site offers a control that opens the upload form" \
+   "$(occ "$B_TRUE" 'setShowSslUpload(')" "1"
+eq "I2 that control is worded as a REPLACEMENT, not a first-time upload" \
+   "$(occ "$B_TRUE" '>Replacecertificate<')" "1"
+# The control the operator is told to use must be reachable while the site is
+# serving, which is the only state in which the refusals that name it can fire.
+# TWO, derived not guessed: the "Upload my own certificate" button, and the
+# "Other options" collapse which must also close the form it opened or the
+# textareas stay on screen with nothing explaining them.
+eq "I3 the not-yet-secured branch keeps its own upload entry point and its collapse" \
+   "$(occ "$B_FALSE" 'setShowSslUpload(')" "2"
+
+# ── Shared, not duplicated ───────────────────────────────────────────────────
+# The form is HOISTED out of the ternary so both branches drive one instance.
+# Two copies would mean two success handlers to drift apart, and a later reader
+# deleting "the dead one" from whichever branch they were looking at.
+eq "I4 the upload form itself is in NEITHER branch — it is hoisted and shared" \
+   "$(( $(occ "$B_TRUE" '/ssl/upload') + $(occ "$B_FALSE" '/ssl/upload') ))" "0"
+eq "I5 control: the page really does call the upload endpoint, exactly once" \
+   "$(occ "$(subj "$DETAIL")" '/ssl/upload')" "1"
+
+# ── The badge says what is true ──────────────────────────────────────────────
+# THREE, derived: the two badge arms plus the sentence that tells a foreign
+# certificate's owner the panel will not renew it.
+eq "I6 the badge is derived from the backend's decision, not asserted" \
+   "$(occ "$B_TRUE" 'sslProvenance?.provenance===')" "3"
+eq "I7 one CA is named ONLY on a positive dockpanel identification" \
+   "$(occ "$B_TRUE" '==="dockpanel"?"Enabled(Let'"'"'sEncrypt)"')" "1"
+eq "I8 a foreign certificate is labelled with ITS OWN issuer" \
+   "$(occ "$B_TRUE" '==="foreign"&&sslProvenance.issuer?`Enabled(${sslProvenance.issuer})`')" "1"
+# THE UNKNOWN-COLLAPSE ARM. `foreign_cert_issuer` folds "ours" and "we could not
+# tell" into one `None`, which is correct for renewal and is the original lie for
+# a badge. If the CA name ever appears twice in this branch, the neutral
+# fallback has been written as the CA again.
+eq "I9 the CA name appears exactly once in the branch — no unknown fallback to it" \
+   "$(occ "$B_TRUE" 'Let'"'"'sEncrypt')" "1"
+eq "I10 an unresolved provenance renders the neutral wording" \
+   "$(occ "$B_TRUE" ':"Enabled"}')" "1"
+
+# ── ONE decision, one place ──────────────────────────────────────────────────
+# "Does this issuer string mean Let's Encrypt" is the same question the renewal
+# guard asks. A second copy in TypeScript is a severed pair from the day it
+# lands, so the client is given a verdict and never the test.
+eq "I11 the client never re-implements the issuer test" \
+   "$($G -rioF -- 'lets encrypt' "$FRONT" | wc -l | tr -d ' ')" "0"
+eq "I12 the backend publishes the verdict on the status payload it already built" \
+   "$(occ "$(subj "$SSL")" '"provenance":provenance,')" "1"
+eq "I13 the verdict is derived from the agent status ALREADY IN HAND" \
+   "$(occ "$(subj "$SSL")" '.map(crate::helpers::cert_provenance)')" "1"
+# The lowered-issuer test lives in exactly ONE function. Pinned as a count so it
+# cannot be satisfied by a second copy appearing elsewhere in the same file.
+eq "I14 the issuer test exists once in the backend, inside cert_provenance" \
+   "$(occ "$(subj "$HELP")" 'lowered.contains("let'"'"'sencrypt")')" "1"
+
+# ── Renewal behaviour is byte-identical across the split ─────────────────────
+# ⛔ THE DIRECTION THAT MATTERS. For a badge, Unknown must NOT read as ours. For
+# RENEWAL it must: an unreachable agent is not evidence of a foreign certificate,
+# and refusing on doubt lets a real one lapse on a live site. The split must not
+# have quietly changed which way the middle state falls.
+# TWO, and BOTH are load-bearing: the collapse inside `foreign_cert_issuer`,
+# and the unit test that asserts it independently of the enum's own declaration.
+# Deleting either is the regression — the first changes renewal behaviour, the
+# second removes the only check that would have noticed.
+eq "I15 renewal still treats BOTH non-foreign states as permission to proceed" \
+   "$(occ "$(subj "$HELP")" 'CertProvenance::DockPanelIssued|CertProvenance::Unknown=>None,')" "2"
+eq "I16 foreign_cert_issuer delegates rather than keeping a second copy" \
+   "$(occ "$(subj "$HELP")" 'matchcert_provenance(&status){')" "1"
+
 echo
 echo "── Result ───────────────────────────────────────────────────────────────────"
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"

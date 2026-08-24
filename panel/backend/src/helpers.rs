@@ -1209,20 +1209,68 @@ pub async fn foreign_cert_issuer(
     domain: &str,
 ) -> Option<String> {
     let status = agent.get(&format!("/ssl/status/{domain}")).await.ok()?;
-    if !status.get("has_cert").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return None;
+    match cert_provenance(&status) {
+        CertProvenance::Foreign(issuer) => Some(issuer),
+        CertProvenance::DockPanelIssued | CertProvenance::Unknown => None,
     }
-    let issuer = status.get("issuer").and_then(|v| v.as_str())?.trim();
+}
+
+/// What the installed certificate's issuer proves about who put it there.
+///
+/// ⛔ THIS IS THE SAME DECISION `foreign_cert_issuer` HAS ALWAYS MADE — it is
+/// split out, not reimplemented, because it has TWO callers that must collapse
+/// its middle state in OPPOSITE directions, and folding them together is how the
+/// panel came to assert "Let's Encrypt" over a certificate it had never seen.
+///
+/// For RENEWAL, `Unknown` must read as "ours": an unreachable agent or an
+/// unreadable certificate is not evidence of a foreign one, and refusing on
+/// doubt ends in a real Let's Encrypt certificate lapsing on a dark site. That
+/// is why `foreign_cert_issuer` maps both `Unknown` and `DockPanelIssued` to
+/// `None`, and why every renewal caller may keep treating `None` as PERMISSION
+/// TO PROCEED — this split changes none of their behaviour.
+///
+/// For a BADGE, `Unknown` reading as "ours" is exactly the lie: it re-emits
+/// "Enabled (Let's Encrypt)" every time the agent hiccups, and it will look
+/// correct in testing because the agent is up. A display caller must render the
+/// middle state as the neutral "we did not ask, or could not tell", never as a
+/// CA name. Hence three states rather than an `Option`, which cannot carry the
+/// distinction at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CertProvenance {
+    /// A positive identification that somebody else issued this certificate:
+    /// an operator upload, a corporate PKI, a Cloudflare Origin CA, a commercial
+    /// OV or wildcard purchase. Carries the issuer string as the agent read it.
+    Foreign(String),
+    /// A Let's Encrypt issuer, which the agent's pinned directory URL makes a
+    /// proof that this product issued it.
+    DockPanelIssued,
+    /// No answer to act on — the agent did not reply, reported `has_cert:false`
+    /// (which a zone-WILDCARD child does for its own name, while holding a
+    /// perfectly good certificate under the zone's), or produced no issuer.
+    Unknown,
+}
+
+/// Read the provenance out of an agent `/ssl/status/{domain}` payload.
+///
+/// Takes the JSON the caller already holds rather than fetching it, so a caller
+/// that needs both this and the raw status pays one round trip, not two.
+pub fn cert_provenance(status: &serde_json::Value) -> CertProvenance {
+    if !status.get("has_cert").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return CertProvenance::Unknown;
+    }
+    let Some(issuer) = status.get("issuer").and_then(|v| v.as_str()).map(str::trim) else {
+        return CertProvenance::Unknown;
+    };
     if issuer.is_empty() {
-        return None;
+        return CertProvenance::Unknown;
     }
     let lowered = issuer.to_ascii_lowercase();
     // Both spellings: the apostrophe is a typographic hazard, not a fact about
     // the CA, and an issuer string that lost it must not read as foreign.
     if lowered.contains("let's encrypt") || lowered.contains("lets encrypt") {
-        return None;
+        return CertProvenance::DockPanelIssued;
     }
-    Some(issuer.to_string())
+    CertProvenance::Foreign(issuer.to_string())
 }
 
 pub fn parse_agent_cert_expiry(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -1254,6 +1302,119 @@ pub fn parse_agent_cert_expiry(raw: &str) -> Option<chrono::DateTime<chrono::Utc
     }
 
     None
+}
+
+#[cfg(test)]
+mod cert_provenance_tests {
+    use super::{cert_provenance, CertProvenance};
+    use serde_json::json;
+
+    /// ⚠ EVERY issuer string below is a full RDN sequence, because that is what
+    /// the agent actually sends: `panel/agent/src/services/ssl.rs` builds the
+    /// field as `cert.issuer().to_string()` over an `x509_parser` certificate,
+    /// which renders the whole name, not one component. Measured against a live
+    /// Let's Encrypt certificate: `CN=YR2, O=Let's Encrypt, C=US`.
+    ///
+    /// ⛔ THE FIRST DRAFT OF THIS TEST ASSERTED A BARE `"R3"` AND FAILED, and the
+    /// failure is worth keeping in mind rather than editing away: the guard
+    /// recognises Let's Encrypt through the **`O=` component**, so a bare
+    /// common name reads as FOREIGN. If the agent's rendering ever narrows to
+    /// the CN, this guard inverts — every certificate this product issued would
+    /// be classed as somebody else's and every renewal door would refuse, which
+    /// is the failure mode that ends in expired certificates on live sites.
+    /// These cases pin that dependency; they are not decoration.
+    #[test]
+    fn a_full_lets_encrypt_rdn_is_ours_in_both_spellings() {
+        for issuer in [
+            "CN=YR2, O=Let's Encrypt, C=US",
+            "CN=R3, O=Let's Encrypt, C=US",
+            "CN=R11, O=LET'S ENCRYPT, C=US",
+            // The apostrophe is a typographic hazard, not a fact about the CA.
+            "CN=R10, O=Lets Encrypt, C=US",
+        ] {
+            assert_eq!(
+                cert_provenance(&json!({ "has_cert": true, "issuer": issuer })),
+                CertProvenance::DockPanelIssued,
+                "issuer {issuer:?} must read as DockPanel-issued"
+            );
+        }
+    }
+
+    /// The intermediate's common name ALONE is not enough, and that is the
+    /// documented behaviour rather than an accident — see the note above.
+    #[test]
+    fn a_bare_common_name_does_not_prove_lets_encrypt() {
+        assert_eq!(
+            cert_provenance(&json!({ "has_cert": true, "issuer": "YR2" })),
+            CertProvenance::Foreign("YR2".to_string()),
+            "recognition runs on the O= component; a bare CN carries no such proof"
+        );
+    }
+
+    #[test]
+    fn every_other_ca_is_a_positive_foreign_identification() {
+        for issuer in [
+            "CN=ZeroSSL RSA Domain Secure Site CA, O=ZeroSSL, C=AT",
+            "CN=Cloudflare Origin Certificate, O=CloudFlare, Inc., C=US",
+            "CN=DigiCert TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
+            "CN=Acme Corp Internal Issuing CA, O=Acme Corp",
+        ] {
+            assert_eq!(
+                cert_provenance(&json!({ "has_cert": true, "issuer": issuer })),
+                CertProvenance::Foreign(issuer.to_string()),
+                "issuer {issuer:?} must read as foreign, carrying its own name"
+            );
+        }
+    }
+
+    /// The three shapes that mean "no answer to act on". A badge that renders
+    /// any of these as a CA name is the defect this enum exists to prevent, and
+    /// the agent being UP in every manual test is why it survives review.
+    #[test]
+    fn no_answer_is_unknown_and_never_collapses_to_ours() {
+        // A zone-WILDCARD child answers this for its own name while holding a
+        // perfectly good certificate under the zone's name.
+        assert_eq!(
+            cert_provenance(&json!({ "has_cert": false })),
+            CertProvenance::Unknown
+        );
+        assert_eq!(
+            cert_provenance(&json!({ "has_cert": true })),
+            CertProvenance::Unknown,
+            "an absent issuer field is not evidence of anything"
+        );
+        assert_eq!(
+            cert_provenance(&json!({ "has_cert": true, "issuer": "   " })),
+            CertProvenance::Unknown,
+            "a whitespace-only issuer is not evidence of anything"
+        );
+        // The whole payload missing, which is what an unreachable agent yields
+        // once the caller's `.ok()` has turned the error into a null.
+        assert_eq!(cert_provenance(&json!(null)), CertProvenance::Unknown);
+    }
+
+    /// The renewal collapse must stay byte-identical to what
+    /// `foreign_cert_issuer` returned before the split: BOTH non-Foreign states
+    /// mean PERMISSION TO PROCEED. If this ever fails, a socket flap starts
+    /// refusing to renew real certificates.
+    #[test]
+    fn the_renewal_collapse_treats_unknown_as_permission_to_proceed() {
+        let as_renewal_sees_it = |v: serde_json::Value| match cert_provenance(&v) {
+            CertProvenance::Foreign(i) => Some(i),
+            CertProvenance::DockPanelIssued | CertProvenance::Unknown => None,
+        };
+        assert_eq!(as_renewal_sees_it(json!({ "has_cert": false })), None);
+        assert_eq!(
+            as_renewal_sees_it(json!({ "has_cert": true, "issuer": "CN=YR2, O=Let's Encrypt, C=US" })),
+            None
+        );
+        assert_eq!(
+            as_renewal_sees_it(
+                json!({ "has_cert": true, "issuer": "CN=Cloudflare Origin Certificate, O=CloudFlare, Inc., C=US" })
+            ),
+            Some("CN=Cloudflare Origin Certificate, O=CloudFlare, Inc., C=US".to_string())
+        );
+    }
 }
 
 #[cfg(test)]

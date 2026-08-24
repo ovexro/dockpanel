@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { api } from "../api";
 import { formatDate } from "../utils/format";
@@ -156,6 +156,25 @@ export default function SiteDetail() {
   const [transferring, setTransferring] = useState(false);
   const [transferMsg, setTransferMsg] = useState("");
   const [transferTargets, setTransferTargets] = useState<{ id: string; email: string; role: string }[]>([]);
+
+  // WHO ISSUED THE CERTIFICATE THIS SITE IS SERVING.
+  //
+  // The row used to name one specific CA for every enabled site — see the badge
+  // below for the wording — including a site carrying a certificate the operator
+  // uploaded from a commercial CA, and including one the panel had already
+  // DECLINED to renew for precisely that reason. The backend has been able to answer this since
+  // `foreign_cert_issuer` shipped; nothing ever asked it on the operator's
+  // behalf.
+  //
+  // ⛔ "unknown" is a real answer and is rendered as the neutral "Enabled",
+  // never as a CA name. An unreachable agent lands here, and so does a site
+  // served by a zone WILDCARD (the agent reports `has_cert:false` for the
+  // site's own name while the certificate sits under the zone's). Both hold a
+  // real certificate; neither is evidence about who issued it.
+  const [sslProvenance, setSslProvenance] = useState<{
+    provenance: "foreign" | "dockpanel" | "unknown";
+    issuer: string | null;
+  } | null>(null);
 
   // Custom SSL Upload
   const [showSslUpload, setShowSslUpload] = useState(false);
@@ -331,6 +350,30 @@ export default function SiteDetail() {
       .then((rows) => setTransferTargets(rows.filter((u) => u.role !== "suspended" && u.id !== user?.id)))
       .catch(() => setTransferTargets([]));
   }, [user?.role, user?.id]);
+
+  // Ask WHO issued it, and only when there is something to ask about.
+  //
+  // ⚠ This costs an agent hop (`GET /api/sites/{id}/ssl` reaches the box), so it
+  // is fired only for an SSL-enabled site and it NEVER blocks the row: until it
+  // answers, `sslProvenance` is null and the badge renders the neutral wording.
+  // A failure is left as null for the same reason — a page that cannot reach the
+  // agent must not therefore start asserting a CA.
+  const loadSslProvenance = useCallback(() => {
+    api
+      .get<{ provenance: "foreign" | "dockpanel" | "unknown"; issuer: string | null }>(
+        `/sites/${id}/ssl`,
+      )
+      .then((r) => setSslProvenance({ provenance: r.provenance, issuer: r.issuer }))
+      .catch(() => setSslProvenance(null));
+  }, [id]);
+
+  useEffect(() => {
+    if (!site?.ssl_enabled) {
+      setSslProvenance(null);
+      return;
+    }
+    loadSslProvenance();
+  }, [site?.ssl_enabled, site?.domain, loadSslProvenance]);
 
   useEffect(() => {
     api
@@ -901,12 +944,51 @@ export default function SiteDetail() {
                     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M10 1a4.5 4.5 0 0 0-4.5 4.5V9H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-.5V5.5A4.5 4.5 0 0 0 10 1Zm3 8V5.5a3 3 0 1 0-6 0V9h6Z" clipRule="evenodd" />
                     </svg>
-                    Enabled (Let's Encrypt)
+                    {sslProvenance?.provenance === "foreign" && sslProvenance.issuer
+                      ? `Enabled (${sslProvenance.issuer})`
+                      : sslProvenance?.provenance === "dockpanel"
+                        ? "Enabled (Let's Encrypt)"
+                        : "Enabled"}
                   </span>
                   {site.ssl_expiry && (
                     <p className="text-xs text-dark-200">
                       Expires: {new Date(site.ssl_expiry).toLocaleDateString()}
                     </p>
+                  )}
+                  {sslProvenance?.provenance === "foreign" && (
+                    <p className="text-xs text-dark-300">
+                      DockPanel did not issue this certificate and will not renew it. Renew it
+                      wherever it was issued, then install the replacement here.
+                    </p>
+                  )}
+                  {/* ⛔ THE CONTROL THAT WAS MISSING. Three separate refusals in
+                      this product tell the operator to "install a replacement
+                      under the site's SSL tab" — the renew door, the security
+                      scanner's declined-renewal alert and the DNS-01 renewal
+                      plan. Every SSL control, the upload form included, used to
+                      live in the `else` branch below, so once SSL was on there
+                      was nothing on this page to act on. Revoke is admin-only
+                      and the certificate list's controls are admin-only too, so
+                      a site's own non-admin owner holding a commercial
+                      certificate had NO reachable path at all: the panel
+                      correctly declined to renew, then named a control that did
+                      not exist. The form itself is shared with the `else`
+                      branch — see below the ternary — so this is a disclosure,
+                      not a second copy. */}
+                  {site.status === "active" && (
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowSslUpload(!showSslUpload)}
+                        aria-expanded={showSslUpload}
+                        className="text-xs text-dark-300 hover:text-dark-100 underline decoration-dotted underline-offset-2 transition-colors"
+                      >
+                        Replace certificate
+                      </button>
+                      <p className="mt-1 text-xs text-dark-400">
+                        Paste a certificate and private key you already hold. You renew it yourself.
+                      </p>
+                    </div>
                   )}
                 </div>
               ) : (
@@ -987,54 +1069,6 @@ export default function SiteDetail() {
                       </div>
                     </div>
                   )}
-                  {showSslUpload && (
-                    <div className="mt-3 space-y-3">
-                      <textarea value={sslCert} onChange={e => setSslCert(e.target.value)}
-                        placeholder={"-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"}
-                        rows={4} className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-xs font-mono text-dark-100 focus:ring-2 focus:ring-accent-500 outline-none" />
-                      <textarea value={sslKey} onChange={e => setSslKey(e.target.value)}
-                        placeholder={"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"}
-                        rows={4} className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-xs font-mono text-dark-100 focus:ring-2 focus:ring-accent-500 outline-none" />
-                      <button disabled={uploadingSsl || !sslCert || !sslKey} onClick={async () => {
-                        setUploadingSsl(true);
-                        setSslMessage("");
-                        try {
-                          await api.post(`/sites/${id}/ssl/upload`, { certificate: sslCert, private_key: sslKey });
-                          setSslMessage("Custom SSL certificate installed successfully!");
-                          setSslMessageIsError(false);
-                          setSslCert(""); setSslKey(""); setShowSslUpload(false);
-                          const updated = await api.get<Site>(`/sites/${id}`);
-                          setSite(updated);
-                        } catch (e) {
-                          setSslMessage(e instanceof Error ? e.message : "Upload failed");
-                          setSslMessageIsError(true);
-                        }
-                        finally { setUploadingSsl(false); }
-                      }} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
-                        {uploadingSsl ? "Installing..." : "Install Certificate"}
-                      </button>
-                    </div>
-                  )}
-
-                  {/* The result of the button the user just pressed, BESIDE that
-                      button. This used to render ~1400 lines further down the
-                      page, at the very bottom of the document — so a perfectly
-                      good 412 explaining the DNS problem was on screen but
-                      nowhere the user would ever look, and clicking "Let's
-                      Encrypt" appeared to do nothing at all (s252 F1). */}
-                  {sslMessage && (
-                    <div
-                      role="alert"
-                      className={`mt-3 px-3 py-2 rounded text-xs ${
-                        sslMessageIsError
-                          ? "bg-danger-500/10 text-danger-400 border border-danger-500/20"
-                          : "bg-rust-500/10 text-rust-400 border border-rust-500/20"
-                      }`}
-                    >
-                      {sslMessage}
-                    </div>
-                  )}
-
                   {/* The prerequisite itself: what is wrong, what we expected,
                       what we saw, and the exact record to create. */}
                   {site.status === "active" && (
@@ -1045,6 +1079,66 @@ export default function SiteDetail() {
                       className="mt-3"
                     />
                   )}
+                </div>
+              )}
+
+              {/* ⛔ SHARED BY BOTH BRANCHES, WHICH IS THE WHOLE POINT — hoisted
+                  out of the `else` above rather than copied into the `true`
+                  side. Two instances would mean two `showSslUpload` reads of one
+                  state and a second success handler to drift, and a duplicated
+                  form is exactly what a later reader deletes "as dead code" from
+                  whichever branch they happened to be looking at. Every piece of
+                  state it touches was already declared at component scope, so
+                  the move needs no lifting and no props. */}
+              {showSslUpload && (
+                <div className="mt-3 space-y-3">
+                  <textarea value={sslCert} onChange={e => setSslCert(e.target.value)}
+                    placeholder={"-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"}
+                    rows={4} className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-xs font-mono text-dark-100 focus:ring-2 focus:ring-accent-500 outline-none" />
+                  <textarea value={sslKey} onChange={e => setSslKey(e.target.value)}
+                    placeholder={"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"}
+                    rows={4} className="w-full px-3 py-2 bg-dark-900 border border-dark-500 rounded-lg text-xs font-mono text-dark-100 focus:ring-2 focus:ring-accent-500 outline-none" />
+                  <button disabled={uploadingSsl || !sslCert || !sslKey} onClick={async () => {
+                    setUploadingSsl(true);
+                    setSslMessage("");
+                    try {
+                      await api.post(`/sites/${id}/ssl/upload`, { certificate: sslCert, private_key: sslKey });
+                      setSslMessage("Custom SSL certificate installed successfully!");
+                      setSslMessageIsError(false);
+                      setSslCert(""); setSslKey(""); setShowSslUpload(false);
+                      const updated = await api.get<Site>(`/sites/${id}`);
+                      setSite(updated);
+                      // The badge names the issuer, so replacing the certificate
+                      // must re-ask who issued it. `ssl_enabled` was already true
+                      // on a replace, so the effect keyed on it does NOT re-run.
+                      loadSslProvenance();
+                    } catch (e) {
+                      setSslMessage(e instanceof Error ? e.message : "Upload failed");
+                      setSslMessageIsError(true);
+                    }
+                    finally { setUploadingSsl(false); }
+                  }} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
+                    {uploadingSsl ? "Installing..." : "Install Certificate"}
+                  </button>
+                </div>
+              )}
+
+              {/* The result of the button the user just pressed, BESIDE that
+                  button. This used to render ~1400 lines further down the
+                  page, at the very bottom of the document — so a perfectly
+                  good 412 explaining the DNS problem was on screen but
+                  nowhere the user would ever look, and clicking "Let's
+                  Encrypt" appeared to do nothing at all (s252 F1). */}
+              {sslMessage && (
+                <div
+                  role="alert"
+                  className={`mt-3 px-3 py-2 rounded text-xs ${
+                    sslMessageIsError
+                      ? "bg-danger-500/10 text-danger-400 border border-danger-500/20"
+                      : "bg-rust-500/10 text-rust-400 border border-rust-500/20"
+                  }`}
+                >
+                  {sslMessage}
                 </div>
               )}
             </dd>

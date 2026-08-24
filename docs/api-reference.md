@@ -143,8 +143,19 @@ Delete site and all associated resources (database containers, nginx config, SSL
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/api/sites/{id}/ssl` | Provision Let's Encrypt cert |
-| GET | `/api/sites/{id}/ssl` | Get SSL status |
+| GET | `/api/sites/{id}/ssl` | Get SSL status, including who issued the certificate |
 | POST | `/api/sites/{id}/ssl/upload` | Upload custom certificate |
+
+`GET /api/sites/{id}/ssl` returns `provenance`, one of:
+
+| Value | Meaning |
+|-------|---------|
+| `dockpanel` | Issued by Let's Encrypt, so DockPanel issued it and renews it |
+| `foreign` | Issued by somebody else; `issuer` names them, and DockPanel will not renew it |
+| `unknown` | No answer to act on — the agent was unreachable, or the site is served by a certificate stored under its zone's name rather than its own |
+
+⛔ `unknown` must never be rendered as a CA name. It is what an unreachable agent
+returns, and a certificate that is real and healthy sits behind it.
 
 ### Other site endpoints
 
