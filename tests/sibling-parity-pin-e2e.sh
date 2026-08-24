@@ -168,6 +168,53 @@ else
   bad "B2 only $REBUILDERS references to rebuild_vhost_after_ssl — a sibling lost its compensation"
 fi
 
+# ── B3/B4 — the arm B2 could not be ────────────────────────────────────────
+#
+# B2 is a COUNT, and a count cannot say WHICH doors need compensating. At s398
+# `routes/mail.rs` grew TWO calls to `/ssl/provision/{domain}` with no rebuild
+# and B2 stayed green the whole time, because the total never fell below five.
+# Measured consequence on a box: adding a mail domain for a name that also had a
+# website re-rendered that website as STATIC — 403 on every PHP request — and
+# dropped its `limit_req_zone`, while the panel went on reporting `runtime = php`.
+#
+# So DERIVE the doors instead of counting the cure. A panel file that calls an
+# agent SSL route which RE-RENDERS the vhost (`/ssl/provision`,
+# `/ssl/provision-dns01`, `/ssl/{domain}/renew` — NOT `/ssl/status`,
+# `/ssl/profiles` or `/ssl/{domain}/renewal-info`, which render nothing) must put
+# the site's real configuration back afterwards.
+#
+# ⚠ The per-door token is deliberately a DIFFERENT literal per file rather than
+# one shared pattern: `build_nginx_body` is DEFINED in routes/sites.rs, so an arm
+# spelling that token there could never fail — it would be satisfied by the
+# definition it was meant to police.
+# `routes/mod.rs` is excluded on purpose: it matches as the ROUTE TABLE
+# (`/api/ssl/{id}/renew`), not as a caller of the agent.
+RENDER_DOORS=$(grep -rlE 'ssl/provision|/ssl/\{[a-z_]*\}/renew|/ssl/\{\}/renew' panel/backend/src --include='*.rs' 2>/dev/null \
+               | grep -vE '/routes/mod\.rs$' | sort || true)
+DOOR_N=$(printf '%s\n' "$RENDER_DOORS" | grep -c . || true)
+if [ "${DOOR_N:-0}" -lt 4 ]; then
+  bad "B3 only $DOOR_N vhost-rendering SSL doors enumerated — the derivation broke, this arm measures nothing"
+else
+  ok "B3 $DOOR_N panel files call a vhost-rendering agent SSL route"
+  B4_BAD=""
+  for f in $RENDER_DOORS; do
+    case "$f" in
+      *routes/ssl.rs)                COMP='rebuild_vhost_after_ssl\(' ;;
+      *routes/sites.rs)              COMP='rebuild_vhost_for_site\(' ;;
+      *routes/mail.rs)               COMP='rebuild_vhost_for_domain\(' ;;
+      *services/auto_healer.rs)      COMP='build_nginx_body\(' ;;
+      *services/security_scanner.rs) COMP='build_nginx_body\(' ;;
+      *) B4_BAD="$B4_BAD $f(UNKNOWN-DOOR)"; continue ;;
+    esac
+    grep -qE -- "$COMP" "$f" 2>/dev/null || B4_BAD="$B4_BAD $f"
+  done
+  if [ -n "$B4_BAD" ]; then
+    bad "B4 SSL-writing door(s) with no vhost compensation:$B4_BAD — an SSL write there publishes a vhost with no limits and no hardening (UNKNOWN-DOOR = a new door nobody has decided about)"
+  else
+    ok "B4 every vhost-rendering SSL door puts the site's configuration back"
+  fi
+fi
+
 # ── §C the pre-delete backup runs first ─────────────────────────────────────
 echo
 echo "§C  the pre-delete backup runs before anything destructive"

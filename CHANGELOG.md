@@ -4,6 +4,50 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.151.0]
+
+### Fixed — adding a mail domain silently rewrote the website of the same name
+
+Adding a mail domain for a name that also has a **website** re-rendered that
+website's nginx configuration and left it broken.
+
+The panel asks the agent for a certificate for the mail host. The agent's SSL
+route does not *patch* a vhost for a certificate — it re-renders the whole file
+from the configuration the caller sends, and the mail path sent `runtime:
+"static"` with no document root, no limits and no hardening. That is the right
+body for a mail host and the wrong one for a website, so the website was
+republished as a static site: PHP stopped executing and answered **403** to every
+request, its rate limit and upload cap were dropped, and its custom nginx
+directives disappeared — while the panel went on reporting the site as PHP with
+all of its limits still set. It happened in a background task, so the only thing
+an operator saw was "mail domain added".
+
+Measured on a fresh box in both directions: the site with a mail domain was
+converted to static and returned 403 for PHP, while an identical site on the same
+host with no mail domain was untouched, byte for byte.
+
+The mail path now puts the site's real configuration back after the certificate
+is installed, the way every SSL door in `routes/ssl.rs` already did for its own
+writes. A mail domain that is *not* also a site is unaffected — there is no vhost
+of ours to restore.
+
+### Fixed — a certificate issued during site creation dropped the site's limits
+
+The same shape, one door over and less severe. The auto-SSL task that runs after
+a site is created sends the site's runtime and root but not its per-site limits
+or hardening fields, and that task retries with delays — so a limit set between
+creation and a later attempt was published and then silently dropped. The runtime
+was never affected on this path. It now restores the site's row afterwards too.
+
+### Changed — the regression pin now derives the doors instead of counting the cure
+
+`sibling-parity-pin-e2e.sh` asserted only that the vhost rebuild was *referenced*
+at least five times across the crate. A count cannot say which doors need one, so
+two new SSL-writing doors were added in `routes/mail.rs` and the arm stayed green
+the entire time. It now derives every panel file that calls an agent SSL route
+which re-renders a vhost, and fails when one of them has no compensation — or
+when a door appears that nobody has decided about.
+
 ## [2.150.1]
 
 ### Fixed

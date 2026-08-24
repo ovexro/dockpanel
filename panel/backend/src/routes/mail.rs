@@ -1223,7 +1223,26 @@ async fn auto_create_mail_dns(
             "email": user_email,
             "runtime": "static",
         }))).await {
-            Ok(_) => tracing::info!("Auto-SSL (mail): provisioned certificate for {domain}"),
+            Ok(_) => {
+                tracing::info!("Auto-SSL (mail): provisioned certificate for {domain}");
+                // ⛔ The agent does not patch a vhost for a certificate — it
+                // re-renders the whole file from what we just sent, and what we
+                // sent is `runtime: "static"` with no root, no limits and no
+                // hardening. That is the right body for a mail host and a
+                // catastrophe for a WEBSITE of the same name, which is an
+                // ordinary shape: you host example.com and you add mail for
+                // example.com. Measured on a box at s398 — the site was
+                // re-rendered static, answered 403 to every PHP request and lost
+                // its `limit_req_zone`, while the panel went on reporting
+                // `runtime = php` with all its limits set.
+                //
+                // Nothing above can be narrowed to avoid this: the mail host
+                // genuinely needs a certificate and the agent route that issues
+                // one always rewrites the vhost. So put the site's real
+                // configuration back afterwards, exactly as the four SSL doors in
+                // `routes/ssl.rs` already do for their own writes.
+                crate::routes::ssl::rebuild_vhost_for_domain(db, agent, domain, server_id).await;
+            }
             Err(e) => tracing::warn!("Auto-SSL (mail): failed for {domain}: {e} — provision manually"),
         }
     } else if provider == "powerdns" {
@@ -1291,7 +1310,26 @@ async fn auto_create_mail_dns(
             "email": user_email,
             "runtime": "static",
         }))).await {
-            Ok(_) => tracing::info!("Auto-SSL (mail): provisioned certificate for {domain}"),
+            Ok(_) => {
+                tracing::info!("Auto-SSL (mail): provisioned certificate for {domain}");
+                // ⛔ The agent does not patch a vhost for a certificate — it
+                // re-renders the whole file from what we just sent, and what we
+                // sent is `runtime: "static"` with no root, no limits and no
+                // hardening. That is the right body for a mail host and a
+                // catastrophe for a WEBSITE of the same name, which is an
+                // ordinary shape: you host example.com and you add mail for
+                // example.com. Measured on a box at s398 — the site was
+                // re-rendered static, answered 403 to every PHP request and lost
+                // its `limit_req_zone`, while the panel went on reporting
+                // `runtime = php` with all its limits set.
+                //
+                // Nothing above can be narrowed to avoid this: the mail host
+                // genuinely needs a certificate and the agent route that issues
+                // one always rewrites the vhost. So put the site's real
+                // configuration back afterwards, exactly as the four SSL doors in
+                // `routes/ssl.rs` already do for their own writes.
+                crate::routes::ssl::rebuild_vhost_for_domain(db, agent, domain, server_id).await;
+            }
             Err(e) => tracing::warn!("Auto-SSL (mail): failed for {domain}: {e} — provision manually"),
         }
     }

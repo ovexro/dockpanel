@@ -871,6 +871,16 @@ pub async fn create(
                             tracing::info!("Auto-SSL provisioned for {ssl_domain} (attempt {})", i + 1);
                             emit_step(&ssl_logs, site_id, "ssl", "Provisioning SSL certificate", "done", None);
 
+                            // The body above carries the runtime, the root and the
+                            // PHP socket, but NOT the per-site limits or the
+                            // hardening fields — and the agent re-renders the whole
+                            // vhost from it. This task retries with delays, so a
+                            // limit the operator sets between creation and a later
+                            // attempt is published and then silently dropped.
+                            // Cheaper to put the row back than to keep this body in
+                            // step with every column `build_nginx_body` renders.
+                            crate::routes::ssl::rebuild_vhost_for_site(&ssl_db, &ssl_agent, site_id).await;
+
                             // Parse cert details from agent response
                             let ssl_expiry = result
                                 .get("expiry")

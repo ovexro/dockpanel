@@ -130,6 +130,91 @@ fn dns01_failure_or(
 /// security directives. `build_nginx_body` is the same canonical builder every
 /// other config-rebuild path uses. Best-effort: a failure leaves the site on the
 /// agent's (functional, SSL-enabled) subset config and is logged.
+/// PUT the site's complete vhost body. The single writer behind all three
+/// rebuild entry points below, so a door can never re-render a *partial* vhost
+/// by picking the wrong helper.
+async fn put_full_vhost(agent: &crate::services::agent::AgentHandle, site: &Site) {
+    if let Err(e) = agent
+        .put(
+            &format!("/nginx/sites/{}", site.domain),
+            crate::routes::sites::build_nginx_body(site),
+        )
+        .await
+    {
+        tracing::warn!("Full vhost rebuild after SSL op failed for {}: {e}", site.domain);
+    }
+}
+
+/// Re-render a site's full vhost after an SSL write that only knew the certificate.
+///
+/// ⛔ The agent's `/ssl/provision*` and `/ssl/{domain}/renew` routes do NOT patch a
+/// vhost. `services::ssl::enable_ssl_for_site` RE-RENDERS it from the `SiteConfig`
+/// the caller handed in, and `routes/ssl.rs::provision` hardcodes every limit and
+/// every hardening field to `None`. So an SSL write from a door that does not hold
+/// the site's row publishes a vhost with no rate limit, no upload cap, no custom
+/// nginx and no WAF/CSP — and, when that door also *guesses* the runtime, a PHP
+/// site re-rendered as a static one, which answers 403 to every PHP request while
+/// the panel still shows `runtime = php`.
+///
+/// Measured on a box at s398: adding a mail domain for a name that also had a
+/// website converted that website to static and dropped its `limit_req_zone`,
+/// while an identical site on the same host with no mail domain was untouched.
+///
+/// ⚠ Resolved by (domain, server_id), NEVER by domain alone: `sites.domain` is
+/// unique only per server (`idx_sites_domain_server`), so a name-only lookup on a
+/// fleet can hand back another host's row — the defect `security_scanner` already
+/// documents for its own sibling read.
+///
+/// A domain with no site row is not an error: a mail domain need not be a site,
+/// and there is then no vhost of ours to put back.
+pub(crate) async fn rebuild_vhost_for_domain(
+    pool: &sqlx::PgPool,
+    agent: &crate::services::agent::AgentHandle,
+    domain: &str,
+    server_id: Uuid,
+) {
+    match sqlx::query_as::<_, Site>("SELECT * FROM sites WHERE domain = $1 AND server_id = $2")
+        .bind(domain)
+        .bind(server_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(site)) => {
+            put_full_vhost(agent, &site).await;
+            tracing::info!(
+                "Rebuilt {domain}'s vhost after an SSL write that did not carry the site's settings"
+            );
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!("Vhost rebuild after SSL write: could not load a site for {domain}: {e}"),
+    }
+}
+
+/// The same compensation as the `AppState`-based sibling below, for a caller that
+/// holds the site id and a pool but no `AppState` — the auto-SSL task spawned by
+/// site creation. Deliberately does NOT promote the canonical URL: that door's own
+/// success path already handles it.
+///
+/// ⚠ The sibling's name is deliberately NOT spelled anywhere in this file's prose:
+/// `sibling-parity-pin-e2e.sh` §B2 counts raw occurrences of it across the crate,
+/// so a comment naming it would prop that count up and mask a real call site being
+/// deleted. Pins grep source, and comments are source.
+pub(crate) async fn rebuild_vhost_for_site(
+    pool: &sqlx::PgPool,
+    agent: &crate::services::agent::AgentHandle,
+    site_id: Uuid,
+) {
+    match sqlx::query_as::<_, Site>("SELECT * FROM sites WHERE id = $1")
+        .bind(site_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(site)) => put_full_vhost(agent, &site).await,
+        Ok(None) => {}
+        Err(e) => tracing::warn!("Vhost rebuild after SSL op: could not load site {site_id}: {e}"),
+    }
+}
+
 pub(crate) async fn rebuild_vhost_after_ssl(
     state: &AppState,
     agent: &crate::services::agent::AgentHandle,
@@ -141,15 +226,7 @@ pub(crate) async fn rebuild_vhost_after_ssl(
         .await
     {
         Ok(site) => {
-            if let Err(e) = agent
-                .put(
-                    &format!("/nginx/sites/{}", site.domain),
-                    crate::routes::sites::build_nginx_body(&site),
-                )
-                .await
-            {
-                tracing::warn!("Full vhost rebuild after SSL op failed for {}: {e}", site.domain);
-            }
+            put_full_vhost(agent, &site).await;
 
             // This rebuild is the SECOND way a vhost can turn into an HTTPS one.
             // The agent promotes a WordPress site's canonical URL inside
