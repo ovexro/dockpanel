@@ -4,6 +4,24 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.155.1]
+
+### Fixed — a muted alert type could still reach you through an escalation webhook
+
+v2.155.0 widened the suppression grid from ten alert types to nineteen. The text
+above that grid says a muted type will not trigger Slack, Discord, PagerDuty or
+webhook notifications. That was true of three of the four ways an escalation step
+can be routed, and not the fourth.
+
+A step routed straight at a webhook URL has no user behind it, so it was the one
+route that consulted nobody's preferences — and therefore the one route a mute
+could not reach. Steps routed to a user or an on-call schedule go through the
+per-user fan-out and honour the mute; the webhook step sent regardless. Widening
+the grid made that matter for nine more alert types, so it is fixed here rather
+than left for later: a step-level webhook now checks the alert owner's
+suppression list, the same list the grid edits, and stays silent when the type is
+muted.
+
 ## [2.155.0]
 
 ### Fixed — an escalation policy could stop paging you altogether

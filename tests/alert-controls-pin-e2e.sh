@@ -293,5 +293,48 @@ else
 fi
 
 echo
+echo "== §E  a mute reaches EVERY route shape, not three of four =="
+
+# The grid's own text names webhooks among what a mute silences. An escalation
+# step routed `webhook:<url>` has no user behind it, so it was the one shape
+# that consulted nobody's preference — and therefore the one shape a mute could
+# not reach, while `user:` and `on_call_schedule:` steps honoured it through the
+# per-user fan-out.
+DISPATCH=$(awk '/^pub async fn dispatch_escalation_step\(/{inside=1} inside{print} inside && /^}$/{exit}' "$NOTIF")
+NDIS=$(grep -c . <<< "$DISPATCH")
+if [ "$NDIS" -ge 30 ]; then
+  ok "E1-control dispatch_escalation_step body extracted — $NDIS lines"
+else
+  bad "E1-control dispatch_escalation_step body extracted — only $NDIS lines (the extractor broke)"
+fi
+
+# Scoped to the webhook branch itself: a mute check anywhere else in the
+# function is satisfied by the fan-out the OTHER routes already use, which is
+# exactly the sibling that made this gap invisible.
+WEBHOOK=$(sed -n '/if let Some(url) = route.strip_prefix("webhook:")/,/^    }$/p' <<< "$DISPATCH")
+NWEB=$(grep -c . <<< "$WEBHOOK")
+if [ "$NWEB" -ge 10 ]; then
+  ok "E1-control the webhook branch extracted — $NWEB lines"
+else
+  bad "E1-control the webhook branch extracted — only $NWEB lines (the extractor broke)"
+fi
+if grep -qE 'is_type_muted\(' <<< "$WEBHOOK"; then
+  ok "E1 a step-level webhook honours the alert owner's suppression"
+else
+  bad "E1 a step-level webhook honours the alert owner's suppression"
+fi
+
+# E2: and it must ACT on it. The branch already ends in its own `return;` after
+# sending, so an arm that merely finds a return in the branch passes with the
+# guard deleted — it measures the wrong half. Scope to the guard's OWN block.
+GUARD=$(sed -n '/if is_type_muted(&owner, alert_type) {/,/^            }$/p' <<< "$WEBHOOK")
+NG=$(grep -c . <<< "$GUARD")
+if [ "$NG" -ge 3 ] && grep -qE '^ *return;' <<< "$GUARD"; then
+  ok "E2 a muted type RETURNS from inside the guard rather than being read and ignored"
+else
+  bad "E2 a muted type RETURNS from inside the guard — guard block is $NG line(s)"
+fi
+
+echo
 printf 'alert-controls: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

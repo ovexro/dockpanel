@@ -595,8 +595,24 @@ pub async fn dispatch_escalation_step(
 ) {
     let route = &step.route;
     if let Some(url) = route.strip_prefix("webhook:") {
-        // Direct webhook bypass — synthesize a NotifyChannels with only
-        // the webhook_url populated.
+        // A step-level webhook has no user behind it, so the suppression that
+        // applies is the alert owner's — the same row the settings grid edits.
+        // This branch used to synthesize an EMPTY suppression list, which meant
+        // the one route shape that never consults a user was also the one route
+        // shape a mute could not reach: `user:` and `on_call_schedule:` steps go
+        // through the per-user fan-out and honour it, this one did not. The grid
+        // names webhooks explicitly among what a mute silences, so the promise
+        // was kept on three routes out of four.
+        if let Some(owner) = get_user_channels(pool, alert_owner_id, alert_owner_server_id).await {
+            if is_type_muted(&owner, alert_type) {
+                tracing::debug!(
+                    "Alert type '{alert_type}' muted by the alert owner — skipping escalation webhook step"
+                );
+                return;
+            }
+        }
+        // Only the webhook_url is populated: the step names one destination and
+        // the operator's other channels are not part of this rung.
         let synthetic = NotifyChannels {
             email: None,
             slack_url: None,
