@@ -505,10 +505,19 @@ fi
 # because a literal that matches an existing key changes no count.
 KEYDEFS=$(sed -n '/^pub mod ssl_renewal_key {/,/^}/p' "$NOTIF" | grep -cE '^\s*pub const [A-Z0-9_]+: &str = ')
 INLINE=$(printf '%s\n%s\n' "$DEDUP_H" "$DEDUP_S" | grep -E '"ssl_renewal_failure", "' | grep -c .)
-if [ "$KEYDEFS" -eq 5 ] && [ "$INLINE" -eq 0 ]; then
-  ok "G5 all five keys are named constants in one module, and no call site inlines a literal"
+# ⚠ 5 -> 6 at v2.156.0, in the same commit as the key that moved it. The sixth is
+# MAIL_HOST_CONFLICT, raised from routes/mail.rs when a mail host's certificate is
+# deliberately NOT issued because issuing it would overwrite a wildcard or a
+# foreign certificate. It is NOT a healer/scanner subject, so G3 above is
+# untouched and still counts five conditions in those two loops — the two arms
+# measure different populations and only this one moves when a key is added
+# elsewhere. Reusing BLOCKED instead would have kept this number at five and
+# given two opposite messages about the same site one dedup subject, which is the
+# suppression defect v2.154.0 shipped to fix.
+if [ "$KEYDEFS" -eq 6 ] && [ "$INLINE" -eq 0 ]; then
+  ok "G5 all six keys are named constants in one module, and no call site inlines a literal"
 else
-  bad "G5 all five keys are named constants in one module — $KEYDEFS defined, $INLINE inline literal(s) at call sites"
+  bad "G5 all six keys are named constants in one module — $KEYDEFS defined, $INLINE inline literal(s) at call sites"
 fi
 
 echo

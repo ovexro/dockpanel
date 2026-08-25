@@ -4,6 +4,59 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.156.0]
+
+### Fixed — adding mail for a domain could destroy that domain's certificate
+
+Creating a mail domain fires an automatic certificate issuance for the mail
+host. That issuance is an ordinary HTTP-01 order for a single name, and the
+agent writes the result to `/etc/dockpanel/ssl/<domain>/fullchain.pem`
+unconditionally.
+
+That file is not the mail host's private property. A site of the same name
+reads it — and so does a **DNS-01 wildcard**, which DockPanel stores under the
+zone apex, which is exactly the name a mail domain is normally created at. So
+adding mail for `example.com` on a server already holding a wildcard for
+`*.example.com` replaced a certificate covering every subdomain with one
+covering `example.com` alone. Every sibling vhost reading that same file —
+`app.`, `www.`, `staging.` — immediately began serving a certificate that does
+not cover it, and browsers refused them. The same happened to an uploaded
+commercial or Origin-CA certificate.
+
+The vhost repair added in v2.150.0 could not help: it restores the site's
+*configuration*, and what was lost was the file that configuration points at.
+
+Mail auto-SSL now takes a verdict before it orders anything. It declines when
+the name already holds a DNS-01/wildcard certificate, or one DockPanel did not
+issue, and raises a `warning` alert naming what it protected and where to issue
+a certificate deliberately if that is really what you want.
+
+**Two checks, and neither is redundant.** The wildcard case is decided from the
+site's own `ssl_wildcard`/`ssl_challenge` columns, because the issuer probe is
+blind to it — `foreign_cert_issuer` folds "ours" and "we could not tell" into
+one answer, so a Let's Encrypt wildcard reads as ours. The uploaded-certificate
+case is decided from the issuer, because it carries none of our columns. Each
+covers exactly what the other cannot see.
+
+**What has not changed:** a mail domain with no same-named site still gets its
+certificate, and so does one whose site holds an ordinary single-name
+certificate that a re-issue merely refreshes — the "set the mail up first, add
+the website after" order the mail entitlement is built on.
+
+### Fixed — two identical auto-DNS legs are now one
+
+The Cloudflare and PowerDNS branches reached the certificate order through
+byte-identical blocks. They call one guarded function now: a guard applied to
+one leg and not the other is a failure this project has shipped before.
+
+### Internal
+
+`severity_color_tests` moved to the end of `notifications.rs`. Every regression
+suite's source reader blanks from the first `#[cfg(test)]` to end-of-file, so a
+test module in the middle of a file hides everything below it from every
+source-analysis check — here that was 91% of the file. No check was measuring
+an empty subject yet; the first one written over that file was.
+
 ## [2.155.2]
 
 ### Fixed — a stored-critical certificate could reach PagerDuty as "error"

@@ -908,6 +908,143 @@ else
 fi
 
 echo
+echo "── K: a mail host's certificate never destroys the one already there ──"
+
+# The mail auto-SSL leg writes /etc/dockpanel/ssl/{domain}/fullchain.pem through
+# the agent, and that file is not the mail host's private property: a DNS-01
+# WILDCARD is stored under the zone apex, which is exactly the name a mail domain
+# is normally created at. Every arm here is scoped with `prod_lines`, because this
+# file carries unit tests that spell each of these symbols — counting raw source
+# would let the TEST DATA satisfy the pin (the trap that has cost this repo a
+# green suite over a restored defect more than once).
+MAILF="$REPO/panel/backend/src/routes/mail.rs"
+
+if [ ! -f "$MAILF" ]; then
+  bad "K0 mail.rs is missing — every arm below would pass having examined nothing"
+else
+  # Extract the guarded issuer's own body. Everything below reads THIS, not the
+  # file, so an arm cannot be satisfied by a sibling function 1500 lines away.
+  PROV_BODY=$(prod_lines "$MAILF" \
+    | awk '/^async fn provision_mail_host_cert\(/ {inb=1} inb {print} inb && /^\}$/ {exit}')
+  PROV_N=$(grep -c . <<< "$PROV_BODY")
+
+  # H0 — the extractor's own control. An anchor that stops matching yields an
+  # EMPTY body, under which every `hasnt`-shaped arm below passes green. Floor it
+  # and make the break say so in its own words.
+  if [ "$PROV_N" -ge 20 ]; then
+    ok "K0 provision_mail_host_cert extracted — $PROV_N lines"
+  else
+    bad "K0 provision_mail_host_cert extracted — only $PROV_N lines (the extractor broke; the arms below examined nothing)"
+  fi
+
+  # H1 — ONE door. The raw agent provision call must exist exactly once in the
+  # file, i.e. only inside the guarded helper. Two auto-DNS providers reached this
+  # through byte-identical blocks before v2.156.0, and a guard applied to one leg
+  # and not the other is this project's most-repeated regression shape.
+  RAW_PROV=$(prod_count "$MAILF" -cE 'format!\("/ssl/provision/')
+  if [ "$RAW_PROV" -eq 1 ]; then
+    ok "K1 the agent provision call appears once in mail.rs — both providers share the guarded path"
+  else
+    bad "K1 the agent provision call appears once in mail.rs — found $RAW_PROV, so a leg issues unguarded"
+  fi
+
+  # H2 — and both legs actually reach it. One definition plus two call sites.
+  # Counted on the bare name so rustfmt wrapping the argument list cannot make a
+  # correct tree read as a broken one.
+  PROV_REFS=$(prod_count "$MAILF" -c 'provision_mail_host_cert')
+  if [ "$PROV_REFS" -eq 3 ]; then
+    ok "K2 provision_mail_host_cert is defined once and called from both auto-DNS legs"
+  else
+    bad "K2 provision_mail_host_cert is defined once and called from both auto-DNS legs — $PROV_REFS references (expected 3)"
+  fi
+
+  # H3 — the verdict is consulted BEFORE the call, not after it and not at all.
+  # Position, because a guard whose result is computed and then ignored reads
+  # identically to one that is absent.
+  V_AT=$(grep -n 'mail_cert_verdict' <<< "$PROV_BODY" | head -1 | cut -d: -f1)
+  P_AT=$(grep -n '/ssl/provision/' <<< "$PROV_BODY" | head -1 | cut -d: -f1)
+  if [ -n "$V_AT" ] && [ -n "$P_AT" ] && [ "$V_AT" -lt "$P_AT" ]; then
+    ok "K3 the verdict is taken before the certificate is ordered (verdict line $V_AT, order line $P_AT)"
+  else
+    bad "K3 the verdict is taken before the certificate is ordered — verdict=${V_AT:-absent} order=${P_AT:-absent}"
+  fi
+
+  # H4 — the guard returns rather than falling through. A verdict that refuses and
+  # then orders anyway is the shape a mutation of the branch produces, and it is
+  # invisible to a presence-shaped arm.
+  # ⚠ Written first as `grep -A 3` and it was RED against correct code: rustfmt
+  # wraps the verdict's argument list, so the `return;` sits six lines below the
+  # match, not three. A fixed -A window is not a branch (#172) — this asks the
+  # only question that matters and cannot be fooled by formatting: the refusal
+  # returns BEFORE the order is placed.
+  R_AT=$(grep -n 'MailCertVerdict::Refuse' <<< "$PROV_BODY" | head -1 | cut -d: -f1)
+  RET_AT=$(grep -nE '^\s+return;' <<< "$PROV_BODY" | head -1 | cut -d: -f1)
+  if [ -n "$R_AT" ] && [ -n "$RET_AT" ] && [ -n "$P_AT" ] \
+     && [ "$R_AT" -lt "$RET_AT" ] && [ "$RET_AT" -lt "$P_AT" ]; then
+    ok "K4 a refusal returns before the certificate is ordered (refuse $R_AT, return $RET_AT, order $P_AT)"
+  else
+    bad "K4 a refusal returns before the certificate is ordered — refuse=${R_AT:-absent} return=${RET_AT:-absent} order=${P_AT:-absent}"
+  fi
+
+  # H5 — BOTH inputs survive. The columns catch the LE wildcard the issuer probe
+  # is blind to (foreign_cert_issuer collapses ours-and-unknown to None); the
+  # issuer catches the uploaded certificate the columns cannot see. Deleting
+  # either half leaves a guard that still looks like a guard.
+  VERDICT_BODY=$(prod_lines "$MAILF" \
+    | awk '/^pub fn mail_cert_verdict\(/ {inb=1} inb {print} inb && /^\}$/ {exit}')
+  VERDICT_N=$(grep -c . <<< "$VERDICT_BODY")
+  if [ "$VERDICT_N" -lt 8 ]; then
+    bad "K5-control mail_cert_verdict extracted — only $VERDICT_N lines (the extractor broke)"
+  else
+    ok "K5-control mail_cert_verdict extracted — $VERDICT_N lines"
+    # ⚠ FIRST CUT OF THIS ARM WAS WEAK AND A MUTATION PROVED IT. It grepped the
+    # three INPUT NAMES, and `foreign_issuer` is also the parameter's name — so
+    # deleting the whole issuer check left the signature behind and the arm passed
+    # over a guard with half its cases gone. #766's family, in an arm written to
+    # catch exactly that. What is asserted now is that each input reaches a
+    # DECISION: both blocker variants must be returned from this body, which no
+    # signature can satisfy.
+    K5_MISS=""
+    grep -qE 'ssl_wildcard'   <<< "$VERDICT_BODY" || K5_MISS="$K5_MISS ssl_wildcard"
+    grep -qE 'dns-01'         <<< "$VERDICT_BODY" || K5_MISS="$K5_MISS dns-01"
+    grep -qE 'foreign_issuer' <<< "$VERDICT_BODY" || K5_MISS="$K5_MISS foreign_issuer"
+    grep -qE 'MailCertBlocker::Wildcard' <<< "$VERDICT_BODY" || K5_MISS="$K5_MISS refuses-wildcard"
+    grep -qE 'MailCertBlocker::Foreign'  <<< "$VERDICT_BODY" || K5_MISS="$K5_MISS refuses-foreign"
+    if [ -z "$K5_MISS" ]; then
+      ok "K5 the verdict consults the wildcard columns AND the issuer — neither half alone covers the other's case"
+    else
+      bad "K5 the verdict consults the wildcard columns AND the issuer — missing:$K5_MISS"
+    fi
+  fi
+
+  # H6 — a refusal is ANNOUNCED. Silence here is indistinguishable from the ACME
+  # failure the Err arm reports, so the operator could not tell a refusal that
+  # saved their wildcard from a network error they should retry.
+  if grep -qE 'announce_mail_cert_conflict' <<< "$PROV_BODY"; then
+    ok "K6 a refusal is announced to the operator, not skipped silently"
+  else
+    bad "K6 a refusal is announced to the operator — the refuse branch tells nobody"
+  fi
+
+  # H7 — severed-pair. A dedup key nothing raises decides nothing, and a key
+  # raised under a name nothing defines is an inline literal by another route.
+  # ⚠ The definition side is read from the KEY MODULE'S OWN RANGE, not from the
+  # whole file. `prod_lines` blanks from the first `#[cfg(test)]` to EOF, and
+  # notifications.rs carried one at line 136 of 1463 — so a whole-file `prod_count`
+  # here answered 0 for a constant that is plainly defined at 1107, and this arm
+  # was RED against correct code. The module was moved to the end of that file in
+  # the same commit; scoping to the range as well means the arm survives it coming
+  # back. Same defect as routes/ssl.rs at s388 (#669).
+  DEF_MHC=$(sed -n '/^pub mod ssl_renewal_key {/,/^}/p' "$NOTIF" | grep -c 'MAIL_HOST_CONFLICT')
+  USE_MHC=$(prod_count "$MAILF" -c 'MAIL_HOST_CONFLICT')
+  if [ "$DEF_MHC" -ge 1 ] && [ "$USE_MHC" -ge 1 ]; then
+    ok "K7 the mail-conflict dedup key is both defined and raised (def=$DEF_MHC use=$USE_MHC)"
+  else
+    bad "K7 the mail-conflict dedup key is both defined and raised — def=$DEF_MHC use=$USE_MHC"
+  fi
+fi
+
+echo
 echo "──────────────────────────────────────────"
 printf 'PASS: %d   FAIL: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

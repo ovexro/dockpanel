@@ -133,31 +133,6 @@ pub fn severity_color(severity: &str) -> &'static str {
     }
 }
 
-#[cfg(test)]
-mod severity_color_tests {
-    use super::severity_color;
-
-    #[test]
-    fn critical_is_red() {
-        assert_eq!(severity_color("critical"), "#ef4444");
-    }
-
-    #[test]
-    fn warning_is_amber() {
-        assert_eq!(severity_color("warning"), "#f59e0b");
-    }
-
-    /// `info` and any unrecognised value both fall to the same blue — there is
-    /// no third colour to confuse with a real severity, so an unknown string
-    /// degrades to the same thing "no severity" always meant.
-    #[test]
-    fn info_and_anything_unrecognised_is_blue() {
-        assert_eq!(severity_color("info"), "#3b82f6");
-        assert_eq!(severity_color("bogus"), "#3b82f6");
-        assert_eq!(severity_color(""), "#3b82f6");
-    }
-}
-
 /// Send a notification via all configured channels.
 pub async fn send_notification(
     pool: &PgPool,
@@ -1117,6 +1092,16 @@ pub mod ssl_renewal_key {
     pub const DNS01_DECLINED: &str = "dns01_declined";
     /// A DNS-01 certificate downgraded to a single name in its last week.
     pub const DNS01_DOWNGRADED: &str = "dns01_downgraded";
+    /// A mail host's certificate was NOT issued, because issuing it would have
+    /// overwritten a certificate covering more names than the mail host.
+    ///
+    /// ⚠ Deliberately its own key rather than `BLOCKED`. The two say opposite
+    /// things about what happened — `BLOCKED` reports a renewal the panel could
+    /// not perform, this reports one it deliberately declined to perform — and
+    /// they are raised about the SAME `site_id`. Sharing a key would let
+    /// whichever fired first mute the other for twelve hours, which is the
+    /// defect `state_key` exists to prevent and the one v2.154.0 shipped to fix.
+    pub const MAIL_HOST_CONFLICT: &str = "mail_host_conflict";
 }
 
 /// Fire an alert unless one of the same type already fired for the same site
@@ -1450,4 +1435,38 @@ pub async fn resolve_alert(
 
     // Panel notification center
     notify_panel(pool, Some(user_id), &format!("Resolved: {}", title), message, "info", "alert", Some("/monitoring?tab=alerts")).await;
+}
+
+// ⚠ MOVED TO THE END OF THE FILE at v2.156.0, and the move is the point.
+// `severity_color_tests` sat at line 136 of 1463. Every pin suite's `prod_lines`
+// helper blanks from the FIRST `#[cfg(test)]` to EOF, so a test module placed
+// mid-file hides everything below it from every `prod_*` arm in every suite —
+// here that was 91% of this file, including `ssl_renewal_key`,
+// `fire_alert_deduped` and `is_type_muted`. No existing arm was measuring an
+// empty subject yet; the first new one written over this file was, which is how
+// it was found. Same defect as `routes/ssl.rs` at s388 (#669).
+
+#[cfg(test)]
+mod severity_color_tests {
+    use super::severity_color;
+
+    #[test]
+    fn critical_is_red() {
+        assert_eq!(severity_color("critical"), "#ef4444");
+    }
+
+    #[test]
+    fn warning_is_amber() {
+        assert_eq!(severity_color("warning"), "#f59e0b");
+    }
+
+    /// `info` and any unrecognised value both fall to the same blue — there is
+    /// no third colour to confuse with a real severity, so an unknown string
+    /// degrades to the same thing "no severity" always meant.
+    #[test]
+    fn info_and_anything_unrecognised_is_blue() {
+        assert_eq!(severity_color("info"), "#3b82f6");
+        assert_eq!(severity_color("bogus"), "#3b82f6");
+        assert_eq!(severity_color(""), "#3b82f6");
+    }
 }

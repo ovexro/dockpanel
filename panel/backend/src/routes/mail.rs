@@ -1108,6 +1108,204 @@ fn cf_headers(token: &str, email: Option<&str>) -> reqwest::header::HeaderMap {
 /// SPF `ip4:` term resolve to; without it this function published the PANEL's
 /// address for a domain on a fleet member, which is a record that resolves,
 /// answers, and points mail at a machine that never sees it.
+/// Whether a mail host's certificate may be issued over what is already at
+/// `/etc/dockpanel/ssl/{domain}/fullchain.pem`.
+///
+/// Separated from every lookup so it can be exercised without a pool, an agent
+/// or a mail domain — the reason the decision underneath had never been tested.
+#[derive(Debug, PartialEq, Eq)]
+pub enum MailCertVerdict {
+    /// Nothing there loses names. Issue.
+    Issue,
+    /// Issuing would replace a certificate covering more than the mail host.
+    Refuse(MailCertBlocker),
+}
+
+/// What occupies the certificate file, in the words the operator is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MailCertBlocker {
+    /// A DockPanel-issued DNS-01 certificate that also covers subdomains.
+    Wildcard,
+    /// A certificate DockPanel did not issue (uploaded, commercial, Origin CA).
+    Foreign,
+}
+
+/// Decide whether issuing a mail-host certificate would destroy names.
+///
+/// A mail host genuinely needs a certificate, and the agent route that issues one
+/// writes `fullchain.pem` unconditionally. That path is not the mail host's
+/// private property: a site of the same name reads it, and so does a DNS-01
+/// **wildcard**, which `routes/ssl.rs` stores under the ZONE APEX — the very name
+/// a mail domain is normally created at. Issuing a single-name HTTP-01
+/// certificate over that file replaces one covering `*.example.com` with one
+/// covering `example.com` alone, and every sibling vhost (`app.`, `www.`,
+/// `staging.`) reading that same file starts serving a certificate that does not
+/// cover it. The vhost repair below this call cannot help: it restores the site's
+/// CONFIGURATION, and what was lost is the file the configuration points at.
+///
+/// ⚠ **Two inputs, and neither is redundant.** `foreign_issuer` cannot see the
+/// case that leads the harm: `foreign_cert_issuer` collapses *ours* and *we could
+/// not tell* into one `None` (`helpers.rs`), so an LE-issued wildcard answers
+/// `None`. The columns cannot see the other case: an uploaded commercial or
+/// Origin-CA certificate carries no `ssl_wildcard` and no `ssl_challenge` of ours.
+/// Each covers exactly what the other is blind to, which is why this takes both.
+///
+/// `Issue` deliberately includes the ordinary shape the mail entitlement is built
+/// on — a site and its mailboxes sharing one name, holding a single-name
+/// certificate that a re-issue merely refreshes. Refusing that would break the
+/// documented "set the mail up first, add the website after" order.
+pub fn mail_cert_verdict(
+    ssl_enabled: bool,
+    ssl_wildcard: Option<bool>,
+    ssl_challenge: Option<&str>,
+    foreign_issuer: Option<&str>,
+) -> MailCertVerdict {
+    // A site not serving TLS has no certificate here to lose. The issuer probe
+    // is not consulted in this state on purpose: a stale file left behind by a
+    // revoked certificate is not something the operator is still serving.
+    if !ssl_enabled {
+        return MailCertVerdict::Issue;
+    }
+
+    if ssl_wildcard == Some(true) || ssl_challenge == Some("dns-01") {
+        return MailCertVerdict::Refuse(MailCertBlocker::Wildcard);
+    }
+
+    if foreign_issuer.is_some() {
+        return MailCertVerdict::Refuse(MailCertBlocker::Foreign);
+    }
+
+    MailCertVerdict::Issue
+}
+
+/// Issue the mail host's certificate, unless doing so would destroy one.
+///
+/// Both auto-DNS providers reached this through byte-identical blocks. They are
+/// one function now: a guard applied to one leg and not the other is the
+/// sibling-call drift this project has shipped three times, and the two legs
+/// differ in nothing but the provider that got them here.
+async fn provision_mail_host_cert(
+    db: &sqlx::PgPool,
+    agent: &AgentHandle,
+    user_email: &str,
+    domain: &str,
+    server_id: uuid::Uuid,
+) {
+    // Wait briefly for DNS propagation before attempting ACME HTTP-01
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+    let site: Option<(uuid::Uuid, uuid::Uuid, bool, Option<bool>, Option<String>)> =
+        sqlx::query_as(
+            "SELECT id, user_id, ssl_enabled, ssl_wildcard, ssl_challenge \
+             FROM sites WHERE lower(domain) = lower($1) AND server_id = $2",
+        )
+        .bind(domain)
+        .bind(server_id)
+        .fetch_optional(db)
+        .await
+        .unwrap_or(None);
+
+    if let Some((site_id, site_owner, ssl_enabled, ssl_wildcard, ssl_challenge)) = site {
+        // Only asked when the columns did not already settle it — it is a round
+        // trip to the box, and a wildcard is decided from the row alone.
+        let foreign = if ssl_enabled
+            && ssl_wildcard != Some(true)
+            && ssl_challenge.as_deref() != Some("dns-01")
+        {
+            crate::helpers::foreign_cert_issuer(agent, domain).await
+        } else {
+            None
+        };
+
+        if let MailCertVerdict::Refuse(blocker) = mail_cert_verdict(
+            ssl_enabled,
+            ssl_wildcard,
+            ssl_challenge.as_deref(),
+            foreign.as_deref(),
+        ) {
+            announce_mail_cert_conflict(db, domain, site_id, site_owner, server_id, blocker).await;
+            return;
+        }
+    }
+
+    match agent.post(&format!("/ssl/provision/{domain}"), Some(serde_json::json!({
+        "email": user_email,
+        "runtime": "static",
+    }))).await {
+        Ok(_) => {
+            tracing::info!("Auto-SSL (mail): provisioned certificate for {domain}");
+            // ⛔ The agent does not patch a vhost for a certificate — it
+            // re-renders the whole file from what we just sent, and what we
+            // sent is `runtime: "static"` with no root, no limits and no
+            // hardening. That is the right body for a mail host and a
+            // catastrophe for a WEBSITE of the same name, which is an
+            // ordinary shape: you host example.com and you add mail for
+            // example.com. Measured on a box at s398 — the site was
+            // re-rendered static, answered 403 to every PHP request and lost
+            // its `limit_req_zone`, while the panel went on reporting
+            // `runtime = php` with all its limits set.
+            //
+            // Nothing above can be narrowed to avoid this: the mail host
+            // genuinely needs a certificate and the agent route that issues
+            // one always rewrites the vhost. So put the site's real
+            // configuration back afterwards, exactly as the four SSL doors in
+            // `routes/ssl.rs` already do for their own writes.
+            crate::routes::ssl::rebuild_vhost_for_domain(db, agent, domain, server_id).await;
+        }
+        Err(e) => tracing::warn!("Auto-SSL (mail): failed for {domain}: {e} — provision manually"),
+    }
+}
+
+/// Tell the operator a certificate was deliberately NOT issued.
+///
+/// Silence here would be the worst outcome: the mail host simply has no
+/// certificate, which looks exactly like the ACME failure the `Err` arm above
+/// reports, and the operator would have no way to tell a refusal that protected
+/// their wildcard from a network error they should retry.
+async fn announce_mail_cert_conflict(
+    db: &sqlx::PgPool,
+    domain: &str,
+    site_id: uuid::Uuid,
+    site_owner: uuid::Uuid,
+    server_id: uuid::Uuid,
+    blocker: MailCertBlocker,
+) {
+    let because = match blocker {
+        MailCertBlocker::Wildcard => format!(
+            "the site {domain} holds a DNS-01 certificate that also covers its \
+             subdomains. Issuing a single-name certificate for the mail host \
+             would replace it, and every subdomain reading the same file would \
+             start serving a certificate that does not cover it"
+        ),
+        MailCertBlocker::Foreign => format!(
+            "the certificate installed for {domain} was not issued by DockPanel. \
+             Issuing over it would destroy a certificate somebody installed \
+             deliberately"
+        ),
+    };
+
+    tracing::warn!("Auto-SSL (mail): declined to provision for {domain} — {because}");
+
+    crate::services::notifications::fire_alert_deduped(
+        db,
+        site_owner,
+        Some(server_id),
+        Some(site_id),
+        "ssl_renewal_failure",
+        crate::services::notifications::ssl_renewal_key::MAIL_HOST_CONFLICT,
+        "warning",
+        &format!("Mail certificate not issued: {domain}"),
+        &format!(
+            "DockPanel did not issue a certificate for the mail host {domain}, because \
+             {because}. Mail for this domain will use the certificate already installed. \
+             If the mail host needs one of its own, issue it deliberately from the site's \
+             SSL tab, where the consequences are shown before anything is replaced."
+        ),
+        12,
+    )
+    .await;
+}
+
 async fn auto_create_mail_dns(
     db: &sqlx::PgPool,
     agent: &AgentHandle,
@@ -1217,34 +1415,7 @@ async fn auto_create_mail_dns(
         }
 
         // ── Auto-SSL: provision certificate for the mail domain ───────────
-        // Wait briefly for DNS propagation before attempting ACME HTTP-01
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        match agent.post(&format!("/ssl/provision/{domain}"), Some(serde_json::json!({
-            "email": user_email,
-            "runtime": "static",
-        }))).await {
-            Ok(_) => {
-                tracing::info!("Auto-SSL (mail): provisioned certificate for {domain}");
-                // ⛔ The agent does not patch a vhost for a certificate — it
-                // re-renders the whole file from what we just sent, and what we
-                // sent is `runtime: "static"` with no root, no limits and no
-                // hardening. That is the right body for a mail host and a
-                // catastrophe for a WEBSITE of the same name, which is an
-                // ordinary shape: you host example.com and you add mail for
-                // example.com. Measured on a box at s398 — the site was
-                // re-rendered static, answered 403 to every PHP request and lost
-                // its `limit_req_zone`, while the panel went on reporting
-                // `runtime = php` with all its limits set.
-                //
-                // Nothing above can be narrowed to avoid this: the mail host
-                // genuinely needs a certificate and the agent route that issues
-                // one always rewrites the vhost. So put the site's real
-                // configuration back afterwards, exactly as the four SSL doors in
-                // `routes/ssl.rs` already do for their own writes.
-                crate::routes::ssl::rebuild_vhost_for_domain(db, agent, domain, server_id).await;
-            }
-            Err(e) => tracing::warn!("Auto-SSL (mail): failed for {domain}: {e} — provision manually"),
-        }
+        provision_mail_host_cert(db, agent, user_email, domain, server_id).await;
     } else if provider == "powerdns" {
         // Get PowerDNS settings
         let pdns: Vec<(String, String)> = sqlx::query_as(
@@ -1305,33 +1476,7 @@ async fn auto_create_mail_dns(
         }
 
         // ── Auto-SSL for PowerDNS ────────────────────────────────────────
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        match agent.post(&format!("/ssl/provision/{domain}"), Some(serde_json::json!({
-            "email": user_email,
-            "runtime": "static",
-        }))).await {
-            Ok(_) => {
-                tracing::info!("Auto-SSL (mail): provisioned certificate for {domain}");
-                // ⛔ The agent does not patch a vhost for a certificate — it
-                // re-renders the whole file from what we just sent, and what we
-                // sent is `runtime: "static"` with no root, no limits and no
-                // hardening. That is the right body for a mail host and a
-                // catastrophe for a WEBSITE of the same name, which is an
-                // ordinary shape: you host example.com and you add mail for
-                // example.com. Measured on a box at s398 — the site was
-                // re-rendered static, answered 403 to every PHP request and lost
-                // its `limit_req_zone`, while the panel went on reporting
-                // `runtime = php` with all its limits set.
-                //
-                // Nothing above can be narrowed to avoid this: the mail host
-                // genuinely needs a certificate and the agent route that issues
-                // one always rewrites the vhost. So put the site's real
-                // configuration back afterwards, exactly as the four SSL doors in
-                // `routes/ssl.rs` already do for their own writes.
-                crate::routes::ssl::rebuild_vhost_for_domain(db, agent, domain, server_id).await;
-            }
-            Err(e) => tracing::warn!("Auto-SSL (mail): failed for {domain}: {e} — provision manually"),
-        }
+        provision_mail_host_cert(db, agent, user_email, domain, server_id).await;
     }
 
     Ok(())
@@ -2674,5 +2819,83 @@ mod tests {
         let a = dovecot_password_hash("same-password").unwrap();
         let b = dovecot_password_hash("same-password").unwrap();
         assert_ne!(a, b, "each hash must use a fresh random salt");
+    }
+}
+
+#[cfg(test)]
+mod mail_cert_verdict_tests {
+    use super::{mail_cert_verdict, MailCertBlocker, MailCertVerdict};
+
+    // The ordinary shape the mail entitlement is BUILT on: one name, one
+    // single-name certificate, mail added beside the website. A re-issue here
+    // refreshes exactly the names that were already there, so refusing it would
+    // break the documented order rather than protect anything.
+    #[test]
+    fn ordinary_same_name_site_still_gets_its_certificate() {
+        assert_eq!(
+            mail_cert_verdict(true, Some(false), Some("http-01"), None),
+            MailCertVerdict::Issue
+        );
+    }
+
+    // The case that leads the harm, and the one the issuer probe is blind to:
+    // `foreign_cert_issuer` answers None for an LE-issued wildcard, so this
+    // verdict has to come from the columns or it does not come at all.
+    #[test]
+    fn a_wildcard_is_refused_even_though_the_issuer_looks_like_ours() {
+        assert_eq!(
+            mail_cert_verdict(true, Some(true), Some("dns-01"), None),
+            MailCertVerdict::Refuse(MailCertBlocker::Wildcard)
+        );
+    }
+
+    // `ssl_wildcard` is three-state on purpose (the column is nullable), so a
+    // DNS-01 row that never recorded the flag must still refuse.
+    #[test]
+    fn dns01_alone_refuses_when_the_wildcard_flag_was_never_recorded() {
+        assert_eq!(
+            mail_cert_verdict(true, None, Some("dns-01"), None),
+            MailCertVerdict::Refuse(MailCertBlocker::Wildcard)
+        );
+    }
+
+    // The case the columns are blind to: an uploaded commercial or Origin-CA
+    // certificate carries no ssl_wildcard and no ssl_challenge of ours.
+    #[test]
+    fn a_foreign_certificate_is_refused_on_the_issuer_alone() {
+        assert_eq!(
+            mail_cert_verdict(true, Some(false), Some("http-01"), Some("DigiCert Inc")),
+            MailCertVerdict::Refuse(MailCertBlocker::Foreign)
+        );
+    }
+
+    // Neither input alone is sufficient — this is the pair that proves it. Drop
+    // the columns and the wildcard case passes; drop the issuer and the foreign
+    // case passes. Both directions are asserted above; this pins that the two
+    // are not the same test written twice.
+    #[test]
+    fn the_two_inputs_catch_different_cases() {
+        // wildcard, no foreign issuer -> caught only by the columns
+        assert!(matches!(
+            mail_cert_verdict(true, Some(true), None, None),
+            MailCertVerdict::Refuse(MailCertBlocker::Wildcard)
+        ));
+        // foreign issuer, no wildcard columns -> caught only by the issuer
+        assert!(matches!(
+            mail_cert_verdict(true, None, None, Some("Let's Encrypt")),
+            MailCertVerdict::Refuse(MailCertBlocker::Foreign)
+        ));
+    }
+
+    // A site not serving TLS has nothing here to lose, so the mail host gets its
+    // certificate. This is the still-member direction: a guard that refused here
+    // would leave a mail host permanently without a certificate on every install
+    // where the website is plain HTTP.
+    #[test]
+    fn a_site_not_serving_tls_does_not_block_the_mail_host() {
+        assert_eq!(
+            mail_cert_verdict(false, Some(true), Some("dns-01"), Some("DigiCert Inc")),
+            MailCertVerdict::Issue
+        );
     }
 }
