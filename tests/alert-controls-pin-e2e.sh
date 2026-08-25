@@ -121,18 +121,27 @@ else
   bad "A4-control the producer enumeration is sound — only $NPROD found (expected >= 8; the extractor broke)"
 fi
 
-# Only tokens that are ALSO a known alert type count as produced — the arg
-# sweep above cannot tell an alert_type from a state_key, so intersect it with
-# the union of both lists plus the documented exclusion. What matters is the
-# direction that bites: a produced type MISSING from the vocabulary.
-KNOWN=$(printf '%s\n%s\nslow_response\n' "$BACK" "$FRONT" | sort -u)
-MISSING=$(comm -23 <(printf '%s\n' "$PRODUCED" | sort -u) <(printf '%s\n' "$KNOWN"))
+# NO EXEMPTIONS. The arg sweep cannot tell an alert_type from a state_key, so
+# intersect against the vocabulary itself; what bites is the one direction that
+# matters — a produced type MISSING from it. An exemption list was carried here
+# for one release and was wrong: the type it exempted is suppressible on its
+# recovery notice, and exempting it also refused a stored value that worked.
+MISSING=$(comm -23 <(printf '%s\n' "$PRODUCED" | sort -u) <(printf '%s\n' "$BACK"))
 NMISSING=$(grep -c . <<< "$MISSING")
 if [ "$NMISSING" -eq 0 ]; then
-  ok "A4 every alert type raised at a fire site is either suppressible or a named exclusion"
+  ok "A4 every alert type raised at a fire site is suppressible — no exemptions"
 else
   bad "A4 $NMISSING alert type(s) page an operator with no way to suppress them"
   while IFS= read -r t; do [ -n "$t" ] && printf '        ungoverned: %s\n' "$t"; done <<< "$MISSING"
+fi
+
+# A5: the raw-INSERT producer is in the vocabulary too. It reaches the alerts
+# table without passing the fan-out, so a literal-argument sweep of fire_alert
+# call sites cannot see it and A4 is structurally blind to it.
+if grep -qE '^slow_response$' <<< "$BACK" && grep -qE '^slow_response$' <<< "$FRONT"; then
+  ok "A5 the direct-INSERT producer is suppressible on both sides too"
+else
+  bad "A5 the direct-INSERT producer is suppressible on both sides too"
 fi
 
 echo

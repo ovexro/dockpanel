@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [2.155.1]
 
+### Fixed — the twentieth alert type is suppressible after all
+
+v2.155.0 listed nineteen of the twenty alert types in the suppression grid and
+left out slow-response deliberately, reasoning that it is recorded by a path
+which never reaches the external channels, so a checkbox for it would switch off
+nothing.
+
+That was half right and it was the wrong half. The *firing* event does bypass
+those channels — that part is true, and it remains a fault to fix in its own
+right. But the matching *recovery* message ("response time is back under the
+threshold") goes out the normal way and does respect the suppression list. So the
+entry governs every external message that alert type actually sends today, and
+leaving it out meant the new validation refused a stored value that had been
+working for anyone who had set it by hand.
+
+All twenty are listed now, with no exemptions, and the check that compares the
+list against what the panel really raises no longer carries one either.
+
 ### Fixed — a muted alert type could still reach you through an escalation webhook
 
 v2.155.0 widened the suppression grid from ten alert types to nineteen. The text

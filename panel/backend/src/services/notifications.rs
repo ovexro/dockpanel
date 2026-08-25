@@ -728,11 +728,17 @@ pub async fn dispatch_escalation_step(
 /// was the half nobody had thought about recently, which is the half that
 /// pages you at three in the morning.
 ///
-/// Membership is DELIBERATE, not derived from the producers. A type belongs
-/// here only if its pages actually reach the per-type suppression check on the
-/// fan-out. One producer writes its row with a direct INSERT that never
-/// reaches the fan-out at all; a checkbox for it would name a thing it does
-/// not govern, which is the defect this list exists to end, not to spread.
+/// Membership is every alert type this panel raises, with no exemptions — the
+/// list and the producers are compared by a pin arm that reads the call sites
+/// rather than either list, so a new producer without an entry here fails CI.
+///
+/// `slow_response` was left out on the first cut, on the reasoning that its
+/// FIRING event is written by a direct INSERT that never reaches the fan-out,
+/// so a control naming it would govern nothing. That was half the picture and
+/// the wrong half: the recovery notice DOES go through the fan-out and does
+/// honour this list, so the entry governs every external message that type
+/// actually produces. Leaving it out also rejected a stored value that had been
+/// working. The asymmetry is real and it belongs to the producer, not here.
 pub const SUPPRESSIBLE_ALERT_TYPES: &[&str] = &[
     "cpu",
     "memory",
@@ -753,6 +759,7 @@ pub const SUPPRESSIBLE_ALERT_TYPES: &[&str] = &[
     "ssl_expiry",
     "ssl_renewal_failure",
     "security",
+    "slow_response",
 ];
 
 /// Tokens of a stored suppression list that name no suppressible alert type.

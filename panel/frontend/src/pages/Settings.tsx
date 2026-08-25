@@ -25,9 +25,8 @@ import {
 // alert types that page an operator had no control here at all — including
 // every certificate-renewal failure. Adding a producer means adding it here.
 //
-// One producer is deliberately absent: `slow_response` is written straight into
-// the alerts table without passing the fan-out, so its page cannot be
-// suppressed by this list and a checkbox for it would govern nothing.
+// No exemptions: a pin arm compares this list against the alert types the
+// backend actually raises, reading the call sites rather than either list.
 const SUPPRESSIBLE_ALERT_TYPES: { key: string; label: string }[] = [
   { key: "cpu", label: "CPU" },
   { key: "memory", label: "Memory" },
@@ -48,6 +47,7 @@ const SUPPRESSIBLE_ALERT_TYPES: { key: string; label: string }[] = [
   { key: "ssl_expiry", label: "SSL expiry" },
   { key: "ssl_renewal_failure", label: "SSL renewal" },
   { key: "security", label: "Security scan" },
+  { key: "slow_response", label: "Slow response" },
 ];
 
 
