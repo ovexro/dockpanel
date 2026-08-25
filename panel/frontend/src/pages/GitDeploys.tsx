@@ -1053,6 +1053,26 @@ export default function GitDeploys() {
             </div>
 
             <div className="p-5 space-y-4">
+              {/* The other half of what #118 was promised. The guide has carried
+                  this warning since v2.135.0, but the reporter's own accepted
+                  fallback was "documenting it AND surfacing it in the UI", and
+                  only the doc shipped — so the person who most needs it, the one
+                  filling in this form for the first time, was the one person not
+                  shown it. Deliberately above the first field and on the edit
+                  path too: the loss lands on the SECOND deploy, so an operator
+                  editing an existing deploy is inside the window, not past it. */}
+              <div className="px-3 py-2 bg-warn-500/10 border border-warn-500/20 rounded-lg">
+                <p className="text-xs text-warn-400">
+                  Git Deploys have no persistent storage. Every deploy replaces the
+                  container, so anything the app writes to its own filesystem —
+                  uploads, generated files, a SQLite database — is lost on the next
+                  deploy, not this one.
+                </p>
+                <p className="text-xs text-warn-400/80 mt-1">
+                  Use a database under <span className="font-medium">Databases</span>, or
+                  object storage, for anything that has to survive a deploy.
+                </p>
+              </div>
               {/* Name */}
               <div>
                 <label className="block text-sm font-medium text-dark-100 mb-1">Name</label>

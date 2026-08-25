@@ -659,6 +659,12 @@ async fn auto_fix_safe_findings(
                                 .await;
                         }
 
+                        // Same as the auto-healer's success branch: a renewal that
+                        // succeeded disproves the alerts saying one had not, and
+                        // leaves the downgrade alert above alone.
+                        notifications::resolve_ssl_renewal_failure(pool, user_id, site_id, domain)
+                            .await;
+
                         // Preserve the site's full config (WAF/CSP/Permissions-
                         // Policy/rate-limit/custom_nginx/bot-protection) — the
                         // agent's provision only renders a subset. Best-effort.

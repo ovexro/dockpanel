@@ -4,6 +4,92 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.157.0]
+
+### Fixed — a certificate alert that never cleared, so fixing the problem stopped nothing
+
+`ssl_renewal_failure` had nine producers and no resolver. Nothing anywhere
+cleared one: not the twelve `resolve_alert` call sites, not the renewal-success
+path, not the retention purge, which only collects rows already marked resolved.
+
+So a certificate failed to renew, the alert fired at `critical`, the operator
+fixed the cause, and the certificate renewed — and the alert kept firing. The
+escalation sweep re-paged it every thirty minutes for up to seven days, the
+Alerts list never returned to green, and the panel said two opposite things at
+once, because the *expiry* alert beside it did resolve and reported the
+certificate "valid again".
+
+A successful renewal now clears the renewal alerts it disproves, on both loops
+that renew — the auto-healer and the security scanner.
+
+**Three of the six keys, and the split is the point.** `failed`, `blocked` and
+`dns01_declined` all say a renewal did not happen, and a renewal happening is
+what makes them false. The other three describe the certificate installed *now*
+and survive: `dns01_downgraded` means names stopped being covered and they stay
+uncovered, `declined` means the installed certificate is somebody else's, and
+`mail_host_conflict` means a mail host's certificate was refused to protect a
+wildcard. Renewing does not contradict any of them.
+
+### Fixed — switching an alert type off published it on your status page
+
+`alert_rules` carries a per-type on/off switch for eight alert types, and
+turning one off suppressed the alert completely: no row, no bell, nothing sent.
+But the function that fires alerts reported success either way, and its caller
+believed it. Two things went wrong downstream, both in the reassuring
+direction.
+
+The caller auto-creates a status-page incident for critical alerts, marked
+visible. So the one control that means *"do not tell me about this"* was the
+control that told everybody: the alert vanished from the operator's own panel
+and appeared on their public status page.
+
+And the SSL warning ladder stamps "already warned at this rung" only when a page
+actually lands — deliberately, so a page that failed cannot consume a rung.
+Reported as sent, a switched-off `ssl_expiry` consumed rungs anyway, and since
+the ladder only ever fires a *tighter* rung than the one stamped, switching the
+type back on did not bring them back.
+
+### Fixed — the alerts page offered a filter that could never match, and none for slow responses
+
+`Flapping` was a label with no producer anywhere in the backend, so selecting it
+always returned an empty list. `slow_response` was the reverse: produced, but
+missing from the label map, so its badge printed the raw column name and the
+filter could not select it at all. Both are now correct, and a regression pin
+compares that map against the backend vocabulary — the suppression grid beside
+it had been pinned for releases, this one never had been, which is why the drift
+survived in both directions at once.
+
+### Fixed — importing a configuration silently switched off three kinds of alert
+
+The config importer defaulted `alert_backup_failure`, `alert_ssl_expiry` and
+`alert_service_health` to **off** when the field was absent, while CPU, memory,
+disk and offline defaulted **on**. The database declares all seven `DEFAULT
+TRUE`. A configuration written by an older DockPanel, hand-edited, or produced
+by anything but this build's own export therefore turned off backup, certificate
+and service-health alerting on import, with nothing to say so.
+
+### Fixed — the extension "Test webhook" button followed redirects
+
+Extension webhook *delivery* refuses redirects and re-checks the URL against
+internal addresses at send time. The **Test** button did neither: it built its
+own HTTP client that set only a timeout, so the default redirect-following
+applied, and it echoed the response body back to the caller. A stored webhook
+URL that redirects to an internal address was therefore readable, not merely
+reachable. It is admin-only, and it now uses the same client and the same
+send-time check as delivery.
+
+### Documentation — Git Deploy storage (#118)
+
+The source comment above the Git Deploy container configuration announced *five*
+constraints over a list of **six**, and said the first was the one that turns a
+patch into a regression. The sixth is the one that says shipping the other five
+alone destroys existing data on the first deploy after the fix. Corrected.
+
+The Git Deploy guide's warning about persistent storage is now linked from the
+top of the guide, where somebody creating their first deploy will see it, and
+the New/Edit Deploy form carries it too — the half of that commitment that had
+not shipped.
+
 ## [2.156.0]
 
 ### Fixed — adding mail for a domain could destroy that domain's certificate

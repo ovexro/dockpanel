@@ -148,7 +148,23 @@ async fn fire_alert_with_retry(
         )
         .await
         {
-            Ok(_) => {
+            // `Ok(false)` is not a fire. The operator has this type switched off,
+            // so `try_fire_alert` wrote no `alerts` row, rang no bell and sent
+            // nothing — and the two things below both have to know that.
+            //
+            // Returning `true` here published the outage on the operator's PUBLIC
+            // status page (the incident is created `visible_on_status_page = TRUE`)
+            // for the one alert type they had asked not to hear about, and it
+            // also satisfied this function's own contract, so the SSL ladder
+            // stamped `last_warned_day` for a page that never happened. Because
+            // `ssl_decision` only fires a rung TIGHTER than the one stamped, that
+            // rung was then gone for good — re-enabling the type did not bring it
+            // back.
+            //
+            // Retrying is pointless too: the answer is a stored preference, not a
+            // transient error, so this returns rather than looping.
+            Ok(false) => return false,
+            Ok(true) => {
                 // Auto-create managed incident for critical alerts
                 // GAP 11: Check for existing active incident before creating a new one
                 if severity == "critical" || alert_type == "offline" || alert_type == "service_down" {

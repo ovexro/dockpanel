@@ -23,6 +23,21 @@
 #       'firing' for ever — visible to `check_escalations` through
 #       idx_alerts_escalation_sweep, and read by the dedup guard itself, so the
 #       stuck row also blinded every future slow-response check on that monitor.
+#   §H  a SUCCESSFUL renewal clears the `ssl_renewal_failure` alerts that said
+#       one had not happened — and clears ONLY those. `ssl_expiry` learned to
+#       resolve long ago; this type never did, so a certificate that failed, was
+#       fixed and then renewed left a critical row firing for up to seven days
+#       while `check_escalations` re-paged it every thirty minutes and the
+#       resolved-only purge never collected it. §H also pins the OTHER half: the
+#       three standing conditions must NOT be cleared, because `DNS01_DOWNGRADED`
+#       is raised on that same success path and `fire_alert_deduped` windows on
+#       `created_at` regardless of status, so resolving it would swallow its own
+#       re-fire.
+#   §I  a disabled alert type is not a fired alert. `try_fire_alert` returned
+#       `Ok(())` whether it recorded a row or found the type switched off, so the
+#       caller published a `visible_on_status_page` incident for an alert the
+#       operator had silenced, and stamped the SSL ladder's rung for a page that
+#       never went out.
 #   §E  reopening an incident CLEARS `resolved_at`, on BOTH write paths, and
 #       `postmortem` still keeps it. The stamp survived a reopen, so the public
 #       status page rendered "Resolved <n> ago" over a live `investigating`.
@@ -63,10 +78,12 @@ NOTIF=panel/backend/src/services/notifications.rs
 ENGINE=panel/backend/src/services/alert_engine.rs
 HEALER=panel/backend/src/services/auto_healer.rs
 UPTIME=panel/backend/src/services/uptime.rs
+SCANNER=panel/backend/src/services/security_scanner.rs
+STOPS=panel/backend/src/services/expected_stops.rs
 INC=panel/backend/src/routes/incidents.rs
 MIG=panel/backend/migrations/20260813000000_alert_state_key.sql
 
-for f in "$NOTIF" "$ENGINE" "$HEALER" "$UPTIME" "$INC" "$MIG"; do
+for f in "$NOTIF" "$ENGINE" "$HEALER" "$UPTIME" "$SCANNER" "$STOPS" "$INC" "$MIG"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
 
@@ -216,17 +233,23 @@ fi
 echo
 echo "== §C  every per-entity caller passes a real key =="
 
+# ⚠ `expected_stops` added at v2.157.0. It was a TWELFTH production caller that
+# this enumeration could not see for as long as it has existed, and its title
+# matches C2's own `Container '` selector — so the arm that checks every
+# per-entity caller passes a real key was silently checking eleven of twelve.
+# It is correctly keyed; that is luck, not coverage.
 ALLCALLS=$( { calls "$ENGINE" notifications::resolve_alert
               calls "$HEALER" notifications::resolve_alert
+              calls "$STOPS" notifications::resolve_alert
               calls "$UPTIME" notifications::resolve_alert; } 2>/dev/null )
 NCALLS=$(grep -c . <<< "$ALLCALLS")
 
 # Assert the enumeration BEFORE trusting it (#143): an empty call list would
 # make every arm below vacuously green.
-if [ "$NCALLS" -ge 11 ]; then
+if [ "$NCALLS" -ge 12 ]; then
   ok "C1 enumeration is sound — $NCALLS resolve_alert call sites found"
 else
-  bad "C1 enumeration is sound — only $NCALLS resolve_alert call sites found (expected >= 11)"
+  bad "C1 enumeration is sound — only $NCALLS resolve_alert call sites found (expected >= 12)"
 fi
 
 # A call about a NAMED entity that also passes a literal "" is the original bug
@@ -518,6 +541,213 @@ if [ "$KEYDEFS" -eq 6 ] && [ "$INLINE" -eq 0 ]; then
   ok "G5 all six keys are named constants in one module, and no call site inlines a literal"
 else
   bad "G5 all six keys are named constants in one module — $KEYDEFS defined, $INLINE inline literal(s) at call sites"
+fi
+
+echo
+echo "== §H  a successful renewal clears the alerts that said none happened, and only those =="
+
+if N=$(subj "$NOTIF"); then
+  RES=$(fnbody "$N" resolve_ssl_renewal_failure)
+  # FLOOR the body before trusting any absence arm below it. An empty extraction
+  # would make H3 and H4 pass over nothing at all (#461).
+  RESLINES=$(grep -c . <<< "$RES")
+  if [ "$RESLINES" -ge 8 ]; then
+    ok "H1 resolve_ssl_renewal_failure body extracted — $RESLINES lines"
+
+    # It must decide through the TESTED predicate over the WHOLE key list, not a
+    # hand-written subset. A literal list here would compile, behave identically
+    # today, and silently stop tracking `renewal_success_clears` — whose unit
+    # tests are the only thing that says which keys belong.
+    if grep -qE 'ssl_renewal_key::ALL' <<< "$RES" \
+    && grep -qE 'renewal_success_clears' <<< "$RES"; then
+      ok "H2 the resolver filters the whole key list through renewal_success_clears"
+    else
+      bad "H2 the resolver filters the whole key list through renewal_success_clears — a hand-written subset drifts from the tested predicate"
+    fi
+
+    # ⚠ THE SCOPING ARM. `resolve_alert` picks its arm on `server_id.is_some()`
+    # FIRST, so a server id here builds `WHERE server_id = $2` and misses every
+    # row the SCANNER raised — that loop fires with `None` while the healer's
+    # FAILED fires with `Some(server_id)`. The same logical alert exists in two
+    # shapes and only the site arm matches both.
+    RESCALL=$(calls "$NOTIF" resolve_alert | grep -F 'ssl_renewal_failure' || true)
+    if [ -n "$RESCALL" ] && grep -qE '\( *pool, *user_id, *None, *Some\(site_id\)' <<< "$RESCALL"; then
+      ok "H3 the resolve is scoped by site with server_id None, so it matches rows from BOTH loops"
+    else
+      bad "H3 the resolve is scoped by site with server_id None — a server id misses every scanner-raised row (got: ${RESCALL:-no call found})"
+    fi
+
+    # The three standing conditions must not be reachable from this body. Naming
+    # any of them here is the regression: DNS01_DOWNGRADED is RAISED on the same
+    # success path, so resolving it lets the re-fire land inside its own dedup
+    # window and disappear.
+    STANDING=0
+    for k in DNS01_DOWNGRADED DECLINED MAIL_HOST_CONFLICT; do
+      # DNS01_DECLINED contains DECLINED, so match the qualified path exactly.
+      if grep -qE "ssl_renewal_key::${k}\b" <<< "$RES"; then
+        STANDING=$((STANDING+1))
+        printf '     names %s\n' "$k"
+      fi
+    done
+    if [ "$STANDING" -eq 0 ]; then
+      ok "H4 the resolver names none of the three standing conditions"
+    else
+      bad "H4 the resolver names none of the three standing conditions — $STANDING named, and a success does not disprove them"
+    fi
+  else
+    for a in H1 H2 H3 H4; do bad "$a resolve_ssl_renewal_failure body is too small to test ($RESLINES lines) — the resolver is missing or was renamed"; done
+  fi
+
+  # The predicate itself must keep its conservative fall-through. A `_ => true`
+  # would resolve every key added later without anybody deciding to.
+  # ⚠ The catch-all ONLY. The first cut of this arm also matched a bare
+  # `=> true`, which goes red against a CORRECT explicit rewrite
+  # (`… => true, _ => false`) — an arm red on correct code, which is how K4
+  # failed at v2.156.0. Floored, because a renamed function makes fnbody return
+  # nothing and `! grep -q` on an empty string is green.
+  PRED=$(fnbody "$N" renewal_success_clears)
+  NPRED=$(grep -c . <<< "$PRED")
+  if [ "$NPRED" -ge 3 ] && ! grep -qE '_ *=> *true' <<< "$PRED"; then
+    ok "H5 renewal_success_clears has no catch-all-true — an unknown key is left alone"
+  else
+    bad "H5 renewal_success_clears has no catch-all-true — $NPRED lines extracted; an unknown key must not be resolved by default"
+  fi
+
+  # ALL must list every constant BY NAME, or a key added later is silently never
+  # considered by `renewal_success_clears`.
+  #
+  # ⚠ MEMBERSHIP, not length. The first cut of this arm compared the declared
+  # array length against KEYDEFS — which the Rust compiler already enforces, so
+  # it tested nothing the build did not: dropping MAIL_HOST_CONFLICT and
+  # duplicating DECLINED to hold the length at six passed G5, H2, H6 AND the
+  # unit tests. Matched on the whole line (`^\s*NAME,$`) because DNS01_DECLINED
+  # contains DECLINED, and scoped to the array's own range because a bare grep
+  # for a key name is satisfied by its own `pub const` declaration above.
+  MODBLOCK=$(sed -n '/^pub mod ssl_renewal_key {/,/^}/p' "$NOTIF")
+  ALLBLOCK=$(sed -n '/pub const ALL: \[&str; *[0-9]*\] *= *\[/,/\];/p' <<< "$MODBLOCK")
+  KEYNAMES=$(grep -oE '^\s*pub const [A-Z0-9_]+:' <<< "$MODBLOCK" | grep -oE '[A-Z0-9_]{2,}' | grep -v '^ALL$')
+  NKEYNAMES=$(grep -c . <<< "$KEYNAMES")
+  MEMBER_BAD=0
+  if [ "$NKEYNAMES" -ge 5 ] && [ -n "$ALLBLOCK" ]; then
+    while IFS= read -r k; do
+      [ -n "$k" ] || continue
+      n=$(grep -cE "^[[:space:]]*${k},[[:space:]]*$" <<< "$ALLBLOCK")
+      if [ "$n" -ne 1 ]; then
+        MEMBER_BAD=$((MEMBER_BAD+1))
+        printf '     %s listed %s time(s)\n' "$k" "$n"
+      fi
+    done <<< "$KEYNAMES"
+    if [ "$MEMBER_BAD" -eq 0 ]; then
+      ok "H6 ssl_renewal_key::ALL lists each of the $NKEYNAMES constants exactly once"
+    else
+      bad "H6 ssl_renewal_key::ALL lists each of the $NKEYNAMES constants exactly once — $MEMBER_BAD wrong, so a key the resolver never considers"
+    fi
+  else
+    bad "H6 ssl_renewal_key::ALL membership — extraction broke ($NKEYNAMES names, ALL block ${ALLBLOCK:+present}${ALLBLOCK:-absent})"
+  fi
+else
+  for a in H1 H2 H3 H4 H5 H6; do bad "$a $NOTIF is readable"; done
+fi
+
+# Both renewal-SUCCESS paths must call it. A guard on one loop only is the drift
+# shape this project keeps finding: the scanner is the ONLY automatic renewal on
+# a stock install, and the healer is the one that ticks every two minutes.
+for pair in "HEALER:$HEALER" "SCANNER:$SCANNER"; do
+  label=${pair%%:*}; file=${pair#*:}
+  if F=$(subj "$file"); then
+    if grep -qE 'resolve_ssl_renewal_failure' <<< "$F"; then
+      ok "H7 the $label renewal-success path clears the renewal alerts"
+    else
+      bad "H7 the $label renewal-success path clears the renewal alerts — this loop renews and never resolves"
+    fi
+  else
+    bad "H7 $file is readable"
+  fi
+done
+
+echo
+echo "== §I  a disabled alert type is not a fired alert =="
+
+if N=$(subj "$NOTIF"); then
+  FIRE2=$(fnbody "$N" try_fire_alert)
+  FIRELINES=$(grep -c . <<< "$FIRE2")
+  if [ "$FIRELINES" -ge 20 ]; then
+    ok "I1 try_fire_alert body extracted — $FIRELINES lines"
+
+    # The signature must carry the answer. `Result<(), String>` cannot express
+    # "nothing was recorded", which is the whole defect.
+    #
+    # ⚠ Read off try_fire_alert's OWN declaration. The first cut was two
+    # independent whole-file greps — `fn try_fire_alert` anywhere and
+    # `Result<bool, String>` anywhere — and a sibling declaration satisfies the
+    # second: changing this function to `Result<u8, String>` while ANY other fn
+    # in the file returns `Result<bool, String>` left the arm green, including
+    # one declared inside `#[cfg(test)]`, which `code()` does not blank. #797.
+    SIG=$(perl -0777 -ne 'print $1 if /fn try_fire_alert\b.*?(\)\s*->\s*[^{]+)\{/s' <<< "$(code "$NOTIF")")
+    if [ -n "$SIG" ] && grep -qE 'Result<bool, String>' <<< "$SIG"; then
+      ok "I2 try_fire_alert's own signature returns whether it recorded anything"
+    else
+      bad "I2 try_fire_alert's own signature returns whether it recorded anything — got '${SIG:-no declaration found}'"
+    fi
+
+    # ⚠ THE POSITIVE HALF. I3 only asserts what must be ABSENT, so a function
+    # that answers `Ok(false)` on EVERY path — nothing ever recorded, the SSL
+    # ladder never advancing, no incident ever raised — satisfied §I completely
+    # and the whole suite stayed 44/0. A guard is not proven by its refusals.
+    INSLINE=$(grep -nE 'INSERT INTO alerts' <<< "$FIRE2" | head -1 | cut -d: -f1)
+    TRUE_AFTER=$(grep -nE 'Ok\(true\)' <<< "$FIRE2" | awk -F: -v i="${INSLINE:-0}" '$1 > i' | grep -c .)
+    FALSE_AFTER=$(grep -nE 'Ok\(false\)' <<< "$FIRE2" | awk -F: -v i="${INSLINE:-0}" '$1 > i' | grep -c .)
+    if [ -n "$INSLINE" ] && [ "$TRUE_AFTER" -ge 1 ] && [ "$FALSE_AFTER" -eq 0 ]; then
+      ok "I6 every path past the alerts INSERT reports a real fire ($TRUE_AFTER true, $FALSE_AFTER false)"
+    else
+      bad "I6 every path past the alerts INSERT reports a real fire — INSERT at ${INSLINE:-absent}, $TRUE_AFTER Ok(true) and $FALSE_AFTER Ok(false) after it"
+    fi
+
+    # ⚠ Asserted as the ABSENCE of the old value plus the presence of the new
+    # one. Grepping for `is_alert_enabled` would be satisfied by the CALL alone
+    # even if its result were thrown away (#797), and grepping only for
+    # `Ok(false)` would not notice a stray `Ok(())` left on another path.
+    NOUNIT=$(grep -cE 'Ok\(\(\)\)' <<< "$FIRE2")
+    if [ "$NOUNIT" -eq 0 ] && [ "$(grep -cE 'return Ok\(false\)' <<< "$FIRE2")" -ge 1 ]; then
+      ok "I3 no path returns the old unit value — the disabled path returns Ok(false)"
+    else
+      bad "I3 no path returns the old unit value — $NOUNIT Ok(()) still present, so a suppressed alert still reads as fired"
+    fi
+  else
+    for a in I1 I2 I3 I6; do bad "$a try_fire_alert body is too small to test ($FIRELINES lines)"; done
+  fi
+else
+  for a in I1 I2 I3 I6; do bad "$a $NOTIF is readable"; done
+fi
+
+if E=$(subj "$ENGINE"); then
+  RETRY=$(fnbody "$E" fire_alert_with_retry)
+  RETRYLINES=$(grep -c . <<< "$RETRY")
+  if [ "$RETRYLINES" -ge 20 ]; then
+    # POSITIONAL, not a window (#172): the suppressed arm has to come BEFORE the
+    # incident write, or the incident is created either way and the public status
+    # page still publishes an alert the operator switched off.
+    SUPP=$(grep -nE 'Ok\(false\) *=> *return false' <<< "$RETRY" | head -1 | cut -d: -f1)
+    INCID=$(grep -nE 'INSERT INTO managed_incidents' <<< "$RETRY" | head -1 | cut -d: -f1)
+    if [ -n "$SUPP" ] && [ -n "$INCID" ] && [ "$SUPP" -lt "$INCID" ]; then
+      ok "I4 the suppressed arm returns false before any incident is written (line $SUPP < $INCID)"
+    else
+      bad "I4 the suppressed arm returns false before any incident is written — suppressed at ${SUPP:-absent}, incident at ${INCID:-absent}"
+    fi
+
+    # And it must return FALSE, not true: the SSL ladder gates `last_warned_day`
+    # on this answer, so a `true` here consumes a rung for a page that never
+    # went out and `ssl_decision` only ever fires a TIGHTER one afterwards.
+    if grep -qE 'Ok\(true\) *=>' <<< "$RETRY"; then
+      ok "I5 the fired and suppressed cases are distinct match arms"
+    else
+      bad "I5 the fired and suppressed cases are distinct match arms — a catch-all Ok(_) cannot tell them apart"
+    fi
+  else
+    for a in I4 I5; do bad "$a fire_alert_with_retry body is too small to test ($RETRYLINES lines)"; done
+  fi
+else
+  for a in I4 I5; do bad "$a $ENGINE is readable"; done
 fi
 
 echo

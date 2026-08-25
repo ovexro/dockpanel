@@ -818,9 +818,18 @@ pub async fn import_config(
             let alert_memory = rule.get("alert_memory").and_then(|v| v.as_bool()).unwrap_or(true);
             let alert_disk = rule.get("alert_disk").and_then(|v| v.as_bool()).unwrap_or(true);
             let alert_offline = rule.get("alert_offline").and_then(|v| v.as_bool()).unwrap_or(true);
-            let alert_backup_failure = rule.get("alert_backup_failure").and_then(|v| v.as_bool()).unwrap_or(false);
-            let alert_ssl_expiry = rule.get("alert_ssl_expiry").and_then(|v| v.as_bool()).unwrap_or(false);
-            let alert_service_health = rule.get("alert_service_health").and_then(|v| v.as_bool()).unwrap_or(false);
+            // ⚠ `true`, matching the schema. `alerting_system.sql` declares all
+            // three `NOT NULL DEFAULT TRUE`, and the four fields above already
+            // default the way the schema does — these three defaulted FALSE, so a
+            // config written by an older version, hand-edited, or produced by
+            // anything but this build's own export silently switched off backup,
+            // SSL-expiry and service-health alerting on import. Nothing said so:
+            // there is no UI widget for these columns, and `alert_ssl_expiry` off
+            // also consumed the expiry warning ladder's rungs (see
+            // `try_fire_alert`), so the effect outlived the import.
+            let alert_backup_failure = rule.get("alert_backup_failure").and_then(|v| v.as_bool()).unwrap_or(true);
+            let alert_ssl_expiry = rule.get("alert_ssl_expiry").and_then(|v| v.as_bool()).unwrap_or(true);
+            let alert_service_health = rule.get("alert_service_health").and_then(|v| v.as_bool()).unwrap_or(true);
             let ssl_warning_days = rule.get("ssl_warning_days").and_then(|v| v.as_str()).unwrap_or("14");
             let notify_email = rule.get("notify_email").and_then(|v| v.as_bool()).unwrap_or(true);
             let cooldown = rule.get("cooldown_minutes").and_then(|v| v.as_i64()).unwrap_or(15) as i32;

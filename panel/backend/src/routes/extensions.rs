@@ -427,11 +427,27 @@ pub async fn test_webhook(
         }
     };
 
+    // SSRF re-validation at send time, and the SHARED client — parity with the
+    // delivery path in `services::extensions` and with `webhook_gateway`.
+    //
+    // ⚠ This route had neither, and it is the worse of the two places to lack
+    // them: the response body comes back to the caller in the JSON below, so a
+    // stored `webhook_url` that 3xx-redirects to an internal address was a read
+    // oracle rather than a blind probe. The ad-hoc client set only a timeout, so
+    // reqwest's default `Policy::limited(10)` applied and the redirect was
+    // followed — and its `.unwrap_or_default()` fell back to a plain default
+    // client, which would have re-opened the hole even if a policy had been set
+    // on the builder. `webhook_url` is vetted when it is WRITTEN, which is not
+    // the same instant as when it is resolved.
+    if let Err(e) = crate::helpers::validate_url_not_internal(&webhook_url).await {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            &format!("Webhook URL failed validation: {e}"),
+        ));
+    }
+
     let started = std::time::Instant::now();
-    let result = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .unwrap_or_default()
+    let result = crate::services::extensions::http_client()
         .post(&webhook_url)
         .header("Content-Type", "application/json")
         .header("X-DockPanel-Event", "test")

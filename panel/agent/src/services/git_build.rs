@@ -304,8 +304,18 @@ pub async fn deploy_or_update(
     // `docs/guides/git-deploy.md` states the limitation and names what does
     // survive.
     //
-    // Five constraints, established while pricing it. Whoever builds this needs
-    // all five, and the first is the one that turns a patch into a regression:
+    // SIX constraints, established while pricing it. Whoever builds this needs
+    // all six.
+    //
+    // ⚠ This header said "five" and "needs all five" from the day it was
+    // written until v2.157.0, above a list that has always run to SIX. A
+    // contributor who obeyed it stopped exactly one item short — and item 6 is
+    // the one that says shipping 1-5 alone DESTROYS the reporter's existing
+    // data on the first deploy after the fix. Item 1 turns a patch into a
+    // regression; item 6 turns a correct patch into data loss. It is last in
+    // the list and first in consequence, so read to the end before writing any
+    // of it. (`docs/guides/git-deploy.md` has said "six" correctly all along —
+    // only this header lagged, and this header is what a contributor reads.)
     //   1. There are TWO `HostConfig` literals in this file. The blue-green path
     //      builds its own and copies only memory and CPU from the base, so binds
     //      added here alone would mount on the first deploy and UN-mount on the

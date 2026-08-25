@@ -144,6 +144,45 @@ else
   bad "A5 the direct-INSERT producer is suppressible on both sides too"
 fi
 
+# A6/A7: THE SECOND FRONTEND VOCABULARY. `Alerts.tsx` keeps its own
+# `TYPE_LABELS`, and until v2.157.0 nothing compared it to anything — A1-A5
+# above pin the Settings grid and never read this map. It had drifted in BOTH
+# directions at once and stayed green the whole time: `flapping` was a label
+# with zero backend producers, so the filter row offered a button that could
+# only ever return an empty list, while `slow_response` was missing, so its
+# badge printed the raw column value and the filter could not select it at all.
+# The two errors could not cancel out and neither could be seen from the Settings
+# arms, because that grid had `slow_response` all along.
+LABELS=$(sed -n '/^const TYPE_LABELS: Record<string, string> = {/,/^};/p' "$ALERTS_TSX" \
+         | grep -oE '^\s*[a-z_]+:' | tr -d ' :' | sort -u)
+NLABELS=$(grep -c . <<< "$LABELS")
+
+if [ "$NLABELS" -ge 15 ]; then
+  ok "A6-control the Alerts.tsx label map extracted — $NLABELS types"
+else
+  bad "A6-control the Alerts.tsx label map extracted — only $NLABELS (expected >= 15; the extractor broke, the map did not shrink)"
+fi
+
+ONLY_B=$(comm -23 <(printf '%s\n' "$BACK") <(printf '%s\n' "$LABELS") | grep -c .)
+ONLY_L=$(comm -13 <(printf '%s\n' "$BACK") <(printf '%s\n' "$LABELS") | grep -c .)
+if [ "$ONLY_B" -eq 0 ] && [ "$ONLY_L" -eq 0 ]; then
+  ok "A7 the Alerts.tsx label map names exactly the backend vocabulary"
+else
+  bad "A7 Alerts.tsx and the backend disagree — $ONLY_B unlabelled (raw badge, unselectable filter), $ONLY_L labelled with no producer (a filter button that returns nothing)"
+  comm -23 <(printf '%s\n' "$BACK") <(printf '%s\n' "$LABELS") | while read -r t; do
+    [ -n "$t" ] && printf '        no label: %s\n' "$t"; done
+  comm -13 <(printf '%s\n' "$BACK") <(printf '%s\n' "$LABELS") | while read -r t; do
+    [ -n "$t" ] && printf '        no producer: %s\n' "$t"; done
+fi
+
+# A8: the filter row must RENDER from that map, or A7 pins a constant nothing
+# uses — the same trap A3 closes for the Settings grid.
+if grep -qE 'Object\.entries\(TYPE_LABELS\)\.map\(' "$ALERTS_TSX"; then
+  ok "A8 the type filter renders from the label map, so A7 pins what the operator sees"
+else
+  bad "A8 the type filter renders from the label map — an inline list at the JSX site is invisible to A7"
+fi
+
 echo
 echo "== §B  a token that names nothing is refused, not stored =="
 

@@ -1102,7 +1102,110 @@ pub mod ssl_renewal_key {
     /// whichever fired first mute the other for twelve hours, which is the
     /// defect `state_key` exists to prevent and the one v2.154.0 shipped to fix.
     pub const MAIL_HOST_CONFLICT: &str = "mail_host_conflict";
+
+    /// Every key above, so a consumer can decide about all of them without
+    /// re-listing them and drifting. ⚠ A new `pub const` above MUST be added
+    /// here too — a key missing from this array is silently never considered by
+    /// `renewal_success_clears`. `alert-resolve-scope` H6 checks MEMBERSHIP by
+    /// name, one line per key; it deliberately does not check this array's
+    /// declared length, because the compiler already enforces that and an arm
+    /// that only counted it was satisfied by dropping a key and duplicating
+    /// another.
+    pub const ALL: [&str; 6] = [
+        DECLINED,
+        FAILED,
+        BLOCKED,
+        DNS01_DECLINED,
+        DNS01_DOWNGRADED,
+        MAIL_HOST_CONFLICT,
+    ];
 }
+
+/// Whether a SUCCESSFUL renewal for the site disproves the alert raised under
+/// `key`.
+///
+/// Pure, and the whole decision of [`resolve_ssl_renewal_failure`] lives here so
+/// it can be tested one key at a time. Three of the six say a renewal DID NOT
+/// HAPPEN, and a renewal happening is what makes them false. The other three
+/// describe the certificate that is installed NOW, and a later renewal does not
+/// contradict any of them — see the doc on the resolver for why
+/// `DNS01_DOWNGRADED` in particular must stay out.
+///
+/// ⚠ The fall-through is `false`, so a key added later is NOT resolved until
+/// somebody decides it should be. That is the safe direction: failing to clear
+/// an alert leaves a visible row, while clearing one that is still true removes
+/// the operator's only notice that it is.
+pub fn renewal_success_clears(key: &str) -> bool {
+    matches!(
+        key,
+        ssl_renewal_key::FAILED | ssl_renewal_key::BLOCKED | ssl_renewal_key::DNS01_DECLINED
+    )
+}
+
+/// Clear the `ssl_renewal_failure` alerts that a SUCCESSFUL renewal disproves.
+///
+/// `ssl_expiry` learned to resolve itself long ago — `ssl_decision` in
+/// `alert_engine.rs` records why, in its own words: *"Nothing used to resolve an ssl_expiry row, so a cert
+/// renewed weeks ago left a 'firing' row that check_escalations re-paged every
+/// 30 minutes forever and the purge (resolved-only) never collected."*
+/// `ssl_renewal_failure` never learned. Every key below is raised by a loop that
+/// has no resolving counterpart, so a certificate that failed, was fixed and then
+/// renewed left the critical alert firing: the panel said *"valid again"* on the
+/// expiry alert while the renewal alert kept paging, and the Alerts list could
+/// never return to green because retention only collects `status = 'resolved'`.
+///
+/// ⚠ THREE of the six keys, and the split is the whole point. These three say a
+/// renewal DID NOT HAPPEN, and a renewal happening is what makes them false:
+///
+///   * `FAILED` — attempted, failed.
+///   * `BLOCKED` — could not be attempted at all.
+///   * `DNS01_DECLINED` — declined while there is still time to fix the zone.
+///
+/// The other three are standing descriptions of the certificate installed NOW,
+/// and a later renewal does not contradict any of them:
+///
+///   * `DNS01_DOWNGRADED` — names really did stop being covered, and they stay
+///     uncovered until a wildcard is re-issued. It is also RAISED on this very
+///     success path when the plan downgraded, and `fire_alert_deduped` windows on
+///     `created_at` regardless of status — so resolving it here would let the
+///     re-fire land inside its own 12-hour window and be swallowed. The alert
+///     naming what stopped being covered would resolve itself and never come back.
+///   * `DECLINED` — the installed certificate is somebody else's. Still true.
+///   * `MAIL_HOST_CONFLICT` — a mail host's certificate was refused to protect a
+///     wildcard. Renewing that wildcard does not remove the conflict.
+///
+/// ⚠ Scoped by `site_id` with `server_id: None` ON PURPOSE. `resolve_alert` picks
+/// its arm on `server_id.is_some()` FIRST, so passing a server id would build a
+/// `WHERE server_id = $2` that misses every row the security scanner raised —
+/// that loop fires with `None`, while `auto_healer`'s FAILED fires with
+/// `Some(server_id)`. The same logical alert exists in two shapes; only the
+/// site arm matches both, and every producer passes a site.
+///
+/// `resolve_alert` no-ops when nothing is firing (it returns on
+/// `rows_affected == 0` before any notification), so calling it for a key that
+/// was never raised costs one UPDATE and sends nothing.
+pub async fn resolve_ssl_renewal_failure(pool: &PgPool, user_id: Uuid, site_id: Uuid, domain: &str) {
+    for key in ssl_renewal_key::ALL
+        .into_iter()
+        .filter(|k| renewal_success_clears(k))
+    {
+        resolve_alert(
+            pool,
+            user_id,
+            None,
+            Some(site_id),
+            "ssl_renewal_failure",
+            key,
+            &format!("SSL renewal recovered: {domain}"),
+            &format!(
+                "The certificate for {domain} renewed successfully, so the earlier renewal \
+                 alert no longer applies."
+            ),
+        )
+        .await;
+    }
+}
+
 
 /// Fire an alert unless one of the same type already fired for the same site
 /// inside `within_hours`.
@@ -1152,6 +1255,28 @@ pub async fn fire_alert_deduped(
 }
 
 /// Fire an alert with Result return for retry support.
+///
+/// `Ok(true)` means an `alerts` row was written and the fan-out ran.
+/// `Ok(false)` means the operator has this type switched off in `alert_rules`,
+/// so NOTHING happened: no row, no bell entry, no channel.
+///
+/// ⚠ The two are not interchangeable and this used to return `Ok(())` for both.
+/// Callers read the answer for two different things, and both were wrong for a
+/// disabled type:
+///
+///   * `alert_engine::fire_alert_with_retry` auto-creates a `managed_incidents`
+///     row with `visible_on_status_page = TRUE`. Reported as fired, a type the
+///     operator switched off published the outage on their PUBLIC status page —
+///     the one control meaning "do not tell me about this" was the one that
+///     told everybody.
+///   * That same function's contract is "was the alert actually recorded", and
+///     the SSL ladder gates its `last_warned_day` stamp on it precisely so a
+///     page that did not land cannot consume a rung. Reported as fired, a
+///     disabled `ssl_expiry` burned rungs anyway — and because `ssl_decision`
+///     only fires a TIGHTER rung than the one stamped, re-enabling the type did
+///     not bring them back. That is the permanent silence `maintenance_users`
+///     names in so many words as the reason suppression is applied at each
+///     check's SOURCE and never at the fire.
 pub async fn try_fire_alert(
     pool: &PgPool,
     user_id: Uuid,
@@ -1162,10 +1287,10 @@ pub async fn try_fire_alert(
     severity: &str,
     title: &str,
     message: &str,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     // Check if this alert type is enabled
     if !is_alert_enabled(pool, user_id, server_id, alert_type).await {
-        return Ok(());
+        return Ok(false);
     }
 
     // Record in alerts table. `state_key` mirrors `alert_state.state_key` so the
@@ -1228,7 +1353,7 @@ pub async fn try_fire_alert(
                 runbook_url.as_deref(),
             )
             .await;
-            return Ok(());
+            return Ok(true);
         }
         tracing::warn!(
             "Alert rule references escalation_policy {pid} with empty/invalid steps — falling back to default channel fan-out"
@@ -1251,7 +1376,7 @@ pub async fn try_fire_alert(
     )
     .await;
 
-    Ok(())
+    Ok(true)
 }
 
 /// Insert notification into the panel notification center (bell icon).
@@ -1468,5 +1593,61 @@ mod severity_color_tests {
         assert_eq!(severity_color("info"), "#3b82f6");
         assert_eq!(severity_color("bogus"), "#3b82f6");
         assert_eq!(severity_color(""), "#3b82f6");
+    }
+}
+
+// Appended AFTER `severity_color_tests`, which is already the last thing in this
+// file — so the first `#[cfg(test)]` does not move and no production line drops
+// below it. See the note above that module.
+
+#[cfg(test)]
+mod renewal_success_clears_tests {
+    use super::{renewal_success_clears, ssl_renewal_key};
+
+    #[test]
+    fn a_success_clears_the_three_that_say_no_renewal_happened() {
+        // "attempted, failed"
+        assert!(renewal_success_clears(ssl_renewal_key::FAILED));
+        // "could not be attempted at all"
+        assert!(renewal_success_clears(ssl_renewal_key::BLOCKED));
+        // "declined while there is still time to fix the zone"
+        assert!(renewal_success_clears(ssl_renewal_key::DNS01_DECLINED));
+    }
+
+    #[test]
+    fn a_success_does_not_clear_the_three_standing_conditions() {
+        // Names really did stop being covered, and they stay uncovered until a
+        // wildcard is re-issued. This one is also RAISED on the same success
+        // path, and `fire_alert_deduped` windows on `created_at` regardless of
+        // status — so resolving it here would let its own re-fire land inside
+        // the 12-hour window and vanish.
+        assert!(!renewal_success_clears(ssl_renewal_key::DNS01_DOWNGRADED));
+        // The installed certificate is somebody else's; renewing ours says
+        // nothing about theirs.
+        assert!(!renewal_success_clears(ssl_renewal_key::DECLINED));
+        // A mail host's certificate was refused to protect a wildcard. Renewing
+        // that wildcard does not remove the conflict.
+        assert!(!renewal_success_clears(ssl_renewal_key::MAIL_HOST_CONFLICT));
+    }
+
+    #[test]
+    fn exactly_three_of_the_six_are_cleared() {
+        // Both directions at once: widening the set fails here as loudly as
+        // narrowing it, which is what stops a later edit from quietly folding a
+        // standing condition into the resolved group.
+        let cleared = ssl_renewal_key::ALL
+            .iter()
+            .filter(|k| renewal_success_clears(k))
+            .count();
+        assert_eq!(cleared, 3, "keys cleared by a successful renewal");
+    }
+
+    #[test]
+    fn an_unrecognised_key_is_left_alone() {
+        // The fall-through must stay `false`: a key added later is not resolved
+        // until somebody decides it should be. An unresolved alert is a visible
+        // row; a wrongly resolved one is a condition nobody is told about.
+        assert!(!renewal_success_clears("some_key_added_later"));
+        assert!(!renewal_success_clears(""));
     }
 }

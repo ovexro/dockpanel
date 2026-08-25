@@ -86,15 +86,22 @@ const TYPE_LABELS: Record<string, string> = {
   gpu_temperature: "GPU temperature",
   gpu_vram: "GPU VRAM",
   memory_leak: "Memory leak",
-  flapping: "Flapping",
   // Fired outside alert_engine, and absent here until v2.155.0 — the badge
   // printed the raw column value and the filter row, built from these same
   // keys, offered no way to select them. Certificate renewal failures are the
-  // sharpest of the four: eight producers, half of them critical.
+  // sharpest: nine producers under six keys, five of them critical.
+  //
+  // `slow_response` was the FIFTH and was still missing at v2.156.0 — the
+  // v2.155.0 pass collected the four raised by services and missed the one
+  // raised by the uptime monitor. Nothing noticed, because `alert-controls` §A
+  // pinned only this map's SIBLING (the Settings mute grid), which had
+  // `slow_response` all along. §A6-A8 now pin THIS map against the same backend
+  // constant, so the next omission in either direction goes red.
   ssl_renewal_failure: "SSL renewal",
   cron_failure: "Cron",
   backup_verification_failed: "Backup verification",
   security: "Security scan",
+  slow_response: "Slow response",
 };
 
 const SEVERITY_STYLES: Record<string, { bg: string; text: string; dot: string }> = {

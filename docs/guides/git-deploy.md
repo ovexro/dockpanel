@@ -25,6 +25,13 @@ Git Deploy lets you push code to a Git repository and have DockPanel automatical
 
 DockPanel will clone the repository, detect the build method, build a Docker image, and start the container.
 
+> **Before you build: a Git Deploy container has no persistent storage.** Every
+> deploy replaces the container, so anything the app writes to its own
+> filesystem is lost — and the loss lands on the *second* deploy, not the first.
+> Read [Git Deploys have no persistent storage](#git-deploys-have-no-persistent-storage)
+> before you design where your data lives. It is far cheaper to point the app at
+> a database or object storage now than to move it after the first loss.
+
 ### Changing the domain later
 
 Editing the **Domain** field moves the deploy to the new hostname and takes the

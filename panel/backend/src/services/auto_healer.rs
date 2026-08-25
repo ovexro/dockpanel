@@ -1170,6 +1170,12 @@ async fn auto_renew_ssl(pool: &PgPool, agents: &AgentRegistry) {
             }
             tracing::info!("Auto-heal: SSL renewed for {domain}");
 
+            // The renewal happened, so the alerts saying it had not are no longer
+            // true. Placed AFTER the downgrade alert above deliberately: that one
+            // describes the certificate this success installed, and this call does
+            // not touch its key.
+            notifications::resolve_ssl_renewal_failure(pool, *user_id, *site_id, domain).await;
+
             // Re-render the full vhost so the auto-renewal preserves the site's
             // WAF / CSP / Permissions-Policy / rate-limit / custom_nginx /
             // bot-protection (the agent's renew only renders a subset). Best-effort.
