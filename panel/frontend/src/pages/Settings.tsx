@@ -16,6 +16,41 @@ import {
   ExportMyDataCard,
 } from "../components/AccountSecurity";
 
+// Every alert type the panel can suppress from external channels, in the order
+// the grid renders them. This list is the frontend half of a pair: the backend
+// rejects a stored value naming anything outside it, so the two must agree
+// exactly, and a pin arm compares them.
+//
+// It was ten entries while the panel had grown to twenty producers, so half the
+// alert types that page an operator had no control here at all — including
+// every certificate-renewal failure. Adding a producer means adding it here.
+//
+// One producer is deliberately absent: `slow_response` is written straight into
+// the alerts table without passing the fan-out, so its page cannot be
+// suppressed by this list and a checkbox for it would govern nothing.
+const SUPPRESSIBLE_ALERT_TYPES: { key: string; label: string }[] = [
+  { key: "cpu", label: "CPU" },
+  { key: "memory", label: "Memory" },
+  { key: "disk", label: "Disk" },
+  { key: "disk_forecast", label: "Disk forecast" },
+  { key: "memory_leak", label: "Memory leak" },
+  { key: "offline", label: "Offline" },
+  { key: "service_down", label: "Service" },
+  { key: "container_down", label: "Container down" },
+  { key: "container_crashloop", label: "Container crashloop" },
+  { key: "container_unhealthy", label: "Container unhealthy" },
+  { key: "gpu_utilization", label: "GPU Util" },
+  { key: "gpu_temperature", label: "GPU Temp" },
+  { key: "gpu_vram", label: "GPU VRAM" },
+  { key: "backup_failure", label: "Backup" },
+  { key: "backup_verification_failed", label: "Backup verification" },
+  { key: "cron_failure", label: "Cron" },
+  { key: "ssl_expiry", label: "SSL expiry" },
+  { key: "ssl_renewal_failure", label: "SSL renewal" },
+  { key: "security", label: "Security scan" },
+];
+
+
 /** Preview colours for the theme picker and the layout thumbnails.
  *
  *  Hand-copied out of index.css, field for field:
@@ -346,7 +381,13 @@ export default function Settings() {
         setNotifyDiscordUrl(r.notify_discord_url || "");
         setNotifyPagerdutyKey(r.notify_pagerduty_key || "");
         if (r.muted_types) {
-          setMutedTypes(r.muted_types.split(',').filter((t: string) => t.trim()));
+          // Drop tokens this build cannot suppress before they reach the
+          // checkboxes. A stale one would otherwise survive every Save — it
+          // round-trips through the payload untouched — and the backend now
+          // refuses the write, so a settings page carrying one could never be
+          // saved again. Filtering here lets the next Save heal the row.
+          const known = new Set(SUPPRESSIBLE_ALERT_TYPES.map(t => t.key));
+          setMutedTypes(r.muted_types.split(',').map((t: string) => t.trim()).filter((t: string) => known.has(t)));
         }
         if (r.alert_gpu !== undefined) setGpuAlertEnabled(r.alert_gpu);
         if (r.gpu_util_threshold) setGpuUtilThreshold(r.gpu_util_threshold);
@@ -2033,7 +2074,7 @@ export default function Settings() {
                   ? "Save your notification settings once to create an alert rule, then choose a policy."
                   : escalationPolicies.length === 0
                     ? "No policies yet — build one on the Alerts page under Escalation."
-                    : "Unacknowledged alerts follow this chain instead of the built-in reminder cadence."}
+                    : "Unacknowledged alerts follow this chain instead of the built-in reminder cadence, then keep re-paging its last step every 30 minutes until acknowledged."}
               </p>
             </div>
             {/* Alert Type Muting */}
@@ -2041,18 +2082,7 @@ export default function Settings() {
               <h3 className="text-sm font-medium text-dark-100 font-mono">Suppress External Notifications</h3>
               <p className="text-xs text-dark-400">Muted alert types still record in the panel but won't trigger Slack, Discord, PagerDuty, or webhook notifications.</p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {[
-                  { key: "cpu", label: "CPU" },
-                  { key: "memory", label: "Memory" },
-                  { key: "disk", label: "Disk" },
-                  { key: "offline", label: "Offline" },
-                  { key: "backup_failure", label: "Backup" },
-                  { key: "ssl_expiry", label: "SSL" },
-                  { key: "service_down", label: "Service" },
-                  { key: "gpu_utilization", label: "GPU Util" },
-                  { key: "gpu_temperature", label: "GPU Temp" },
-                  { key: "gpu_vram", label: "GPU VRAM" },
-                ].map(({ key, label }) => (
+                {SUPPRESSIBLE_ALERT_TYPES.map(({ key, label }) => (
                   <label key={key} className="flex items-center gap-2 text-sm text-dark-200 cursor-pointer">
                     <input
                       type="checkbox"

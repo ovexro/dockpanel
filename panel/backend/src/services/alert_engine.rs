@@ -1707,6 +1707,65 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
 
 // ─── GAP 9: Alert Escalation ────────────────────────────────────────────
 
+/// What a policy-driven row should do on this tick.
+///
+/// Extracted as a pure function for the same reason `ssl_decision` above is:
+/// the loop that used to hold this inline needed a live pool, a live policy and
+/// a firing alert to exercise, so nothing exercised it, and the branch that
+/// decided an exhausted chain should fall silent for ever was never once run in
+/// a test. The arithmetic is the whole behaviour; keep it reachable.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum EscalationAction {
+    /// Not eligible this tick, and its sort position must not move.
+    Skip,
+    /// Nothing to page, but stamp it so it rotates to the back of the window.
+    Terminal,
+    /// Page this step and record it as the chain's new position.
+    Advance(usize),
+    /// The chain is spent: page its last step again, leaving the position.
+    RepeatLast,
+}
+
+/// `after` is each step's `after_minutes`, in chain order. `since_escalated` is
+/// minutes since this row was last paged, `None` if it never has been.
+fn escalation_decision(
+    after: &[i64],
+    current_index: usize,
+    elapsed_minutes: i64,
+    since_escalated: Option<i64>,
+) -> EscalationAction {
+    if after.is_empty() {
+        return EscalationAction::Terminal;
+    }
+
+    // Highest step past the current position whose threshold has been crossed.
+    // Walking from the end jumps straight to the furthest-eligible rung rather
+    // than creeping one rung per tick.
+    for i in (0..after.len()).rev() {
+        if i <= current_index {
+            break;
+        }
+        if after[i] <= elapsed_minutes {
+            return EscalationAction::Advance(i);
+        }
+    }
+
+    // Spent. It must not go quiet — that made a policy strictly worse than no
+    // policy at all — so it drops onto the cadence an unattached rule gets.
+    // Skip, not Terminal: a spent chain is no longer terminal for anything, so
+    // stamping it here would only push its own clock forward and delay the
+    // first fallback page past the fifteen minutes the cadence promises. It
+    // cannot starve the sweep window either — a row this young sorts to the
+    // back of the least-recently-paged ordering by its `created_at` alone.
+    if elapsed_minutes < 15 {
+        return EscalationAction::Skip;
+    }
+    match since_escalated {
+        Some(m) if m < 30 => EscalationAction::Skip,
+        _ => EscalationAction::RepeatLast,
+    }
+}
+
 /// Re-notify for unacknowledged firing alerts.
 ///
 /// Phase 4 W3: two paths.
@@ -1720,7 +1779,17 @@ async fn check_container_health(pool: &PgPool, member: &FleetMember) {
 ///   `(after_minutes, route)` steps. Each minute we advance to the highest
 ///   step whose `after_minutes <= alert age` AND whose index is strictly
 ///   greater than `alerts.escalation_step_index`. Once the last step has
-///   fired we never re-page until the operator acks/resolves the alert.
+///   fired the chain stays exhausted, but the alert does NOT go quiet: it
+///   drops onto the same 30-minute cadence an unattached rule gets, paging the
+///   last rung's route until it is acknowledged or resolved.
+///
+///   That fallback is the whole point. Terminating for good made attaching a
+///   policy strictly worse than attaching none — and the policy editor seeded
+///   one step by default, so the ordinary outcome of building a policy was a
+///   single page on a firing critical and then silence. The operator-facing
+///   documentation has always promised a repeating cadence for every alert;
+///   this is the path that makes that true rather than the sentence that
+///   explained it away.
 async fn check_escalations(pool: &PgPool) {
     #[derive(sqlx::FromRow)]
     struct EscalationRow {
@@ -1852,28 +1921,36 @@ async fn check_escalations(pool: &PgPool) {
 
                 let elapsed_minutes = (now - row.created_at).num_minutes();
                 let current_index = row.escalation_step_index as usize;
+                let after: Vec<i64> = steps.iter().map(|s| s.after_minutes as i64).collect();
+                let since_escalated = row.escalated_at.map(|e| (now - e).num_minutes());
 
-                // Find the highest step whose index > current_index and whose
-                // after_minutes <= elapsed_minutes. Once exhausted, terminal —
-                // do nothing this tick. Iterate from the end so we jump to the
-                // furthest-eligible step on each tick rather than walking one
-                // step at a time.
-                let mut next_idx: Option<usize> = None;
-                for (i, step) in steps.iter().enumerate().rev() {
-                    if i <= current_index {
-                        break;
+                match escalation_decision(&after, current_index, elapsed_minutes, since_escalated) {
+                    EscalationAction::Advance(i) => (steps[i].clone(), Some(i)),
+                    EscalationAction::RepeatLast => {
+                        // The chain is spent. It used to stop here for good,
+                        // which made attaching a policy strictly worse than
+                        // attaching none: an unattached rule re-pages an
+                        // unacknowledged alert every 30 minutes for as long as
+                        // the sweep can still see it, and the shipped operator
+                        // documentation promises exactly that, without
+                        // qualification, for every alert. A policy built to be
+                        // paged HARDER cannot be the thing that stops paging
+                        // you — and the editor seeds a single-step policy, so
+                        // the ordinary outcome was one page and then silence.
+                        //
+                        // The LAST rung's route, not the default fan-out:
+                        // those are the destinations the operator chose for the
+                        // worst case, and this is the worst case. The index
+                        // stays put, so the chain stays spent and only the
+                        // clock advances.
+                        (steps[steps.len() - 1].clone(), None)
                     }
-                    if step.after_minutes as i64 <= elapsed_minutes {
-                        next_idx = Some(i);
-                        break;
+                    EscalationAction::Terminal => {
+                        terminal_ids.push(row.id);
+                        continue;
                     }
+                    EscalationAction::Skip => continue,
                 }
-
-                let Some(i) = next_idx else {
-                    terminal_ids.push(row.id);
-                    continue;
-                };
-                (steps[i].clone(), Some(i))
             }
         };
 
@@ -1955,6 +2032,75 @@ async fn check_escalations(pool: &PgPool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use EscalationAction::*;
+
+    /// THE REGRESSION. The policy editor seeds a chain with one step, and a
+    /// one-step chain is exhausted from the first sweep. This used to be
+    /// terminal for ever: the operator got the page that fired the alert and
+    /// then silence, on a firing critical, for having built a policy at all.
+    #[test]
+    fn a_spent_chain_keeps_paging_instead_of_falling_silent() {
+        // One step, never paged since, an hour old and unacknowledged.
+        assert_eq!(escalation_decision(&[0], 0, 60, None), RepeatLast);
+        // And it keeps saying so, tick after tick, once the cadence is due.
+        assert_eq!(escalation_decision(&[0], 0, 600, Some(31)), RepeatLast);
+        assert_eq!(escalation_decision(&[0], 0, 10_000, Some(45)), RepeatLast);
+    }
+
+    /// The fallback is the SAME cadence an unattached rule gets, so a policy is
+    /// never worse than no policy: nothing before 15 minutes, then every 30.
+    #[test]
+    fn the_fallback_matches_the_unattached_cadence() {
+        assert_eq!(escalation_decision(&[0], 0, 14, None), Skip, "too young to page");
+        assert_eq!(escalation_decision(&[0], 0, 15, None), RepeatLast, "eligible at 15");
+        assert_eq!(escalation_decision(&[0], 0, 60, Some(29)), Skip, "inside the 30-min window");
+        assert_eq!(escalation_decision(&[0], 0, 60, Some(30)), RepeatLast, "the window has lapsed");
+    }
+
+    /// A row that is merely waiting must NOT be stamped: `Terminal` moves it to
+    /// the back of the least-recently-paged rotation, and doing that on every
+    /// tick of the 30-minute wait would keep resetting its own clock.
+    #[test]
+    fn waiting_is_not_the_same_as_terminal() {
+        assert_ne!(escalation_decision(&[0], 0, 60, Some(5)), Terminal);
+        assert_eq!(escalation_decision(&[0], 0, 60, Some(5)), Skip);
+    }
+
+    /// The chain still drives the escalation while it has rungs left, and it
+    /// jumps to the furthest one whose threshold has passed rather than
+    /// creeping a rung per tick.
+    #[test]
+    fn the_chain_advances_to_the_furthest_eligible_rung() {
+        let chain = [0, 15, 60];
+        assert_eq!(escalation_decision(&chain, 0, 16, None), Advance(1));
+        assert_eq!(escalation_decision(&chain, 0, 90, None), Advance(2), "jumps past rung 1");
+        assert_eq!(escalation_decision(&chain, 1, 90, None), Advance(2));
+        // Only once it is genuinely spent does the fallback take over.
+        assert_eq!(escalation_decision(&chain, 2, 90, None), RepeatLast);
+    }
+
+    /// A rung already paged is never paged again by the chain — the position
+    /// only ever moves forward. Regression on the `i <= current_index` break.
+    #[test]
+    fn the_chain_never_walks_backwards() {
+        let chain = [0, 15, 60];
+        for elapsed in [16, 61, 600] {
+            match escalation_decision(&chain, 2, elapsed, None) {
+                Advance(i) => panic!("advanced to {i} from a spent chain at {elapsed}m"),
+                _ => {}
+            }
+        }
+        assert_eq!(escalation_decision(&chain, 1, 20, Some(1)), Skip,
+                   "rung 2 not yet due and rung 1 already paged");
+    }
+
+    /// A policy row with no steps has nothing to page and must rotate out of
+    /// the sweep window rather than pin its head.
+    #[test]
+    fn an_empty_chain_is_terminal() {
+        assert_eq!(escalation_decision(&[], 0, 600, None), Terminal);
+    }
 
     fn ts(minutes_ago: i64) -> chrono::DateTime<chrono::Utc> {
         chrono::Utc::now() - chrono::Duration::minutes(minutes_ago)

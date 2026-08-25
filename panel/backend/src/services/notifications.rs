@@ -702,6 +702,59 @@ pub async fn dispatch_escalation_step(
     }
 }
 
+/// Every alert type an operator is able to suppress from external channels.
+///
+/// The Settings suppression grid renders exactly this vocabulary and both
+/// write paths validate against it, so a stored list can never name something
+/// the panel does not page about. It drifted once: the grid was a hand-written
+/// ten and the panel had grown to twenty producers, so half the alert types
+/// that page an operator had no per-type control at all — and the missing half
+/// was the half nobody had thought about recently, which is the half that
+/// pages you at three in the morning.
+///
+/// Membership is DELIBERATE, not derived from the producers. A type belongs
+/// here only if its pages actually reach the per-type suppression check on the
+/// fan-out. One producer writes its row with a direct INSERT that never
+/// reaches the fan-out at all; a checkbox for it would name a thing it does
+/// not govern, which is the defect this list exists to end, not to spread.
+pub const SUPPRESSIBLE_ALERT_TYPES: &[&str] = &[
+    "cpu",
+    "memory",
+    "disk",
+    "disk_forecast",
+    "memory_leak",
+    "offline",
+    "service_down",
+    "container_down",
+    "container_crashloop",
+    "container_unhealthy",
+    "gpu_utilization",
+    "gpu_temperature",
+    "gpu_vram",
+    "backup_failure",
+    "backup_verification_failed",
+    "cron_failure",
+    "ssl_expiry",
+    "ssl_renewal_failure",
+    "security",
+];
+
+/// Tokens of a stored suppression list that name no suppressible alert type.
+///
+/// Returned rather than silently dropped: a value that persists, echoes back
+/// on the next read and suppresses nothing is indistinguishable from a working
+/// mute, and the operator keeps being paged by a type their settings say is
+/// off. The write paths turn a non-empty result into a rejection that names
+/// the offending token.
+pub fn unknown_suppressible_types(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .filter(|s| !SUPPRESSIBLE_ALERT_TYPES.contains(s))
+        .map(|s| s.to_string())
+        .collect()
+}
+
 /// Is this alert type on the user's suppression list (Gap #69)?
 ///
 /// Single-sourced because the mute has to mean the same thing on both edges of

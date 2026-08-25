@@ -806,6 +806,7 @@ pub async fn import_config(
 
     // Import alert rules
     let mut alert_rules_imported = 0i64;
+    let mut muted_types_dropped = 0i64;
     if let Some(rules) = body.get("alert_rules").and_then(|v| v.as_array()) {
         for rule in rules {
             let cpu_threshold = rule.get("cpu_threshold").and_then(|v| v.as_i64()).unwrap_or(90) as i32;
@@ -823,7 +824,23 @@ pub async fn import_config(
             let ssl_warning_days = rule.get("ssl_warning_days").and_then(|v| v.as_str()).unwrap_or("14");
             let notify_email = rule.get("notify_email").and_then(|v| v.as_bool()).unwrap_or(true);
             let cooldown = rule.get("cooldown_minutes").and_then(|v| v.as_i64()).unwrap_or(15) as i32;
-            let muted_types = rule.get("muted_types").and_then(|v| v.as_str()).unwrap_or("");
+            // A restored suppression list can name a type this version no longer
+            // pages about. Kept verbatim it would suppress nothing while reading
+            // back as though it worked, so drop the dead tokens and count them.
+            // The live edit path rejects instead; here the convention this
+            // handler already states for monitors applies — salvage the row
+            // rather than fail the whole restore over one stale token.
+            let muted_raw = rule.get("muted_types").and_then(|v| v.as_str()).unwrap_or("");
+            let dead = crate::services::notifications::unknown_suppressible_types(muted_raw);
+            muted_types_dropped += dead.len() as i64;
+            let muted_owned: String = muted_raw
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .filter(|s| !dead.iter().any(|d| d == s))
+                .collect::<Vec<_>>()
+                .join(",");
+            let muted_types = muted_owned.as_str();
 
             // Upsert: if server_id is null, update the global (server_id IS NULL) rule
             let server_id: Option<uuid::Uuid> = rule
@@ -998,6 +1015,7 @@ pub async fn import_config(
         "imported": imported,
         "skipped": skipped,
         "alert_rules_imported": alert_rules_imported,
+        "muted_types_dropped": muted_types_dropped,
         "monitors_imported": monitors_imported,
         "schedules_imported": schedules_imported,
         "policies_imported": policies_imported,

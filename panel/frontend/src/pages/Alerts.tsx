@@ -87,6 +87,14 @@ const TYPE_LABELS: Record<string, string> = {
   gpu_vram: "GPU VRAM",
   memory_leak: "Memory leak",
   flapping: "Flapping",
+  // Fired outside alert_engine, and absent here until v2.155.0 — the badge
+  // printed the raw column value and the filter row, built from these same
+  // keys, offered no way to select them. Certificate renewal failures are the
+  // sharpest of the four: eight producers, half of them critical.
+  ssl_renewal_failure: "SSL renewal",
+  cron_failure: "Cron",
+  backup_verification_failed: "Backup verification",
+  security: "Security scan",
 };
 
 const SEVERITY_STYLES: Record<string, { bg: string; text: string; dot: string }> = {
@@ -1265,11 +1273,13 @@ function PoliciesTab({ onMessage }: { onMessage: (m: { text: string; type: strin
           <div className="min-w-0 max-w-2xl">
             <h2 className="font-medium text-dark-50 mb-1">Escalation policies</h2>
             <p className="text-sm text-dark-200">
-              Ordered chain of `(after_minutes, route)` steps. Step 0 fires
-              immediately when an alert is created. Subsequent steps fire if
-              the alert isn't acknowledged by their threshold. Attach a policy
-              under Settings → Notifications; without one, the pre-W3 default
-              of 15-min unack → 30-min re-page applies.
+              An ordered chain of steps. The first fires the moment an alert is
+              created; each later step fires if the alert still isn't
+              acknowledged once its threshold passes. After the last step the
+              alert does not go quiet — it keeps re-paging that step's route
+              every 30 minutes until someone acknowledges or resolves it.
+              Attach a policy under Settings → Notifications; without one,
+              alerts re-page every 30 minutes once they are 15 minutes old.
             </p>
           </div>
           <button

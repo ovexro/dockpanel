@@ -107,6 +107,8 @@ All webhook URLs are validated against SSRF -- internal/private IP addresses are
 
 If a firing alert is not acknowledged within 15 minutes, the alert engine re-sends notifications. Escalation repeats every 30 minutes until the alert is acknowledged or resolved.
 
+If you attach an **escalation policy** to an alert rule, that chain drives the escalation instead: its first step fires the moment the alert is created, and each later step fires once the alert has gone unacknowledged past that step's threshold. When the chain runs out, the alert falls back to the same 30-minute cadence above, re-paging the last step's route -- an unacknowledged alert never stops paging on its own.
+
 To stop escalation, go to **Alerts** and click **Acknowledge** on the alert.
 
 ## Alert Lifecycle

@@ -4,6 +4,52 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.155.0]
+
+### Fixed — an escalation policy could stop paging you altogether
+
+An escalation policy is the thing you build when you want to be woken up. It is
+an ordered chain: page me now, page me again in fifteen minutes, then page the
+whole team. Until this release, once the chain reached its last step the alert
+went quiet — permanently, for as long as it kept firing, until somebody
+acknowledged it by hand.
+
+That made attaching a policy *worse* than attaching nothing. An alert rule with
+no policy re-pages every thirty minutes for as long as the alert is still there.
+An alert rule with a policy stopped. And because the "New policy" button starts
+you with a chain of exactly one step, the ordinary result of building your first
+escalation policy was a single page at the moment the alert fired and then
+silence — on a server that had gone offline, a container in a crash loop, or a
+certificate that had already expired.
+
+The documentation said the opposite, in plain words: escalation repeats every
+thirty minutes until the alert is acknowledged or resolved. That is now what
+happens. When a chain runs out it keeps re-paging its final step on the same
+thirty-minute cadence, so an unacknowledged alert never goes quiet on its own.
+Chains that still have steps left behave exactly as before.
+
+### Fixed — half the alerts that can page you had no off switch
+
+Settings → Notifications offers a grid of checkboxes for suppressing alert types
+from Slack, Discord, PagerDuty and webhooks. The grid listed ten types. DockPanel
+raises twenty. The ten it listed were the ten that existed when the grid was
+written, and everything added since — every certificate renewal failure, failed
+cron jobs, backup verification failures, security scan findings, container
+crashes, memory-leak and disk-forecast warnings — could page you with no way to
+turn it down.
+
+The gap was worst where it mattered most. Certificate renewal failures are raised
+from eight places and four of them are critical, and the one checkbox that looked
+like it covered them was labelled "SSL" — it governed certificate *expiry*, a
+different alert entirely. So the switch you could see controlled something other
+than the thing paging you, and the thing paging you could not be switched off.
+
+All twenty are now listed, and the ambiguous "SSL" box is split into "SSL expiry"
+and "SSL renewal". Two related repairs come with it: a suppression entry naming
+an alert type DockPanel does not raise is now refused when you save it, instead
+of being stored and quietly matching nothing for ever; and the Alerts page now
+labels and filters the four types it used to print as raw database values.
+
 ## [2.154.0]
 
 ### Fixed — a warning about one certificate problem silenced the alarm about a worse one

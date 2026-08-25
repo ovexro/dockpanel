@@ -365,6 +365,26 @@ async fn upsert_rules(
         }
     }
 
+    // A suppression list is matched token-for-token against the alert type on
+    // the fan-out, so a token that names nothing suppresses nothing. Stored
+    // unchecked it then echoed back on every read as though it had worked, and
+    // the operator kept being paged by a type their own settings showed as off.
+    // Reject it here, naming the token, rather than accept a setting that
+    // cannot do what it says.
+    if let Some(ref raw) = body.muted_types {
+        let unknown = crate::services::notifications::unknown_suppressible_types(raw);
+        if !unknown.is_empty() {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                &format!(
+                    "Unknown alert type(s) in muted_types: {}. Suppressible types are: {}",
+                    unknown.join(", "),
+                    crate::services::notifications::SUPPRESSIBLE_ALERT_TYPES.join(", ")
+                ),
+            ));
+        }
+    }
+
     // Check if rule exists (partial unique indexes don't work with ON CONFLICT)
     let existing: Option<(Uuid,)> = if server_id.is_some() {
         sqlx::query_as("SELECT id FROM alert_rules WHERE user_id = $1 AND server_id = $2")
