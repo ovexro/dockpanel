@@ -101,6 +101,13 @@ async fn format_message(pool: &PgPool, channel: &str, subject: &str, message: &s
 }
 
 /// Derive severity string from subject line (for webhook/pagerduty payloads).
+///
+/// Only `send_notification` still calls this — every fired-alert path has a
+/// REAL stored severity (`alerts.severity`) and passes it in directly instead;
+/// see `severity_color` and the doc on `send_notification_with_runbook`.
+/// `send_notification`'s own callers (resolve/git-deploy/security-hardening/
+/// auto-healer/status-notice/uptime) have no such stored value, so a guess
+/// from the subject text is the best available signal for them.
 fn derive_severity(subject: &str) -> &'static str {
     if subject.contains("FAIL") || subject.contains("down") || subject.contains("critical") {
         "critical"
@@ -110,6 +117,44 @@ fn derive_severity(subject: &str) -> &'static str {
         "info"
     } else {
         "error"
+    }
+}
+
+/// HTML colour for a stored alert severity. Single-sourced so the initial page
+/// (`try_fire_alert`) and its escalation re-page (`check_escalations`) can
+/// never disagree about what a warning looks like — before this, the
+/// escalation path hardcoded critical-red for every severity, including a
+/// re-paged warning.
+pub fn severity_color(severity: &str) -> &'static str {
+    match severity {
+        "critical" => "#ef4444",
+        "warning" => "#f59e0b",
+        _ => "#3b82f6",
+    }
+}
+
+#[cfg(test)]
+mod severity_color_tests {
+    use super::severity_color;
+
+    #[test]
+    fn critical_is_red() {
+        assert_eq!(severity_color("critical"), "#ef4444");
+    }
+
+    #[test]
+    fn warning_is_amber() {
+        assert_eq!(severity_color("warning"), "#f59e0b");
+    }
+
+    /// `info` and any unrecognised value both fall to the same blue — there is
+    /// no third colour to confuse with a real severity, so an unknown string
+    /// degrades to the same thing "no severity" always meant.
+    #[test]
+    fn info_and_anything_unrecognised_is_blue() {
+        assert_eq!(severity_color("info"), "#3b82f6");
+        assert_eq!(severity_color("bogus"), "#3b82f6");
+        assert_eq!(severity_color(""), "#3b82f6");
     }
 }
 
@@ -261,6 +306,13 @@ pub async fn load_runbook_payload(
 /// Used by `try_fire_alert` and `check_escalations` (W3) — non-alert
 /// callers stay on `send_notification`.
 ///
+/// `severity` is the caller's OWN stored value — the same one `try_fire_alert`
+/// bound to the `alerts` INSERT — not re-derived here. This function used to
+/// keyword-scan `subject` for it via `derive_severity`, which is the only
+/// severity source `send_notification` (no stored value in scope) still has
+/// any business using; a fired alert already knows its severity and every
+/// outbound payload below should say so, not guess from the title text.
+///
 /// Per-channel handling:
 /// - email: full markdown rendered via pulldown-cmark, appended to body_html
 /// - slack/discord: link + 280-char excerpt appended to message
@@ -272,11 +324,11 @@ pub async fn send_notification_with_runbook(
     subject: &str,
     message: &str,
     body_html: &str,
+    severity: &str,
     runbook_excerpt: Option<&str>,
     runbook_url: Option<&str>,
 ) {
     let client = http_client();
-    let severity = derive_severity(subject);
 
     // Email — appends rendered runbook HTML to body_html.
     if let Some(ref email) = channels.email {
@@ -590,6 +642,7 @@ pub async fn dispatch_escalation_step(
     subject: &str,
     message: &str,
     body_html: &str,
+    severity: &str,
     runbook_excerpt: Option<&str>,
     runbook_url: Option<&str>,
 ) {
@@ -627,6 +680,7 @@ pub async fn dispatch_escalation_step(
             subject,
             message,
             body_html,
+            severity,
             runbook_excerpt,
             runbook_url,
         )
@@ -644,6 +698,7 @@ pub async fn dispatch_escalation_step(
             subject,
             message,
             body_html,
+            severity,
             runbook_excerpt,
             runbook_url,
         )
@@ -672,6 +727,7 @@ pub async fn dispatch_escalation_step(
             subject,
             message,
             body_html,
+            severity,
             runbook_excerpt,
             runbook_url,
         )
@@ -688,6 +744,7 @@ pub async fn dispatch_escalation_step(
             subject,
             message,
             body_html,
+            severity,
             runbook_excerpt,
             runbook_url,
         )
@@ -711,6 +768,7 @@ pub async fn dispatch_escalation_step(
             subject,
             message,
             body_html,
+            severity,
             runbook_excerpt,
             runbook_url,
         )
@@ -810,6 +868,7 @@ async fn fanout_to_user(
     subject: &str,
     message: &str,
     body_html: &str,
+    severity: &str,
     runbook_excerpt: Option<&str>,
     runbook_url: Option<&str>,
 ) -> bool {
@@ -834,6 +893,7 @@ async fn fanout_to_user(
         subject,
         message,
         body_html,
+        severity,
         runbook_excerpt,
         runbook_url,
     )
@@ -1154,11 +1214,7 @@ pub async fn try_fire_alert(
          <p>{message}</p>\
          <p style=\"color:#6b7280;font-size:14px\">Time: {}</p>\
          </div>",
-        match severity {
-            "critical" => "#ef4444",
-            "warning" => "#f59e0b",
-            _ => "#3b82f6",
-        },
+        severity_color(severity),
         chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
     );
     // Phase 4 W2 + W3: attach runbook to the notification payload.
@@ -1182,6 +1238,7 @@ pub async fn try_fire_alert(
                 &subject,
                 message,
                 &html,
+                severity,
                 runbook_excerpt.as_deref(),
                 runbook_url.as_deref(),
             )
@@ -1203,6 +1260,7 @@ pub async fn try_fire_alert(
         &subject,
         message,
         &html,
+        severity,
         runbook_excerpt.as_deref(),
         runbook_url.as_deref(),
     )

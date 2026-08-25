@@ -1797,6 +1797,7 @@ async fn check_escalations(pool: &PgPool) {
         user_id: Uuid,
         server_id: Option<Uuid>,
         alert_type: String,
+        severity: String,
         title: String,
         message: String,
         created_at: chrono::DateTime<chrono::Utc>,
@@ -1820,7 +1821,7 @@ async fn check_escalations(pool: &PgPool) {
     const ESCALATION_SWEEP_LIMIT: i64 = 500;
 
     let rows: Vec<EscalationRow> = match sqlx::query_as(
-        "SELECT id, user_id, server_id, alert_type, title, message, \
+        "SELECT id, user_id, server_id, alert_type, severity, title, message, \
                 created_at, escalation_step_index, escalated_at \
          FROM alerts \
          WHERE status = 'firing' AND acknowledged_at IS NULL \
@@ -1960,12 +1961,17 @@ async fn check_escalations(pool: &PgPool) {
         }
         let (runbook_excerpt, runbook_url) = runbook_cache[&row.alert_type].clone();
 
+        // Single-sourced with try_fire_alert's own initial-page HTML
+        // (notifications::severity_color) so an escalated warning does not
+        // read as an escalated critical — the row's OWN stored severity, not
+        // a hardcoded red for every re-page.
+        let esc_color = notifications::severity_color(&row.severity);
         let esc_subject = format!("[ESCALATED] {}", row.title);
         let html = format!(
             "<div style=\"font-family:sans-serif;max-width:600px;margin:0 auto\">\
-             <h2 style=\"color:#ef4444\">[ESCALATED] {}</h2>\
+             <h2 style=\"color:{esc_color}\">[ESCALATED] {}</h2>\
              <p>{}</p>\
-             <p style=\"color:#ef4444;font-weight:bold\">This alert has not been acknowledged. Please investigate immediately.</p>\
+             <p style=\"color:{esc_color};font-weight:bold\">This alert has not been acknowledged. Please investigate immediately.</p>\
              <p style=\"color:#6b7280;font-size:14px\">Time: {}</p>\
              </div>",
             row.title,
@@ -1982,6 +1988,7 @@ async fn check_escalations(pool: &PgPool) {
             &esc_subject,
             &row.message,
             &html,
+            &row.severity,
             runbook_excerpt.as_deref(),
             runbook_url.as_deref(),
         )

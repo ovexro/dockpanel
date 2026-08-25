@@ -4,6 +4,39 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.155.2]
+
+### Fixed — a stored-critical certificate could reach PagerDuty as "error"
+
+Every alert is fired with a real severity — `critical`, `warning` or `info` —
+recorded on the row and used to colour the initial page. But the outbound
+payload for every channel (PagerDuty's own `severity` field, the webhook JSON,
+the `{{severity}}` template token) was never given that value. Instead it
+keyword-scanned the subject line — "DockPanel Alert: <title>" — for words like
+"FAIL", "down" or "critical", and fell back to the generic `"error"` for
+anything that didn't happen to contain one. A certificate alert stored as
+`critical` reached PagerDuty as `"error"` unless its title happened to spell
+the word out; the same was true for offline servers, crash-looping containers,
+CPU/memory/disk and backup failures — effectively every alert type this panel
+raises.
+
+The stored severity now travels with the alert all the way to the send: through
+the escalation-policy dispatch, through every route shape (a routed user, an
+on-call schedule, the alert owner's own channels, and a step-level webhook), to
+the payload each channel actually sends. The keyword guess still exists — it is
+the right tool for the handful of notifications that have no stored severity to
+draw on — but a fired alert no longer needs to be guessed at.
+
+### Fixed — an escalated warning looked exactly like an escalated critical
+
+The re-page an unacknowledged alert gets on escalation hardcoded red and
+"investigate immediately" for every severity, because the query behind it never
+selected the alert's own `severity` column in the first place. A firing warning
+that had gone unacknowledged for 15 minutes was escalated with the same colour
+and urgency as a firing critical. It now reads the row's real severity and
+colours the re-page the same way the initial page does — both now draw from one
+shared mapping instead of two copies that were free to drift.
+
 ## [2.155.1]
 
 ### Fixed — the twentieth alert type is suppressible after all

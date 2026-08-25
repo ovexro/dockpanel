@@ -345,5 +345,90 @@ else
 fi
 
 echo
+echo
+echo "== §F  the fired severity reaches every payload, not a keyword guess =="
+
+# F1: send_notification_with_runbook — every alert-fire path's actual send —
+# takes severity as the caller's own value and never re-derives it from the
+# subject text. It used to keyword-scan "DockPanel Alert: <title>" for words
+# like "FAIL"/"critical"/"warning", so a stored-critical whose title read
+# plainly ("Certificate expired") reached PagerDuty as the generic "error".
+SNWR=$(awk '/^pub async fn send_notification_with_runbook\(/{inside=1} inside{print} inside && /^}$/{exit}' "$NOTIF")
+NSNWR=$(grep -c . <<< "$SNWR")
+if [ "$NSNWR" -ge 60 ]; then
+  ok "F1-control send_notification_with_runbook body extracted — $NSNWR lines"
+else
+  bad "F1-control send_notification_with_runbook body extracted — only $NSNWR lines (the extractor broke)"
+fi
+if grep -qE 'severity: &str,' <<< "$SNWR" && [ "$(grep -cE 'derive_severity\(' <<< "$SNWR")" -eq 0 ]; then
+  ok "F1 the fired-alert send path takes severity as a parameter, not a subject-text guess"
+else
+  bad "F1 the fired-alert send path takes severity as a parameter, not a subject-text guess"
+fi
+
+# F2: dispatch_escalation_step threads that same severity to every route shape
+# it can pick — the webhook synthesis plus all four fanout_to_user calls
+# (all_channels, unresolved-route fallback, the per-user loop, the
+# nobody-serviceable fallback). A route shape that drops it silently reverts
+# to a subject-text guess one call deeper.
+DISPATCH_F=$(awk '/^pub async fn dispatch_escalation_step\(/{inside=1} inside{print} inside && /^}$/{exit}' "$NOTIF")
+NDISF=$(grep -c . <<< "$DISPATCH_F")
+if [ "$NDISF" -ge 100 ]; then
+  ok "F2-control dispatch_escalation_step body extracted — $NDISF lines"
+else
+  bad "F2-control dispatch_escalation_step body extracted — only $NDISF lines (the extractor broke)"
+fi
+NSEV=$(grep -cE '^ +severity,$' <<< "$DISPATCH_F")
+if grep -qE 'severity: &str,' <<< "$DISPATCH_F" && [ "$NSEV" -ge 5 ]; then
+  ok "F2 every route shape in dispatch_escalation_step passes the real severity onward — $NSEV call sites"
+else
+  bad "F2 dispatch_escalation_step passes severity to every route shape — only $NSEV call sites found (expected >= 5)"
+fi
+
+# F3: fanout_to_user forwards severity to the send it actually makes, rather
+# than accepting it as a dead parameter.
+FANOUT=$(awk '/^async fn fanout_to_user\(/{inside=1} inside{print} inside && /^}$/{exit}' "$NOTIF")
+NFAN=$(grep -c . <<< "$FANOUT")
+if [ "$NFAN" -ge 25 ]; then
+  ok "F3-control fanout_to_user body extracted — $NFAN lines"
+else
+  bad "F3-control fanout_to_user body extracted — only $NFAN lines (the extractor broke)"
+fi
+if grep -qE 'severity: &str,' <<< "$FANOUT" && grep -qE '^ +severity,$' <<< "$FANOUT"; then
+  ok "F3 fanout_to_user forwards severity to the actual send"
+else
+  bad "F3 fanout_to_user forwards severity to the actual send"
+fi
+
+# F4: check_escalations SELECTs the row's real severity and colours the
+# escalation HTML from it, rather than hardcoding critical-red for every
+# re-page — the half of the s402 escalation fix that was left open: an
+# escalated warning was indistinguishable from an escalated critical.
+CHECKESC_F=$(awk '/^async fn check_escalations\(/{inside=1} inside{print} inside && /^}$/{exit}' "$ENGINE")
+NESCF=$(grep -c . <<< "$CHECKESC_F")
+if [ "$NESCF" -ge 200 ]; then
+  ok "F4-control check_escalations body extracted — $NESCF lines"
+else
+  bad "F4-control check_escalations body extracted — only $NESCF lines (the extractor broke)"
+fi
+if grep -qE 'severity: String,' <<< "$CHECKESC_F" \
+   && grep -qE 'SELECT id, user_id, server_id, alert_type, severity,' <<< "$CHECKESC_F" \
+   && grep -qE 'severity_color\(&row\.severity\)' <<< "$CHECKESC_F" \
+   && [ "$(grep -cE '"#ef4444"' <<< "$CHECKESC_F")" -eq 0 ]; then
+  ok "F4 check_escalations selects the row's severity and colours the re-page from it"
+else
+  bad "F4 check_escalations selects the row's severity and colours the re-page from it"
+fi
+
+# F5: try_fire_alert's initial page and check_escalations' re-page share ONE
+# severity->colour mapping. Before this they were two copies of the same match
+# arms in two files, free to drift the moment either one was edited alone.
+if [ "$(grep -c 'pub fn severity_color(severity: &str)' "$NOTIF")" -eq 1 ]; then
+  ok "F5 severity->colour is single-sourced, not duplicated per caller"
+else
+  bad "F5 severity->colour is single-sourced, not duplicated per caller"
+fi
+
+echo
 printf 'alert-controls: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
