@@ -44,11 +44,16 @@ like it covered them was labelled "SSL" — it governed certificate *expiry*, a
 different alert entirely. So the switch you could see controlled something other
 than the thing paging you, and the thing paging you could not be switched off.
 
-All twenty are now listed, and the ambiguous "SSL" box is split into "SSL expiry"
-and "SSL renewal". Two related repairs come with it: a suppression entry naming
-an alert type DockPanel does not raise is now refused when you save it, instead
-of being stored and quietly matching nothing for ever; and the Alerts page now
-labels and filters the four types it used to print as raw database values.
+Nineteen of the twenty are now listed, and the ambiguous "SSL" box is split into
+"SSL expiry" and "SSL renewal". The twentieth, slow-response, is left out on
+purpose: it is recorded by a path that never reaches the external channels, so a
+checkbox for it would switch off nothing — which is the fault being fixed here,
+not one to spread. It will join the grid when that path is corrected.
+
+Two related repairs come with it: a suppression entry naming an alert type
+DockPanel does not raise is now refused when you save it, instead of being stored
+and quietly matching nothing for ever; and the Alerts page now labels and filters
+the four types it used to print as raw database values.
 
 ## [2.154.0]
 
