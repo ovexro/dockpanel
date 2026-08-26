@@ -332,11 +332,13 @@ echo "── D. 'Unknown' is not 'OK' ──────────────
 # ONE ladder, shared by both certificate lists — two copies is how the Dashboard
 # tile and this page came to disagree in the first place.
 eq "D1 there is a single expiry ladder" \
-   "$(occ "$F_MON" "fnexpiry_status(days_left:Option<i64>)->&'staticstr{")" "1"
+   "$(occ "$F_MON" "fnexpiry_status(days_left:Option<i64>,renewal_failing:bool)->&'staticstr{")" "1"
 # Three call sites, two lists: the admin list classifies its site-backed rows and
 # its host-only rows separately, and both must use the same ladder.
+# ⚠ The trailing comma is what excludes the DECLARATION, whose parameter list
+# reads `days_left:` — matching on the name alone would count four.
 eq "D2 both lists use it, on every row class" \
-   "$(occ "$F_MON" 'expiry_status(days_left)')" "3"
+   "$(occ "$F_MON" 'expiry_status(days_left,')" "3"
 eq "D3 a missing expiry is unknown" \
    "$(occ "$F_MON" 'None=>"unknown",')" "1"
 # ⚠ absence arms, and the token is spelled two ways on purpose: the defect was
@@ -354,12 +356,18 @@ eq "D6 the page no longer falls back to the reassuring badge" \
 # earlier draft extracted the backend set with a fixed string that SUPPLIED the
 # answer it then compared against, which is the tautology this repo has a named
 # lesson about.
+# ⚠ BOTH character classes admit `_`, and v2.159.0 is why. The ladder gained a
+# rung named with an underscore, and `[a-z]+` matched only the tail of it — the
+# census compared a frontend key it had silently truncated to `failed` against a
+# backend set the same truncation had dropped entirely. Neither side was wrong
+# about the code; the instrument could not see the name. A vocabulary census is
+# only as wide as its character class.
 BACK_STATUS=$(printf '%s' "$F_MON" \
-  | $G -oE 'fnexpiry_status\(days_left:Option<i64>\)->&.staticstr\{[^}]*\}' \
-  | $G -oE '"[a-z]+"' | tr -d '"' | sort -u | tr '\n' ' ')
+  | $G -oE "fnexpiry_status\\(days_left:Option<i64>,renewal_failing:bool\\)->&.staticstr\\{[^}]*\\}" \
+  | $G -oE '"[a-z_]+"' | tr -d '"' | sort -u | tr '\n' ' ')
 FRONT_STATUS=$(printf '%s' "$F_CERTS" \
   | $G -oE 'constSTATUS_STYLES:Record<string,\{[^}]*\}>=\{.*?\};' \
-  | $G -oE '[a-z]+:\{bg:' | sed 's/:{bg://' | sort -u | tr '\n' ' ')
+  | $G -oE '[a-z_]+:\{bg:' | sed 's/:{bg://' | sort -u | tr '\n' ' ')
 eq "D7 the backend ladder's vocabulary was extracted" \
    "$([ "$(printf '%s' "$BACK_STATUS" | wc -w)" -ge 4 ] && echo yes || echo "no($BACK_STATUS)")" "yes"
 eq "D8 the page's style map was extracted" \

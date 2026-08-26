@@ -21,6 +21,11 @@ const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }>
   expired: { bg: "bg-danger-500/15", text: "text-danger-400", label: "Expired" },
   critical: { bg: "bg-danger-500/15", text: "text-danger-400", label: "Critical" },
   warning: { bg: "bg-warn-500/15", text: "text-warn-400", label: "Warning" },
+  // Not a rung of the clock like the four around it. It says the machinery that
+  // is supposed to replace this certificate is failing right now, which the days
+  // column beside it cannot express at any value — a certificate with 300 days
+  // left and a failing renewal read "OK" until the last month of its life.
+  renewal_failed: { bg: "bg-danger-500/15", text: "text-danger-400", label: "Renewal failed" },
   ok: { bg: "bg-rust-500/15", text: "text-rust-400", label: "OK" },
   // A certificate the panel did not issue arrives with no expiry, and "no
   // information" used to fall through the `|| STATUS_STYLES.ok` below into the
@@ -58,6 +63,10 @@ export default function Certificates() {
       .then((data) => {
         setCerts(data.certificates || []);
         setHostScan(data.host_scan !== false);
+        // Clears a PREVIOUS failure. Without it the banner and the count line
+        // below both keep describing a request that has since succeeded, and
+        // toggling the admin checkbox is the ordinary way to reach that state.
+        setError("");
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
@@ -118,9 +127,15 @@ export default function Certificates() {
     <div>
       <div className="flex items-center justify-between gap-4 mb-4">
         <p className="text-sm text-dark-200 font-mono">
-          {certs.length > 0
-            ? `${certs.length} SSL certificate${certs.length > 1 ? "s" : ""} tracked`
-            : "No SSL certificates found"}
+          {/* An unread list is not an empty one. On failure `certs` is still
+              `[]`, so this line used to answer "No SSL certificates found" —
+              the page's most reassuring sentence — directly beside the error
+              banner saying the request had failed. */}
+          {error
+            ? "Certificate list unavailable"
+            : certs.length > 0
+              ? `${certs.length} SSL certificate${certs.length > 1 ? "s" : ""} tracked`
+              : "No SSL certificates found"}
         </p>
         {isAdmin && (
           <label className="flex items-center gap-2 text-sm text-dark-200 select-none cursor-pointer">

@@ -4,6 +4,60 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.159.0]
+
+### Fixed — four monitoring reads answered a failed query with an empty list
+
+Four reads in the monitoring routes discarded their error and returned an empty
+result instead. In every case the page then rendered that emptiness as a fact,
+and the fact was reassuring:
+
+* **Certificates** said **"No SSL certificates found"** — the same sentence it
+  shows a tenant who genuinely has none.
+* **The public status page** returned a page with no monitors on it, which reads
+  as nothing being wrong. It is the page people open precisely when they suspect
+  something is.
+* **The response chart** drew an empty 24 hours.
+* **Maintenance windows** showed none — and that one is the worst of the four,
+  because uptime checks skip every monitor belonging to an account with a live
+  window. The screen said nothing was muting anything while something was, and
+  the delete control that is the way out was not offered, because the row it
+  belongs to was never drawn.
+
+All four now report the failure. The admin certificate list already did, and was
+the template for the other four.
+
+The Certificates page also stops describing a failed read as an empty one: the
+count line says the list is unavailable rather than that there are no
+certificates, and a later successful load retracts the error rather than leaving
+the banner to outlive the request it described.
+
+### Added — a certificate can now say its renewal is failing
+
+Every rung of the certificate status ladder was a function of the clock —
+expired, critical, warning, ok, and unknown for a certificate whose expiry the
+panel does not know. None of them could say that the machinery meant to replace
+the certificate is failing right now, so a certificate with three hundred days
+left and a failing renewal read **OK** until its last month.
+
+v2.157.0 made renewal-failure alerts resolve themselves on a successful renewal,
+which sharpened the gap rather than closing it: a failure that gets fixed now
+disappears from the alert list, and one that is *not* fixed had nowhere on the
+certificate page to appear.
+
+Both certificate lists now show **Renewal failed** for a site with a live
+renewal-failure alert. It sits below *expired* — that outage has already
+happened and no longer turns on the renewal — and above everything else, because
+the other rungs say when the certificate dies while this one says nothing is
+coming to save it. The days column still carries the clock.
+
+Three of the six renewal conditions mean a renewal did not happen, and only
+those three light the rung. A certificate issued by somebody else, a renewal
+deliberately refused to protect a wildcard, and one that succeeded while
+covering fewer names are all standing descriptions of the certificate you have
+— not failures to renew — and the panel does not report them as such. The rung
+reads live alerts only, so it clears itself when the renewal next succeeds.
+
 ## [2.158.0]
 
 ### Fixed — switching an alert type off did not stop it escalating

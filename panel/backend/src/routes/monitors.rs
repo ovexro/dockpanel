@@ -526,7 +526,7 @@ pub async fn response_chart(
         "SELECT response_time, checked_at FROM monitor_checks \
          WHERE monitor_id = $1 AND checked_at > NOW() - INTERVAL '24 hours' AND status_code IS NOT NULL \
          ORDER BY checked_at ASC"
-    ).bind(id).fetch_all(&state.db).await.unwrap_or_default();
+    ).bind(id).fetch_all(&state.db).await.map_err(|e| internal_error("response chart points", e))?;
 
     let data: Vec<serde_json::Value> = points.iter().map(|(rt, time)| {
         serde_json::json!({ "time": time.timestamp(), "ms": rt })
@@ -566,9 +566,17 @@ pub async fn status_page(
     crate::services::public_status::require_enabled(&state.db).await?;
 
     // Get all enabled monitors (no user filter — this is public)
+    //
+    // ⚠ The error is propagated, and on THIS route that is the whole point. An
+    // empty list renders as a status page with nothing wrong on it, which is the
+    // most reassuring page the product can serve and the one a reader consults
+    // precisely when they suspect something is. `require_enabled` above already
+    // returns on a dead pool, so what reached this line was a failure of this
+    // query alone — a statement timeout, a type mismatch — and the honest answer
+    // to "I could not read the monitors" is never "there are no monitors".
     let monitors: Vec<(String, String, String, Option<i32>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         "SELECT name, url, status, last_response_time, last_checked_at FROM monitors WHERE enabled = true ORDER BY name"
-    ).fetch_all(&state.db).await.unwrap_or_default();
+    ).fetch_all(&state.db).await.map_err(|e| internal_error("status page monitors", e))?;
 
     let items: Vec<serde_json::Value> = monitors.iter().map(|(name, _url, status, rt, checked)| {
         serde_json::json!({
@@ -594,14 +602,87 @@ pub async fn status_page(
 /// missing expiry became 999 days and therefore the green OK badge — the most
 /// reassuring answer on the page, produced by an absence of information. Every
 /// certificate the panel did not issue arrives that way.
-fn expiry_status(days_left: Option<i64>) -> &'static str {
+///
+/// `renewal_failing` is the same argument applied to the other axis. Every rung
+/// but that one is a function of the clock alone, so a certificate whose renewal
+/// is failing right now still read `ok` for its first three hundred days and
+/// `warning` for the next twenty-three — the page described the certificate and
+/// never the machinery that is supposed to replace it. v2.157.0 made
+/// `ssl_renewal_failure` resolve itself on a successful renewal, which sharpened
+/// the gap rather than closing it: a failure that gets fixed now disappears from
+/// the Alerts list, and one that does not had nowhere on this page to appear.
+///
+/// ⚠ It sits BELOW `expired` and ABOVE everything else. `expired` outranks it
+/// because the outage has already happened and no longer depends on the renewal;
+/// it outranks `unknown` because "the renewal is failing" is a fact and `unknown`
+/// is the absence of one; and it outranks `critical`/`warning`/`ok` because those
+/// three say when the certificate dies while this says nothing is coming to save
+/// it. The days column still carries the clock, so no information is displaced.
+fn expiry_status(days_left: Option<i64>, renewal_failing: bool) -> &'static str {
     match days_left {
-        None => "unknown",
         Some(d) if d < 0 => "expired",
+        _ if renewal_failing => "renewal_failed",
+        None => "unknown",
         Some(d) if d <= 7 => "critical",
         Some(d) if d <= 30 => "warning",
         _ => "ok",
     }
+}
+
+/// The sites among `site_ids` whose certificate renewal is currently failing.
+///
+/// ⚠ Keyed on the THREE `state_key`s that assert a renewal did not happen, taken
+/// from `notifications::renewal_success_clears` rather than re-listed here. That
+/// function answers "does a successful renewal disprove this alert?", and its own
+/// doc gives the reason the two questions have one answer: those three are exactly
+/// the keys that say a renewal DID NOT HAPPEN, which is what makes a later success
+/// contradict them. Re-listing the keys here would be a second classification of
+/// the same six keys, free to drift from the first — and its fall-through is
+/// `false`, so a key added later is excluded from both until somebody decides.
+///
+/// The other three describe the certificate installed now, not a failure to
+/// renew: `DECLINED` is somebody else's certificate, `MAIL_HOST_CONFLICT` is a
+/// renewal deliberately refused to protect a wildcard, and `DNS01_DOWNGRADED` is
+/// a renewal that succeeded and covered fewer names. Rendering any of them as
+/// "renewal failed" would report a failure the panel did not have.
+///
+/// ⚠ `status = 'firing'` ONLY, and that is a constraint rather than a
+/// simplification. `resolve_alert` matches `status = 'firing'` in every arm, so
+/// an ACKNOWLEDGED renewal alert is never resolved by a later success — including
+/// it here would pin the rung on permanently for any operator who acknowledged
+/// the alert before fixing the cause, and the page would keep asserting a failure
+/// that a successful renewal had already disproved.
+///
+/// Scoped by `site_id` alone, for both callers. The per-caller list is already
+/// filtered to its owner's sites and the admin list to one server, so the ids ARE
+/// the scope — and routing this through a `user_id`/`server_id` arm would
+/// reproduce the shape that made `resolve_alert` miss every row the security
+/// scanner raises with no server id.
+async fn renewal_failing_sites(
+    pool: &sqlx::PgPool,
+    site_ids: &[Uuid],
+) -> Result<std::collections::HashSet<Uuid>, ApiError> {
+    if site_ids.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+
+    let keys: Vec<&str> = crate::services::notifications::ssl_renewal_key::ALL
+        .into_iter()
+        .filter(|k| crate::services::notifications::renewal_success_clears(k))
+        .collect();
+
+    let rows: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT DISTINCT site_id FROM alerts \
+         WHERE alert_type = 'ssl_renewal_failure' AND status = 'firing' \
+           AND site_id = ANY($1) AND state_key = ANY($2)",
+    )
+    .bind(site_ids)
+    .bind(&keys)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| internal_error("renewal failure lookup", e))?;
+
+    Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
 /// GET /api/monitors/certificates — List all SSL certificates with expiry status.
@@ -618,7 +699,7 @@ pub async fn certificate_dashboard(
     // One of those two screens was lying about the same rows; it was this one.
     let certs: Vec<(uuid::Uuid, String, bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         "SELECT id, domain, ssl_enabled, ssl_expiry FROM sites WHERE user_id = $1 AND ssl_enabled = true ORDER BY ssl_expiry ASC NULLS LAST"
-    ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
+    ).bind(claims.sub).fetch_all(&state.db).await.map_err(|e| internal_error("certificate list", e))?;
 
     // A certificate whose expiry the panel does not know is `unknown`, not `ok`.
     //
@@ -630,9 +711,11 @@ pub async fn certificate_dashboard(
     // exactly the certificate nobody renews for you. `999` also flowed into the
     // page's own countdown column, printing a confident "999d".
     let now = chrono::Utc::now();
+    let ids: Vec<Uuid> = certs.iter().map(|(id, _, _, _)| *id).collect();
+    let failing = renewal_failing_sites(&state.db, &ids).await?;
     let items: Vec<serde_json::Value> = certs.iter().map(|(id, domain, _, expiry)| {
         let days_left = expiry.map(|e| (e - now).num_days());
-        serde_json::json!({ "site_id": id, "domain": domain, "expiry": expiry, "days_left": days_left, "status": expiry_status(days_left) })
+        serde_json::json!({ "site_id": id, "domain": domain, "expiry": expiry, "days_left": days_left, "status": expiry_status(days_left, failing.contains(id)) })
     }).collect();
 
     Ok(Json(serde_json::json!({ "certificates": items })))
@@ -683,6 +766,8 @@ pub async fn certificate_dashboard_for_admin(
         .map_err(|e| internal_error("admin certificate list", e))?;
 
     let now = chrono::Utc::now();
+    let ids: Vec<Uuid> = certs.iter().map(|(id, _, _, _)| *id).collect();
+    let failing = renewal_failing_sites(&state.db, &ids).await?;
     let mut items: Vec<serde_json::Value> = certs
         .iter()
         .map(|(id, domain, expiry, owner)| {
@@ -692,7 +777,7 @@ pub async fn certificate_dashboard_for_admin(
                 "domain": domain,
                 "expiry": expiry,
                 "days_left": days_left,
-                "status": expiry_status(days_left),
+                "status": expiry_status(days_left, failing.contains(id)),
                 "owner_email": owner,
                 "managed": true,
             })
@@ -718,7 +803,13 @@ pub async fn certificate_dashboard_for_admin(
                         "expiry": c.get("not_after").and_then(|d| d.as_str())
                             .and_then(crate::helpers::parse_agent_cert_expiry),
                         "days_left": days_left,
-                        "status": expiry_status(days_left),
+                        // Never `renewal_failed`, and not because these were
+                        // checked. A certificate in this half has no site row,
+                        // so nothing can raise a renewal alert against it and
+                        // the panel does not renew it from here either — the
+                        // rung would be asserting a failure of machinery that
+                        // was never pointed at this certificate.
+                        "status": expiry_status(days_left, false),
                         "issuer": c.get("issuer"),
                         "owner_email": serde_json::Value::Null,
                         // No site row, so no renewal from here and no Renew button.
@@ -773,9 +864,16 @@ pub async fn list_maintenance(
     AuthUser(claims): AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Per-caller by `WHERE user_id = $1` — see `create_maintenance` above.
+    //
+    // ⚠ The error is propagated because an empty list is not a neutral answer
+    // here. `uptime.rs` skips every monitor belonging to a user with a currently
+    // active window, so a failed read used to show an operator no windows while
+    // one of them was still suppressing their alerting — the screen said nothing
+    // was muting anything, and the delete control that is the way out was not
+    // offered, because the row it belongs to was never drawn.
     let windows: Vec<(uuid::Uuid, String, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT id, name, starts_at, ends_at FROM maintenance_windows WHERE user_id = $1 ORDER BY starts_at DESC LIMIT 20"
-    ).bind(claims.sub).fetch_all(&state.db).await.unwrap_or_default();
+    ).bind(claims.sub).fetch_all(&state.db).await.map_err(|e| internal_error("maintenance windows", e))?;
 
     let now = chrono::Utc::now();
     let items: Vec<serde_json::Value> = windows.iter().map(|(id, name, start, end)| {
