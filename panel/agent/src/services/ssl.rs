@@ -1027,6 +1027,163 @@ fn offset_to_chrono(dt: time::OffsetDateTime) -> Option<chrono::DateTime<chrono:
     chrono::DateTime::<chrono::Utc>::from_timestamp(dt.unix_timestamp(), dt.nanosecond())
 }
 
+// ─── Registered certificates (#104) ──────────────────────────────────────
+
+/// Where a certificate registered BY NAME lives: one directory per alias,
+/// holding the same `fullchain.pem` + `privkey.pem` pair a domain directory
+/// holds, referenced from a vhost by alias rather than by the domain it fronts.
+///
+/// A SIBLING root, deliberately not a subdirectory of the per-domain tree, and
+/// the placement is the whole design:
+///
+/// - `list_cert_status`, the diagnostics expiry check and the security scanner
+///   all walk the per-domain tree treating EVERY directory as a domain and
+///   offering a renew-by-name fix for it. An alias must never be enumerated as a
+///   domain, so it must not sit where those walks look.
+/// - `unexpose_domain` deletes a domain's own directory when its stack is
+///   removed. A registered certificate is shared across claims and has to
+///   survive any one stack's removal.
+/// - The per-domain renew door replaces whatever sits at the domain's path with
+///   an ACME certificate. The registry is never at that path, so no renewal
+///   door can reach a certificate the operator supplied — nothing renews a
+///   stack's certificate today, and this keeps it that way by construction.
+///
+/// `/etc/dockpanel` is already in the unit's writable set, so the new root
+/// needs no sandbox change.
+pub const SSL_REGISTRY_DIR: &str = "/etc/dockpanel/ssl-registry";
+
+/// What a registered certificate says about itself — the metadata the panel
+/// records so a screen can show it without ever holding the PEM.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CertMetadata {
+    /// The names the leaf presents, through the same SAN-then-CN rule
+    /// `cert_covers_domain` uses.
+    pub dns_names: Vec<String>,
+    pub issuer: String,
+    pub not_before: chrono::DateTime<chrono::Utc>,
+    pub not_after: chrono::DateTime<chrono::Utc>,
+    /// SHA-256 of the leaf's DER, lowercase hex. What `openssl x509
+    /// -fingerprint -sha256` prints, minus the colons.
+    pub fingerprint_sha256: String,
+}
+
+/// Is `alias` a name a registered certificate may carry?
+///
+/// A DNS-label shape: lowercase letters, digits and inner hyphens, 1–64 bytes.
+/// It becomes a directory name on this box and is spliced into a vhost, so it
+/// has to satisfy the vhost renderer's path check as well — the grammar is a
+/// strict subset of that character class and can never spell `..`. Uppercase
+/// is refused rather than folded: the panel stores the alias lowercase, and an
+/// agent that silently folded would answer for a name the panel's row does not
+/// carry.
+pub fn is_valid_cert_alias(alias: &str) -> bool {
+    let b = alias.as_bytes();
+    if b.is_empty() || b.len() > 64 {
+        return false;
+    }
+    let inner = |c: u8| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-';
+    let edge = |c: u8| c.is_ascii_lowercase() || c.is_ascii_digit();
+    edge(b[0]) && edge(b[b.len() - 1]) && b.iter().all(|&c| inner(c))
+}
+
+/// The certificate and key paths a registered alias resolves to, in that
+/// order. One spelling: the upload writes here, the vhost renderer names it,
+/// and the delete guard greps vhosts for it — three readers of one string.
+pub fn registry_paths(alias: &str) -> (String, String) {
+    (
+        format!("{SSL_REGISTRY_DIR}/{alias}/fullchain.pem"),
+        format!("{SSL_REGISTRY_DIR}/{alias}/privkey.pem"),
+    )
+}
+
+/// Read the FIRST certificate block of a PEM and describe it.
+///
+/// The first block is the leaf — the one nginx binds — for the reason
+/// `cert_covers_domain` documents at length, and the names come from the same
+/// helper so a registered certificate and an uploaded one can never disagree
+/// about what a certificate presents. A non-certificate block is refused with
+/// the same sentence family: a pasted key is the ordinary slip, and it would
+/// otherwise land in a 0644 file.
+pub fn cert_metadata(cert_pem: &str) -> Result<CertMetadata, String> {
+    use sha2::Digest;
+
+    if !cert_pem.contains("-----BEGIN") {
+        return Err("no certificate was found in the certificate field.".to_string());
+    }
+    // The first PEM block, whatever it is labelled — judged below, because a
+    // key pasted here is the ordinary slip and deserves its sentence.
+    let (_, block) = x509_parser::pem::parse_x509_pem(cert_pem.as_bytes())
+        .map_err(|e| format!("the certificate could not be read: {e}"))?;
+    match block.label.as_str() {
+        "CERTIFICATE" => {}
+        other => {
+            return Err(format!(
+                "the certificate field contains a {} block. Paste only the certificate here, with \
+                 its chain if it has one — the private key belongs in its own field, where it is \
+                 stored with the permissions a key needs.",
+                other.to_ascii_lowercase()
+            ));
+        }
+    }
+    let (_, cert) = x509_parser::parse_x509_certificate(&block.contents)
+        .map_err(|e| format!("the certificate could not be read: {e}"))?;
+    let validity = cert.validity();
+    let not_before = offset_to_chrono(validity.not_before.to_datetime())
+        .ok_or_else(|| "the certificate's validity start is not a date".to_string())?;
+    let not_after = offset_to_chrono(validity.not_after.to_datetime())
+        .ok_or_else(|| "the certificate's expiry is not a date".to_string())?;
+    Ok(CertMetadata {
+        dns_names: presented_dns_names(&cert),
+        issuer: cert.issuer().to_string(),
+        not_before,
+        not_after,
+        fingerprint_sha256: hex::encode(sha2::Sha256::digest(&block.contents)),
+    })
+}
+
+/// Does this private key belong to this certificate?
+///
+/// nginx answers this question only at `nginx -t`, after both files are on
+/// disk, and for a REGISTERED certificate there may be no vhost to test yet —
+/// so a mismatched pair would sit in the registry looking healthy until the
+/// first claim reloaded nginx into a refusal. Asked here instead, before
+/// anything is written, by comparing the key's public half against the leaf's
+/// SubjectPublicKeyInfo — the same comparison rustls makes before it will serve
+/// a pair. The crypto provider this goes through is the one the binary already
+/// installs at start-up; nothing new is linked.
+pub fn key_matches_cert(cert_pem: &str, key_pem: &str) -> Result<(), String> {
+    let chain: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_pem.as_bytes())
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("the certificate could not be read: {e}"))?;
+    if chain.is_empty() {
+        return Err("no certificate was found in the certificate field.".to_string());
+    }
+    let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())
+        .map_err(|e| format!("the private key could not be read: {e}"))?
+        .ok_or_else(|| {
+            "no private key was found in the private key field. Paste the PEM-encoded key \
+             (a PRIVATE KEY, RSA PRIVATE KEY or EC PRIVATE KEY block) that was generated with \
+             this certificate."
+                .to_string()
+        })?;
+    let signer = rustls::crypto::aws_lc_rs::sign::any_supported_type(&key)
+        .map_err(|e| format!("the private key is not a kind nginx can serve with: {e}"))?;
+    match rustls::sign::CertifiedKey::new(chain, signer).keys_match() {
+        Ok(()) => Ok(()),
+        Err(rustls::Error::InconsistentKeys(rustls::InconsistentKeys::KeyMismatch)) => {
+            Err("the private key does not belong to this certificate".to_string())
+        }
+        // The signer could not produce its public half, so nothing was compared —
+        // a different sentence from a mismatch, which is a fact about the pair.
+        Err(rustls::Error::InconsistentKeys(_)) => Err(
+            "the private key could not be compared against the certificate; it is not a kind \
+             nginx can serve with"
+                .to_string(),
+        ),
+        Err(e) => Err(format!("the certificate could not be read: {e}")),
+    }
+}
+
 // ⚠ These test modules must stay the LAST thing in this file. The pin suites
 // blank from the first `#[cfg(test)]` to EOF and never resume, so a test module
 // placed mid-file hides every production line below it from every `prod_*` arm
@@ -1262,5 +1419,95 @@ mod acme_account_persist_tests {
         assert_eq!(mode, 0o600, "got {mode:o}");
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+}
+
+#[cfg(test)]
+mod registered_certificate_tests {
+    use super::*;
+    use rcgen::{CertificateParams, KeyPair};
+
+    /// A self-signed leaf for `sans` and the key it was signed with, both PEM.
+    fn pair(sans: &[&str]) -> (String, String) {
+        let key = KeyPair::generate().unwrap();
+        let params =
+            CertificateParams::new(sans.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
+        let cert = params.self_signed(&key).unwrap().pem();
+        (cert, key.serialize_pem())
+    }
+
+    #[test]
+    fn the_alias_grammar_is_a_dns_label() {
+        for good in ["a", "wildcard-2026", "0", "x".repeat(64).as_str()] {
+            assert!(is_valid_cert_alias(good), "{good} should be accepted");
+        }
+        for bad in [
+            "",
+            "-lead",
+            "trail-",
+            "Upper",
+            "dot.inside",
+            "under_score",
+            "../etc",
+            "sp ace",
+            "x".repeat(65).as_str(),
+        ] {
+            assert!(!is_valid_cert_alias(bad), "{bad:?} should be refused");
+        }
+        // The vhost renderer's own path check must accept every path an alias
+        // can produce — a name that passed here and was refused there would be
+        // a certificate that registers but can never be served.
+        let (c, k) = registry_paths("wildcard-2026");
+        assert!(c.starts_with(SSL_REGISTRY_DIR) && c.ends_with("/fullchain.pem"));
+        assert!(k.starts_with(SSL_REGISTRY_DIR) && k.ends_with("/privkey.pem"));
+        assert!(!SSL_REGISTRY_DIR.starts_with("/etc/dockpanel/ssl/"));
+    }
+
+    #[test]
+    fn metadata_describes_the_leaf() {
+        let (cert, _) = pair(&["Shop.Example.com", "*.example.com"]);
+        let m = cert_metadata(&cert).unwrap();
+        assert_eq!(m.dns_names, vec!["shop.example.com", "*.example.com"]);
+        assert!(m.not_before < m.not_after);
+        assert_eq!(m.fingerprint_sha256.len(), 64);
+        assert!(m.fingerprint_sha256.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(!m.issuer.is_empty());
+        // Two different certificates never share a fingerprint.
+        let (other, _) = pair(&["shop.example.com"]);
+        assert_ne!(cert_metadata(&other).unwrap().fingerprint_sha256, m.fingerprint_sha256);
+    }
+
+    #[test]
+    fn metadata_refuses_a_key_where_a_certificate_belongs() {
+        let (cert, key) = pair(&["a.example.com"]);
+        let err = cert_metadata(&format!("{key}{cert}")).unwrap_err();
+        assert!(err.contains("private key block"), "{err}");
+        assert!(cert_metadata("").unwrap_err().contains("no certificate was found"));
+        assert!(cert_metadata("not pem at all").unwrap_err().contains("no certificate was found"));
+    }
+
+    #[test]
+    fn a_generated_pair_matches_and_a_second_key_does_not() {
+        let (cert, key) = pair(&["a.example.com"]);
+        assert_eq!(key_matches_cert(&cert, &key), Ok(()));
+        // The certificate with SOMEBODY ELSE's key — the pair nginx would refuse
+        // at the first reload after the claim.
+        let (_, stranger) = pair(&["a.example.com"]);
+        assert_eq!(
+            key_matches_cert(&cert, &stranger),
+            Err("the private key does not belong to this certificate".to_string())
+        );
+        // A chain is judged by its FIRST block, like everything else here.
+        let (issuer_cert, _) = pair(&["ca.example.com"]);
+        assert_eq!(key_matches_cert(&format!("{cert}{issuer_cert}"), &key), Ok(()));
+        assert!(key_matches_cert(&format!("{issuer_cert}{cert}"), &key).is_err());
+    }
+
+    #[test]
+    fn key_matching_refuses_what_it_cannot_read() {
+        let (cert, key) = pair(&["a.example.com"]);
+        assert!(key_matches_cert("", &key).unwrap_err().contains("no certificate"));
+        assert!(key_matches_cert(&cert, "").unwrap_err().contains("no private key"));
+        assert!(key_matches_cert(&cert, &cert).unwrap_err().contains("no private key"));
     }
 }

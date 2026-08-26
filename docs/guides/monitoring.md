@@ -184,6 +184,29 @@ automatic renewal loops, and the Renew button refuses it with the issuer named. 
 those wherever they were issued and upload the replacement. (Before v2.139.0 the weekly
 security scan replaced them instead, which is why this is stated so plainly.)
 
+### Registered certificates (administrators)
+
+A certificate you manage outside the panel — a Cloudflare Origin CA wildcard, a
+commercial certificate, a corporate PKI — can be **registered once, under a name**,
+and then served by any number of Compose stacks whose domain it covers. The pair is
+kept on that server's disk beside the panel's own certificates, never in the
+database; the page lists what each certificate names, who issued it, when it expires,
+and which stacks use it. Register a certificate here, then choose **Registered
+certificate** and its name when a stack claims a domain.
+
+Three things are checked before anything is written. The private key must belong to
+the certificate (the check nginx would otherwise make at the first reload after a
+claim). A key pasted into the certificate field is refused. And at claim time the
+certificate must actually name the domain — the same subjectAltName rule as the
+per-site upload, wildcards counting for one level — or the claim is refused with the
+names it does cover. A certificate cannot be deleted while a stack still names it, and
+a replacement that stops covering a domain a stack serves is refused before the old
+pair is overwritten.
+
+**The panel does not renew a registered certificate** — as with any certificate it
+did not issue. Its expiry shows on this page with the same status ladder as the rest,
+and replacing it in place puts the new pair behind every stack that uses it at once.
+
 ### All certificates on this server (administrators)
 
 Administrators get an **All certificates on this server** switch. It lists every site's

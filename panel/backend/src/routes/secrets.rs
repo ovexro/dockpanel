@@ -92,7 +92,7 @@ pub struct UpdateVaultRequest {
 /// Distinguishes "key absent" from "key present and null" for [`UpdateVaultRequest`].
 /// `#[serde(default)]` supplies the outer `None` when the key is missing; this only
 /// ever runs when the key IS present, so it wraps whatever it finds — including null.
-fn explicit_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
+pub(crate) fn explicit_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: serde::Deserialize<'de>,

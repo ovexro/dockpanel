@@ -13,8 +13,177 @@ use crate::services::agent::AgentHandle;
 use crate::services::domain_claim::{self, Holder};
 use crate::AppState;
 
-const STACK_SELECT: &str = "SELECT id, user_id, server_id, name, yaml, service_count, domain, \
-                            ssl_email, created_at, updated_at FROM docker_stacks";
+use super::tls_certificates::{
+    certificate_id_for_alias, is_valid_cert_alias, require_agent_at_least, PROVIDED_TLS_MIN_AGENT,
+};
+
+/// The row plus the alias of the certificate it references, if any. A LEFT JOIN
+/// because most stacks reference none, and the alias is what the API and the
+/// deploy body speak — the id never leaves the panel.
+const STACK_SELECT: &str = "SELECT s.id, s.user_id, s.server_id, s.name, s.yaml, s.service_count, \
+                            s.domain, s.ssl_email, s.tls_mode, s.tls_certificate_id, \
+                            c.alias AS tls_certificate, s.created_at, s.updated_at \
+                            FROM docker_stacks s \
+                            LEFT JOIN tls_certificates c ON c.id = s.tls_certificate_id";
+
+/// The one vocabulary for how a stack's domain is served. Pinned cross-tree:
+/// the migration's CHECK, the agent's request parser and the SPA's select all
+/// carry these three words.
+const TLS_MODES: [&str; 3] = ["none", "acme", "provided"];
+
+/// The mode a stack is in, from what the row says.
+///
+/// The stored value wins. A NULL is a row written by an older binary — before
+/// the column existed, or after a rollback — and for such a row the address is
+/// the mode, exactly as the agent has always inferred it: a non-blank
+/// `ssl_email` means Let's Encrypt, anything else means plain HTTP.
+pub(crate) fn effective_tls_mode(tls_mode: Option<&str>, ssl_email: Option<&str>) -> &'static str {
+    if let Some(stored) = tls_mode {
+        if let Some(known) = TLS_MODES.iter().find(|m| **m == stored) {
+            return known;
+        }
+    }
+    let has_email = ssl_email.map(str::trim).filter(|e| !e.is_empty()).is_some();
+    if has_email {
+        "acme"
+    } else {
+        "none"
+    }
+}
+
+/// A requested mode, normalised, or a 400 for a word outside the vocabulary.
+/// `None` in means "the client did not say" — the caller decides what that
+/// means (derived from the address on create, the stored mode on update).
+fn requested_tls_mode(raw: Option<&str>) -> Result<Option<&'static str>, ApiError> {
+    let Some(raw) = raw.map(str::trim).filter(|m| !m.is_empty()) else {
+        return Ok(None);
+    };
+    let lowered = raw.to_ascii_lowercase();
+    TLS_MODES
+        .iter()
+        .find(|m| **m == lowered)
+        .copied()
+        .map(Some)
+        .ok_or_else(|| {
+            err(
+                StatusCode::BAD_REQUEST,
+                "tls_mode must be one of none, acme or provided",
+            )
+        })
+}
+
+/// Everything the panel decides about a stack's TLS before touching the agent.
+struct TlsPlan {
+    mode: &'static str,
+    /// The address that will be STORED, in every mode — an edit that says
+    /// nothing about the address keeps it, and a stack switched to `none` and
+    /// back to `acme` finds it again. What the agent is SENT is decided by
+    /// `deploy_email`, which withholds it outside acme mode.
+    ssl_email: Option<String>,
+    /// The alias, provided mode only.
+    alias: Option<String>,
+    /// The registry row, provided mode only — resolved AND checked for coverage.
+    certificate_id: Option<Uuid>,
+}
+
+impl TlsPlan {
+    /// The address the AGENT is handed. Only an ACME order needs one, and an
+    /// agent older than the stored mode still infers the mode FROM the address —
+    /// so a stack whose stored mode is `none` or `provided` is sent none, or that
+    /// agent would order the certificate the operator switched off.
+    fn deploy_email(&self) -> Option<&str> {
+        if self.mode == "acme" {
+            self.ssl_email.as_deref()
+        } else {
+            None
+        }
+    }
+}
+
+/// Turn a mode, an address and an alias into a plan, refusing every combination
+/// that cannot be served — before any row is written or any container touched.
+///
+/// Provided mode is the door that reaches the agent: the alias must name a row
+/// on this server (400), the agent must be new enough to honour the mode at all
+/// (412, fail-closed), and the certificate must actually cover the domain — the
+/// agent's `cert_covers_domain` answers that, and its refusal passes through
+/// unchanged. This is binding point 3 of #104: SAN validation at claim time.
+async fn plan_tls(
+    db: &sqlx::PgPool,
+    agent: &AgentHandle,
+    mode: &'static str,
+    domain: Option<&str>,
+    ssl_email: Option<&str>,
+    alias: Option<&str>,
+    user_id: Uuid,
+    server_id: Uuid,
+) -> Result<TlsPlan, ApiError> {
+    let ssl_email = ssl_email.map(str::trim).filter(|e| !e.is_empty()).map(str::to_string);
+    if mode == "none" {
+        return Ok(TlsPlan { mode, ssl_email, alias: None, certificate_id: None });
+    }
+    let Some(domain) = domain.map(str::trim).filter(|d| !d.is_empty()) else {
+        return Err(err(StatusCode::BAD_REQUEST, "a TLS mode needs a domain"));
+    };
+    if mode == "acme" {
+        if ssl_email.is_none() {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "Let's Encrypt mode needs an ssl_email for the ACME account",
+            ));
+        }
+        return Ok(TlsPlan { mode, ssl_email, alias: None, certificate_id: None });
+    }
+
+    // provided
+    let alias = alias
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| {
+            err(StatusCode::BAD_REQUEST, "provided mode needs the alias of a registered certificate")
+        })?;
+    if !is_valid_cert_alias(&alias) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Alias must be 1-64 lowercase letters, digits or hyphens, starting and ending with a letter or digit",
+        ));
+    }
+    let certificate_id = certificate_id_for_alias(db, &alias, user_id, server_id).await?;
+    require_agent_at_least(agent, PROVIDED_TLS_MIN_AGENT, "Serving a registered certificate")
+        .await?;
+    agent
+        .post(
+            &format!("/ssl/registry/{alias}/covers"),
+            Some(serde_json::json!({ "domain": domain })),
+        )
+        .await
+        .map_err(|e| agent_error("Certificate coverage check", e))?;
+
+    Ok(TlsPlan { mode, ssl_email, alias: Some(alias), certificate_id: Some(certificate_id) })
+}
+
+/// Why a provided-mode deploy did not end in an HTTPS vhost, if it did not.
+///
+/// The agent never fails a deploy over its vhost: a refused or broken TLS leg
+/// is a warning inside a 200 with the containers running. For Let's Encrypt
+/// that is the right shape — the certificate can be ordered later. For a
+/// registered certificate it is the outage this feature exists to prevent, so
+/// the caller turns this into a 502 that names the cause.
+fn provided_tls_refusal(deploy_result: &serde_json::Value) -> Option<String> {
+    if deploy_result.get("ssl").and_then(|v| v.as_bool()) == Some(true) {
+        return None;
+    }
+    // The agent puts the reason in `proxy_warning` and sets `tls_refused`
+    // beside it as a FLAG — a boolean, never the sentence. Reading the flag as
+    // the sentence answered every refusal with the fallback below.
+    let sentence = deploy_result
+        .get("proxy_warning")
+        .and_then(|v| v.as_str())
+        .or_else(|| deploy_result.get("tls_refused").and_then(|v| v.as_str()))
+        .unwrap_or("the agent did not report an HTTPS vhost for the domain");
+    Some(sentence.to_string())
+}
 
 #[derive(serde::Serialize, sqlx::FromRow)]
 pub struct Stack {
@@ -38,6 +207,16 @@ pub struct Stack {
     /// Domain this stack is served on, if the operator gave it one.
     pub domain: Option<String>,
     pub ssl_email: Option<String>,
+    /// How the domain is served, as stored. NULL on a row an older binary wrote;
+    /// read through `effective_tls_mode`, never directly.
+    pub tls_mode: Option<String>,
+    /// The registered certificate a provided-mode stack serves.
+    pub tls_certificate_id: Option<Uuid>,
+    /// That certificate's alias, joined in by `STACK_SELECT`. Defaulted so the
+    /// create path's `INSERT … RETURNING`, which has no join to read it from,
+    /// still maps onto this struct; the handler knows the alias it just stored.
+    #[sqlx(default)]
+    pub tls_certificate: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -48,22 +227,35 @@ pub struct CreateStackRequest {
     pub yaml: String,
     /// Optional domain to front the stack with.
     pub domain: Option<String>,
-    /// ACME address. A domain with no address gets a vhost but no certificate.
+    /// ACME address, acme mode only.
     pub ssl_email: Option<String>,
+    /// "none" | "acme" | "provided". Absent = derived from the address, which is
+    /// what every client before the mode existed meant by sending or not sending one.
+    pub tls_mode: Option<String>,
+    /// Registry alias, provided mode only.
+    pub tls_certificate: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
 pub struct UpdateStackRequest {
     pub yaml: String,
-    pub domain: Option<String>,
-    /// ACME address. A domain with no address gets a vhost but no certificate —
-    /// and on an EDIT that is destructive rather than neutral, because `update`
-    /// forwards whatever arrives here on every redeploy and never falls back to
-    /// the address already stored. Omitting it for a stack that already HAS a
-    /// certificate rewrites the vhost without its `:443` block, behind a year of
-    /// HSTS. See `expose_domain` in the agent for why a supplied-certificate
-    /// mode (#104) needs a stored mode rather than one more optional field.
+    /// Absent means KEEP the stored domain; an explicit null or blank vacates
+    /// it. Before the mode was stored, an omitted domain silently tore the
+    /// vhost down on an edit that was about something else.
+    #[serde(default, deserialize_with = "super::secrets::explicit_option")]
+    pub domain: Option<Option<String>>,
+    /// ACME address. Absent means KEEP the stored one.
+    ///
+    /// It used to mean "clear": `update` forwarded whatever arrived here on every
+    /// redeploy and never fell back to the address already stored, so omitting it
+    /// for a stack that already HAD a certificate rewrote the vhost without its
+    /// `:443` block, behind a year of HSTS. The mode is now a fact on the row, and
+    /// an edit that says nothing about TLS changes nothing about TLS.
     pub ssl_email: Option<String>,
+    /// Absent means keep the stored mode.
+    pub tls_mode: Option<String>,
+    /// Absent means keep the stored alias.
+    pub tls_certificate: Option<String>,
 }
 
 /// Did anything in the stack actually come up?
@@ -122,7 +314,7 @@ pub async fn list(
     require_admin(&claims.role)?;
 
     let stacks: Vec<Stack> = sqlx::query_as(&format!(
-        "{STACK_SELECT} WHERE user_id = $1 AND server_id = $2 ORDER BY created_at DESC"
+        "{STACK_SELECT} WHERE s.user_id = $1 AND s.server_id = $2 ORDER BY s.created_at DESC"
     ))
     .bind(claims.sub)
     .bind(server_id)
@@ -160,6 +352,8 @@ pub async fn list(
                 "service_count": stack.service_count,
                 "domain": stack.domain,
                 "ssl_email": stack.ssl_email,
+                "tls_mode": effective_tls_mode(stack.tls_mode.as_deref(), stack.ssl_email.as_deref()),
+                "tls_certificate": stack.tls_certificate,
                 "running": running,
                 "total": total,
                 "status": if total == 0 { "removed" } else if running == total { "running" } else if running == 0 { "stopped" } else { "partial" },
@@ -184,7 +378,7 @@ pub async fn get_one(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
 
-    let stack: Stack = sqlx::query_as(&format!("{STACK_SELECT} WHERE id = $1 AND user_id = $2"))
+    let stack: Stack = sqlx::query_as(&format!("{STACK_SELECT} WHERE s.id = $1 AND s.user_id = $2"))
     .bind(id)
     .bind(claims.sub)
     .fetch_optional(&state.db)
@@ -232,6 +426,8 @@ pub async fn get_one(
         "service_count": stack.service_count,
         "domain": stack.domain,
         "ssl_email": stack.ssl_email,
+        "tls_mode": effective_tls_mode(stack.tls_mode.as_deref(), stack.ssl_email.as_deref()),
+        "tls_certificate": stack.tls_certificate,
         "running": running,
         "total": services.len(),
         "services": services,
@@ -274,12 +470,32 @@ pub async fn create(
             .await?;
     }
 
+    // The mode is decided here, once, and stored: a client that predates the
+    // field is read the way the agent always read it, from the address.
+    let mode = requested_tls_mode(body.tls_mode.as_deref())?
+        .unwrap_or_else(|| effective_tls_mode(None, body.ssl_email.as_deref()));
+
     let domain = claim_stack_domain(
         &state,
         &headers,
         body.domain.as_deref(),
         Holder::New,
         &claims.role,
+    )
+    .await?;
+
+    // Everything TLS is settled — including the agent's own answer to "does
+    // this certificate cover this domain" — before a row exists or a container
+    // is created, so a refusal leaves nothing to clean up.
+    let tls = plan_tls(
+        &state.db,
+        &agent,
+        mode,
+        domain.as_deref(),
+        body.ssl_email.as_deref(),
+        body.tls_certificate.as_deref(),
+        claims.sub,
+        server_id,
     )
     .await?;
 
@@ -299,10 +515,11 @@ pub async fn create(
 
     // Create DB record first to get the stack ID
     let stack: Stack = sqlx::query_as(
-        "INSERT INTO docker_stacks (user_id, server_id, name, yaml, service_count, domain, ssl_email) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7) \
+        "INSERT INTO docker_stacks (user_id, server_id, name, yaml, service_count, domain, \
+         ssl_email, tls_mode, tls_certificate_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
          RETURNING id, user_id, server_id, name, yaml, service_count, domain, ssl_email, \
-         created_at, updated_at",
+         tls_mode, tls_certificate_id, created_at, updated_at",
     )
     .bind(claims.sub)
     .bind(server_id)
@@ -310,7 +527,9 @@ pub async fn create(
     .bind(&body.yaml)
     .bind(service_count)
     .bind(&domain)
-    .bind(&body.ssl_email)
+    .bind(&tls.ssl_email)
+    .bind(tls.mode)
+    .bind(tls.certificate_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("create stacks", e))?;
@@ -323,7 +542,9 @@ pub async fn create(
                 "yaml": body.yaml,
                 "stack_id": stack.id.to_string(),
                 "domain": domain,
-                "ssl_email": body.ssl_email,
+                "ssl_email": tls.deploy_email(),
+                "tls_mode": tls.mode,
+                "tls_certificate": tls.alias,
             })),
         )
         .await
@@ -370,6 +591,23 @@ pub async fn create(
     )
     .await;
 
+    // The containers are up and the row is kept — but a registered certificate
+    // that did not reach the vhost is not a warning, it is the domain serving
+    // plain HTTP behind HSTS. Say so, with the agent's reason, and leave the
+    // stack in place so the operator can fix the cause and redeploy.
+    if tls.mode == "provided" {
+        if let Some(reason) = provided_tls_refusal(&deploy_result) {
+            return Err(err(
+                StatusCode::BAD_GATEWAY,
+                &format!(
+                    "The stack {} is running, but its domain was not put behind the registered \
+                     certificate: {reason}. Fix the cause and redeploy the stack.",
+                    stack.name
+                ),
+            ));
+        }
+    }
+
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
@@ -377,6 +615,8 @@ pub async fn create(
             "name": stack.name,
             "service_count": service_count,
             "domain": domain,
+            "tls_mode": tls.mode,
+            "tls_certificate": tls.alias,
             "running": running,
             "total": total,
             "deploy_result": deploy_result,
@@ -530,9 +770,20 @@ pub async fn update(
 
     // Keep what we are about to replace — and read the host off the same row while we are
     // here. `name` comes along only so a refusal below can say which stack it refused.
-    let previous: Option<(String, Option<String>, Option<String>, String, Uuid)> = sqlx::query_as(
-        "SELECT yaml, domain, ssl_email, name, server_id FROM docker_stacks \
-         WHERE id = $1 AND user_id = $2",
+    // The TLS columns come along because an edit that says nothing about TLS keeps
+    // them, and the alias is read through the join because the request speaks aliases.
+    let previous: Option<(
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        Uuid,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT s.yaml, s.domain, s.ssl_email, s.name, s.server_id, s.tls_mode, c.alias \
+         FROM docker_stacks s LEFT JOIN tls_certificates c ON c.id = s.tls_certificate_id \
+         WHERE s.id = $1 AND s.user_id = $2",
     )
     .bind(id)
     .bind(claims.sub)
@@ -540,8 +791,40 @@ pub async fn update(
     .await
     .map_err(|e| internal_error("update stacks", e))?;
 
-    let (previous_yaml, previous_domain, previous_ssl_email, name, stack_server_id) =
-        previous.ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
+    let (
+        previous_yaml,
+        previous_domain,
+        previous_ssl_email,
+        name,
+        stack_server_id,
+        previous_tls_mode,
+        previous_alias,
+    ) = previous.ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
+    let previous_mode =
+        effective_tls_mode(previous_tls_mode.as_deref(), previous_ssl_email.as_deref());
+
+    // Absent means KEEP, for all four. This is the fix the #104 thread
+    // promised: an edit used to forward the request's address verbatim, so a
+    // client that omitted it took the certificate off a stack that had one.
+    let requested_mode = requested_tls_mode(body.tls_mode.as_deref())?;
+    let requested_domain: Option<String> = match body.domain {
+        None => previous_domain.clone(),
+        Some(explicit) => explicit,
+    };
+    let ssl_email = body
+        .ssl_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .map(str::to_string)
+        .or(previous_ssl_email.clone());
+    let alias = body
+        .tls_certificate
+        .as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_string)
+        .or(previous_alias.clone());
 
     // Everything from here down — the claim, the parse, the teardown, the redeploy and the
     // restore-on-failure — is one machine's work, and the row says which machine. Taking it
@@ -588,9 +871,32 @@ pub async fn update(
     let domain = claim_stack_domain(
         &state,
         &headers,
-        body.domain.as_deref(),
+        requested_domain.as_deref(),
         Holder::Stack(id),
         &claims.role,
+    )
+    .await?;
+
+    // A stack with no domain has no vhost, so no TLS mode applies to it: a
+    // vacated domain resolves to `none` unless the request names a mode, in
+    // which case the plan below refuses the combination in words.
+    let mode = match (requested_mode, domain.is_some()) {
+        (Some(requested), _) => requested,
+        (None, true) => previous_mode,
+        (None, false) => "none",
+    };
+
+    // Same gate and coverage check as create, against the stack's own host, and
+    // BEFORE the teardown below — a refusal must leave the running stack alone.
+    let tls = plan_tls(
+        &state.db,
+        &agent,
+        mode,
+        domain.as_deref(),
+        ssl_email.as_deref(),
+        alias.as_deref(),
+        claims.sub,
+        stack_server_id,
     )
     .await?;
 
@@ -645,7 +951,9 @@ pub async fn update(
                 "yaml": body.yaml,
                 "stack_id": id.to_string(),
                 "domain": domain,
-                "ssl_email": body.ssl_email,
+                "ssl_email": tls.deploy_email(),
+                "tls_mode": tls.mode,
+                "tls_certificate": tls.alias,
             })),
         )
         .await;
@@ -653,14 +961,36 @@ pub async fn update(
     let deploy_result = match deploy_result {
         Ok(r) => r,
         Err(e) => {
-            restore_previous(&state.db, stack_server_id, &agent, id, &previous_yaml, previous_domain.as_deref(), previous_ssl_email.as_deref()).await;
+            restore_previous(
+                &state.db,
+                stack_server_id,
+                &agent,
+                id,
+                &previous_yaml,
+                previous_domain.as_deref(),
+                previous_ssl_email.as_deref(),
+                previous_mode,
+                previous_alias.as_deref(),
+            )
+            .await;
             return Err(agent_error("Stack redeploy (previous definition restored)", e));
         }
     };
 
     let (running, total, errors) = deployed_service_states(&deploy_result);
     if total > 0 && running == 0 {
-        restore_previous(&state.db, stack_server_id, &agent, id, &previous_yaml, previous_domain.as_deref(), previous_ssl_email.as_deref()).await;
+        restore_previous(
+            &state.db,
+            stack_server_id,
+            &agent,
+            id,
+            &previous_yaml,
+            previous_domain.as_deref(),
+            previous_ssl_email.as_deref(),
+            previous_mode,
+            previous_alias.as_deref(),
+        )
+        .await;
         return Err(err(
             StatusCode::BAD_GATEWAY,
             &format!(
@@ -671,24 +1001,57 @@ pub async fn update(
         ));
     }
 
-    // Only now is the new definition the one worth keeping.
+    // Only now is the new definition the one worth keeping. The TLS columns are
+    // written from the plan, which already folded "absent means keep" in Rust —
+    // no COALESCE, so the statement says exactly what the row will hold.
     sqlx::query(
         "UPDATE docker_stacks SET yaml = $1, service_count = $2, domain = $3, ssl_email = $4, \
-         updated_at = NOW() WHERE id = $5",
+         tls_mode = $5, tls_certificate_id = $6, updated_at = NOW() WHERE id = $7",
     )
     .bind(&body.yaml)
     .bind(service_count)
     .bind(&domain)
-    .bind(&body.ssl_email)
+    .bind(&tls.ssl_email)
+    .bind(tls.mode)
+    .bind(tls.certificate_id)
     .bind(id)
     .execute(&state.db)
     .await
     .map_err(|e| internal_error("update stacks", e))?;
 
+    activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "stack.update",
+        Some("stack"),
+        Some(&name),
+        None,
+        None,
+    )
+    .await;
+
+    // Same as create: the definition runs and is saved, but a provided-mode
+    // domain that came back without its HTTPS vhost is an outage, not a note.
+    if tls.mode == "provided" {
+        if let Some(reason) = provided_tls_refusal(&deploy_result) {
+            return Err(err(
+                StatusCode::BAD_GATEWAY,
+                &format!(
+                    "The stack {name} is running with the new definition, but its domain was \
+                     not put behind the registered certificate: {reason}. Fix the cause and \
+                     redeploy the stack."
+                ),
+            ));
+        }
+    }
+
     Ok(Json(serde_json::json!({
         "ok": true,
         "service_count": service_count,
         "domain": domain,
+        "tls_mode": tls.mode,
+        "tls_certificate": tls.alias,
         "running": running,
         "total": total,
         "deploy_result": deploy_result,
@@ -699,6 +1062,10 @@ pub async fn update(
 ///
 /// Best effort — if this also fails the operator still has the stored YAML,
 /// which is the whole point of not having overwritten it yet.
+///
+/// Carries the previous TLS mode and alias too: a restore that sent only the
+/// address would put a provided-certificate stack back as plain HTTP.
+#[allow(clippy::too_many_arguments)]
 async fn restore_previous(
     pool: &sqlx::PgPool,
     server_id: Uuid,
@@ -707,6 +1074,8 @@ async fn restore_previous(
     yaml: &str,
     domain: Option<&str>,
     ssl_email: Option<&str>,
+    tls_mode: &str,
+    tls_certificate: Option<&str>,
 ) {
     let removed = agent
         .post(
@@ -735,7 +1104,9 @@ async fn restore_previous(
                 "yaml": yaml,
                 "stack_id": id.to_string(),
                 "domain": domain,
-                "ssl_email": ssl_email,
+                "ssl_email": if tls_mode == "acme" { ssl_email } else { None },
+                "tls_mode": tls_mode,
+                "tls_certificate": tls_certificate,
             })),
         )
         .await
@@ -842,4 +1213,62 @@ async fn stack_action(
     }
 
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stored value wins; a NULL row (older binary, rollback) is read the way
+    /// the agent always inferred it — a non-blank address means Let's Encrypt.
+    #[test]
+    fn effective_tls_mode_prefers_the_stored_value() {
+        assert_eq!(effective_tls_mode(Some("none"), Some("ops@example.com")), "none");
+        assert_eq!(effective_tls_mode(Some("acme"), None), "acme");
+        assert_eq!(effective_tls_mode(Some("provided"), Some("ops@example.com")), "provided");
+    }
+
+    #[test]
+    fn effective_tls_mode_derives_a_null_row_from_the_address() {
+        assert_eq!(effective_tls_mode(None, Some("ops@example.com")), "acme");
+        assert_eq!(effective_tls_mode(None, Some("  ")), "none");
+        assert_eq!(effective_tls_mode(None, Some("")), "none");
+        assert_eq!(effective_tls_mode(None, None), "none");
+    }
+
+    /// A value outside the vocabulary cannot reach the column (CHECK), but the
+    /// reader must not panic or invent a fourth mode if one ever does.
+    #[test]
+    fn effective_tls_mode_falls_back_on_an_unknown_word() {
+        assert_eq!(effective_tls_mode(Some("bogus"), Some("ops@example.com")), "acme");
+        assert_eq!(effective_tls_mode(Some("bogus"), None), "none");
+    }
+
+    #[test]
+    fn requested_tls_mode_normalises_and_refuses() {
+        assert_eq!(requested_tls_mode(None).unwrap(), None);
+        assert_eq!(requested_tls_mode(Some("")).unwrap(), None);
+        assert_eq!(requested_tls_mode(Some(" Acme ")).unwrap(), Some("acme"));
+        assert_eq!(requested_tls_mode(Some("provided")).unwrap(), Some("provided"));
+        assert!(requested_tls_mode(Some("letsencrypt")).is_err());
+    }
+
+    /// The agent reports a refused TLS leg inside a 200; only an explicit
+    /// `ssl: true` counts as the domain being served over HTTPS.
+    #[test]
+    fn provided_tls_refusal_reads_the_agent_answer() {
+        assert_eq!(provided_tls_refusal(&serde_json::json!({ "ssl": true })), None);
+        // The agent's real shape: the flag is a boolean, the sentence is the warning.
+        assert_eq!(
+            provided_tls_refusal(&serde_json::json!({
+                "ssl": false, "tls_refused": true, "proxy_warning": "no such alias"
+            })),
+            Some("no such alias".to_string())
+        );
+        assert_eq!(
+            provided_tls_refusal(&serde_json::json!({ "proxy_warning": "Traefik" })),
+            Some("Traefik".to_string())
+        );
+        assert!(provided_tls_refusal(&serde_json::json!({})).is_some());
+    }
 }

@@ -4,6 +4,82 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.160.0]
+
+### Added — a certificate can be registered once and referenced by name when a stack claims a domain (#104)
+
+A Compose stack that claims a domain had two ways to be served: an ACME address,
+and the panel ordered a Let's Encrypt certificate for it; or no address, and the
+vhost was written with no TLS at all. An operator already covered by a
+certificate they manage elsewhere — a Cloudflare Origin CA wildcard, a commercial
+certificate, a corporate PKI — had no way to say so, and every panel-claimed
+subdomain started a second, ninety-day certificate lifecycle beside the one that
+needed none.
+
+**Registered certificates.** Under Monitoring → Certificates an administrator
+now registers a certificate and its key **once**, under a name of their
+choosing, and the Deploy Multi-Container form offers a third way to serve the
+domain — **Registered certificate**, chosen by that name. The pair lives only on
+that server's disk, in its own directory beside the per-domain tree: never in
+the database, and never where the teardown of one stack or the renewal of one
+domain could reach it. The page lists what each certificate covers, who issued
+it, when it expires and which stacks use it; a certificate can be replaced in
+place, and cannot be deleted while a stack still names it.
+
+**The certificate is checked before anything is written.** At registration the
+agent parses the certificate, confirms the private key belongs to it — the check
+nginx would otherwise make at the first reload after a claim — and refuses a key
+pasted into the certificate field. At claim time the panel asks the agent whether
+the certificate actually names the domain, the same subjectAltName check the
+per-site upload has performed since v2.148.0, **before** any row is written or
+any container started; a wildcard for the wrong zone is refused with the names it
+does cover, not discovered by a browser. The deploy asks once more before it
+writes the vhost, in case the pair was replaced in between.
+
+API: `GET`/`POST /api/tls-certificates`, `PUT`/`DELETE /api/tls-certificates/{id}`;
+`POST /api/stacks` and `PUT /api/stacks/{id}` take `tls_mode` (`none`, `acme`,
+`provided`) and `tls_certificate` (the alias).
+
+### Fixed — a stack's TLS mode is now stored, so an edit that says nothing about TLS changes nothing about TLS
+
+The agent decided whether a domain got HTTPS from one signal: whether the deploy
+carried an ACME address. That was the only signal, so `PUT /api/stacks/{id}`
+forwarded whatever address the request carried — and an edit that omitted it
+rewrote the vhost without its `:443` block, behind the one-year HSTS header the
+previous vhost had already sent. Nothing in the shipped UI calls that route yet,
+which is why nobody had met it; the design accepted on #104 needed a stored mode
+before a supplied certificate could safely exist, and this is it.
+
+Each stack now records how its domain is served — `none`, `acme` or `provided` —
+and sends that on every deploy, redeploy and rollback. On an update an absent
+field means **keep**: the mode, the address, the certificate and the domain
+itself all stay as stored unless the request names them (an explicit `null`
+vacates the domain, and a vacated domain has no mode). A registered certificate
+that does not reach the vhost — the alias missing from that server, a certificate
+that no longer covers the domain, a reload that failed — is answered as an error
+naming the cause, never as a domain quietly served over plain HTTP; the vhost is
+left exactly as it was.
+
+**Older agents are refused, not trusted.** An agent from before this release
+ignores the fields it does not know and would write a plain-HTTP vhost for a stack
+that asked for a registered certificate, answering success. The panel reads the
+agent's own version before a registration or a provided-mode claim and refuses
+with a sentence naming the release to update to — fail-closed, because the
+failure it prevents is silent.
+
+Rows written before this release derive their mode from the address they hold,
+exactly as the agent always inferred it. Traefik has no file-certificate form, so
+a registered certificate is nginx-only and a Traefik-routed request is refused in
+words. Nothing renews a registered certificate: the panel renews only the Let's
+Encrypt certificates it issued, as before, and the page says so.
+
+`certificate-registry-pin-e2e.sh` (126 assertions) pins the stored mode reaching
+all three deploy bodies, the keep-if-absent edit, the fail-closed agent gate with
+its frozen constant, the agent's provided arm running before the HTTP-first write
+and never through the per-domain enabler, the registry root as a sibling of the
+per-domain tree, the upload's check-before-write order, and one mode vocabulary
+derived from the migration, both crates and the page.
+
 ## [2.159.0]
 
 ### Fixed — four monitoring reads answered a failed query with an empty list

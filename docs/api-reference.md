@@ -1,6 +1,6 @@
 # API Reference
 
-DockPanel exposes 834 REST endpoints (543 backend + 291 agent) across 50+ categories — the figure derived from the two routers in `FEATURES.md` §Verified Metrics, which owns it. The tables below document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
+DockPanel exposes 839 REST endpoints (545 backend + 294 agent) across 50+ categories — the figure derived from the two routers in `FEATURES.md` §Verified Metrics, which owns it. The tables below document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
 
 ## Authentication
 
@@ -303,14 +303,32 @@ with `domain_derived: true`.
 ## Docker Compose Stacks (8 endpoints)
 
 ### `POST /api/stacks`
-Create a named stack from compose YAML.
+Create a named stack from compose YAML, optionally fronted by a domain.
 
 ```json
 {
   "name": "my-stack",
-  "yaml": "version: \"3\"\nservices:\n  web:\n    image: nginx:alpine"
+  "yaml": "version: \"3\"\nservices:\n  web:\n    image: nginx:alpine",
+  "domain": "app.example.com",
+  "tls_mode": "provided",
+  "tls_certificate": "example-com-wildcard"
 }
 ```
+
+`tls_mode` is how the domain is served and is **stored on the stack**: `none`
+(plain HTTP, or TLS terminated upstream), `acme` (a Let's Encrypt certificate
+ordered under `ssl_email`) or `provided` (a certificate registered under the alias
+in `tls_certificate` — see the registry below). Omitted, it is derived from
+`ssl_email` exactly as every client before v2.160.0 meant it. A `provided` claim is
+refused before any row is written when the alias is unknown on the stack's server,
+when that server's agent predates v2.160.0, or when the certificate does not name
+the domain — the refusal says which names it does cover.
+
+`PUT /api/stacks/{id}` treats an **absent** field as *keep*: the mode, `ssl_email`,
+the alias and `domain` itself stay as stored unless the request names them. An
+explicit `"domain": null` vacates the domain (and a vacated domain has no mode).
+Before v2.160.0 the request's `ssl_email` was forwarded verbatim, so an edit that
+omitted it rewrote the vhost without TLS.
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -321,6 +339,21 @@ Create a named stack from compose YAML.
 | POST | `/api/stacks/{id}/stop` | Stop all services |
 | POST | `/api/stacks/{id}/restart` | Restart |
 | DELETE | `/api/stacks/{id}` | Remove stack |
+
+---
+
+## TLS certificate registry (4 endpoints)
+
+A certificate registered once, under an alias, and served by any number of Compose
+stacks that claim a domain it covers (#104). The pair lives on that server's agent,
+beside the per-domain tree; the panel keeps the alias and the metadata. Administrators only.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/tls-certificates` | List the certificates registered on the scoped server, with names, issuer, expiry, status and the stacks using each |
+| POST | `/api/tls-certificates` | Register `{alias, certificate, private_key}` — the alias is 1–64 lowercase letters, digits or hyphens; the key must belong to the certificate; 409 if the alias is taken |
+| PUT | `/api/tls-certificates/{id}` | Replace the pair behind an alias; refused if the new certificate stops covering a domain a stack serves under it |
+| DELETE | `/api/tls-certificates/{id}` | Remove it; 409 naming the stacks while any still uses it |
 
 ---
 

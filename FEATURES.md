@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.159.0 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.160.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -71,6 +71,7 @@
 | **Service Installers** | PHP, Certbot, UFW, Fail2Ban, PowerDNS — one-click | `routes/system.rs` | `service_installer.rs` | (in Settings) | — |
 | **Service Uninstall** | Uninstall routes for all 10 services (PHP, Certbot, UFW, Fail2Ban, PowerDNS, Redis, Node.js, Composer, mail server, PHP versions) | `routes/system.rs` | `service_installer.rs` | (in Settings) | — |
 | **SSL Renew/Delete** | Force-renew and delete SSL certificates via instant_acme (RFC 9773 `replaces` hint on renew) | `routes/ssl.rs` | `ssl.rs` | `Certificates.tsx` | — |
+| **Certificate Registry** | Register a certificate once under an alias and serve any number of Compose-stack domains under it; key-matched and SAN-checked before anything is written; a stack's TLS mode (`none`/`acme`/`provided`) is stored and honoured on every redeploy (#104) | `routes/tls_certificates.rs`, `routes/stacks.rs` | `routes/ssl_registry.rs`, `routes/docker_apps.rs` | `RegisteredCertificates.tsx`, `Apps.tsx` | `tls_certificates`, `docker_stacks.tls_mode` |
 | **ACME Profile Selection** | RFC 8555 profiles extension — default + per-site override for `classic` (90d), `tlsserver` (45d from 2026-05-13), `shortlived` (~6d) | `routes/ssl.rs` | `ssl.rs` | `Settings.tsx` | `settings` (`acme_default_profile`), `sites.ssl_profile` |
 | **ARI-Driven Renewal** | ACME Renewal Information (RFC 9773) — auto-healer queries CA's suggested renewal window instead of static threshold; profile-aware fallback | `services/auto_healer.rs` | `services/ssl.rs` (`fetch_ari`) | — | `sites.ssl_renewal_at`, `sites.ssl_renewal_checked_at` |
 | **User Suspend/Reset** | Suspend/unsuspend users with session invalidation, admin password reset | `routes/users.rs` | — | (in Settings) | `users` |
@@ -234,10 +235,10 @@ honest:
 | Panel services RAM (agent + API) | ~49 MB | measured | 2026-07-27 |
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
 | App templates | 148 | derived | every commit |
-| HTTP routes | 834 (543 backend + 291 agent) | derived | every commit |
-| Regression-pin assertions | 3276 (92 suites) | derived | every commit |
+| HTTP routes | 839 (545 backend + 294 agent) | derived | every commit |
+| Regression-pin assertions | 3402 (93 suites) | derived | every commit |
 | Frontend pages | 53 | derived | every commit |
-| DB migrations | 116 | derived | every commit |
+| DB migrations | 117 | derived | every commit |
 | Supervised background services | 15 | derived | every commit |
 
 Five of these were wrong when the register was built (s272), some by a factor of

@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.159.0.** The version stamp, the template count and every
+> **Reflects v2.160.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -372,7 +372,7 @@ found things from coming back.
 
 **On every commit** (`ci.yml`, `codeql.yml`):
 
-- **650 unit tests** across the crates — 406 in the backend, 244 in the agent.
+- **695 unit tests** across the crates — 437 in the backend, 258 in the agent.
   (The CLI crate carries none of its own today.) Re-derive rather than trust
   this line: `for c in agent backend cli; do (cd panel/$c && cargo test
   --release); done` and sum the `test result:` lines. Nothing recomputes this
@@ -402,7 +402,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Ninety-two suites, **3276 assertions**, all green at the current commit:
+survivable. Ninety-three suites, **3402 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -498,6 +498,7 @@ survivable. Ninety-two suites, **3276 assertions**, all green at the current com
 | `upload-refusal-pin-e2e.sh` | 23 |
 | `rename-carries-backups-pin-e2e.sh` | 43 |
 | `monitors-honest-reads-pin-e2e.sh` | 31 |
+| `certificate-registry-pin-e2e.sh` | 126 |
 
 **On a schedule, from outside** (`live-surfaces.yml`, daily). Every layer above
 runs because something changed, which is exactly why none of them could catch the

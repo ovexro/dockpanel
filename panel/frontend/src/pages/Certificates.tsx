@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
+import RegisteredCertificates from "../components/RegisteredCertificates";
 
 interface Certificate {
   /** null on the admin host-wide view for a certificate no site row explains. */
@@ -17,7 +18,10 @@ interface Certificate {
   managed?: boolean;
 }
 
-const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+// Exported so the registry section below the site table paints the SAME badge
+// for the same status word — one vocabulary, one map, checked against the
+// backend ladder by a pin.
+export const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
   expired: { bg: "bg-danger-500/15", text: "text-danger-400", label: "Expired" },
   critical: { bg: "bg-danger-500/15", text: "text-danger-400", label: "Critical" },
   warning: { bg: "bg-warn-500/15", text: "text-warn-400", label: "Warning" },
@@ -294,6 +298,12 @@ export default function Certificates() {
           </table>
         </div>
       )}
+
+      {/* The registry is a host-wide, admin-only resource: registering writes a
+          key pair to the server's disk and deleting can break a live vhost, so
+          the whole section is gated the way Renew and Delete above are — not
+          just its buttons. The site list above stays open on purpose. */}
+      {isAdmin && <RegisteredCertificates />}
     </div>
   );
 }

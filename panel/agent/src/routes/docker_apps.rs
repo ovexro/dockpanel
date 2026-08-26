@@ -25,6 +25,12 @@ struct DeployRequest {
     domain: Option<String>,
     /// Email for Let's Encrypt SSL (requires domain)
     ssl_email: Option<String>,
+    /// "none" | "acme" | "provided". Absent = legacy inference from ssl_email (an older panel).
+    #[serde(default)]
+    tls_mode: Option<String>,
+    /// Registry alias; provided mode only.
+    #[serde(default)]
+    tls_certificate: Option<String>,
     /// Memory limit in MB (e.g., 512)
     memory_mb: Option<u64>,
     /// CPU limit as percentage (e.g., 50 = 50% of one core)
@@ -82,6 +88,16 @@ async fn deploy(
         }
     }
 
+    // Decide the TLS shape BEFORE the container exists: a request that names a
+    // mode it cannot honour is refused with nothing deployed, rather than
+    // answered with a running container and a warning.
+    let tls = TlsIntent::from_request(
+        body.tls_mode.as_deref(),
+        body.ssl_email.as_deref(),
+        body.tls_certificate.as_deref(),
+    )
+    .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))))?;
+
     let result =
         docker_apps::deploy_app(&body.template_id, &body.name, body.port, body.env, body.domain.as_deref(), body.memory_mb, body.cpu_percent, body.user_id.as_deref(), body.gpu_enabled, body.gpu_indices.clone())
             .await
@@ -105,7 +121,7 @@ async fn deploy(
             &state.templates,
             domain,
             body.port,
-            body.ssl_email.as_deref(),
+            tls,
             body.use_traefik,
             &mut response,
         )
@@ -145,8 +161,79 @@ fn proxy_site_config(port: u16) -> SiteConfig {
     }
 }
 
-/// Put a domain in front of a local port: write the vhost, then provision a
-/// certificate if an ACME address was given.
+/// How a domain claimed by a deploy is to be secured — the request's TLS
+/// fields resolved into one decision before anything runs.
+///
+/// Until v2.160.0 the only signal was whether `ssl_email` was present, and a
+/// redeploy that omitted it silently rewrote the vhost without its `:443`
+/// block (the breadcrumb on `expose_domain` tells the whole story). The mode
+/// is now STORED by the panel and sent on every deploy, so an absent address
+/// stops being the only signal. `None` for the mode keeps the old rule
+/// byte-for-byte, which is what an older panel still sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TlsIntent<'a> {
+    /// Plain HTTP, or TLS terminated upstream. The reporter's interim on #104.
+    None,
+    /// Order a Let's Encrypt certificate under this ACME account address.
+    Acme { email: &'a str },
+    /// Serve a certificate the operator registered under this alias.
+    Provided { alias: &'a str },
+}
+
+impl<'a> TlsIntent<'a> {
+    /// Resolve the wire fields. `Err` is the sentence a handler answers 400
+    /// with, and it is asked BEFORE any container runs.
+    pub(crate) fn from_request(
+        tls_mode: Option<&str>,
+        ssl_email: Option<&'a str>,
+        alias: Option<&'a str>,
+    ) -> Result<TlsIntent<'a>, String> {
+        match tls_mode {
+            // Legacy inference — an older panel that knows no mode. Kept
+            // exactly as it was, presence and not content, so nothing an old
+            // panel sends changes meaning.
+            None => Ok(match ssl_email {
+                Some(email) => TlsIntent::Acme { email },
+                None => TlsIntent::None,
+            }),
+            Some("none") => Ok(TlsIntent::None),
+            Some("acme") => match ssl_email {
+                Some(email) if !email.trim().is_empty() => Ok(TlsIntent::Acme { email }),
+                _ => Err(
+                    "tls_mode acme needs an ssl_email — the address the Let's Encrypt account \
+                     is registered under"
+                        .to_string(),
+                ),
+            },
+            Some("provided") => match alias {
+                Some(alias) if ssl::is_valid_cert_alias(alias) => Ok(TlsIntent::Provided { alias }),
+                Some(alias) => Err(format!(
+                    "'{alias}' is not a certificate alias — 1 to 64 lowercase letters, digits or \
+                     hyphens, starting and ending with a letter or digit"
+                )),
+                None => Err(
+                    "tls_mode provided needs tls_certificate — the alias of a registered certificate"
+                        .to_string(),
+                ),
+            },
+            Some(other) => Err(format!(
+                "unknown tls_mode '{other}': expected none, acme or provided"
+            )),
+        }
+    }
+
+    /// The vocabulary word this intent answers as.
+    pub(crate) fn mode(self) -> &'static str {
+        match self {
+            TlsIntent::None => "none",
+            TlsIntent::Acme { .. } => "acme",
+            TlsIntent::Provided { .. } => "provided",
+        }
+    }
+}
+
+/// Put a domain in front of a local port: write the vhost, then secure it the
+/// way the request asked.
 ///
 /// Extracted from `deploy` so compose stacks reach the same code rather than a
 /// second copy of it. Until v2.54.0 a stack had no route to any of this — the
@@ -158,35 +245,41 @@ fn proxy_site_config(port: u16) -> SiteConfig {
 /// container is already up, and losing the whole deploy over a certificate that
 /// can be retried from the panel would be the worse trade.
 ///
-/// ⚠ A "the operator supplies the certificate" mode cannot be a new request
-/// field alone, and the reason is the REDEPLOY rather than the first deploy.
-/// `stacks::update` sends the domain and the address from the request on every
-/// edit, and it only tears the vhost down when the domain actually changes — so
-/// an ordinary YAML edit arrives here with the same domain and no address. This
-/// function rewrites the vhost from `proxy_site_config`, which carries no
-/// certificate, and then returns at the address check below. The `:443` server
-/// block is gone, on an edit that never mentioned TLS, and `https.conf` has
-/// already sent a year of `Strict-Transport-Security` — so every browser that
-/// has seen the site refuses the plain-HTTP replacement. That is a hard outage
-/// with no way back for the visitor, not a downgrade anyone can click past.
+/// ⚠ The trap this function used to hold, kept here because the shape that
+/// caused it is still the shape of the None/Acme flow below. Before v2.160.0
+/// the mode was INFERRED from whether an address was present, and the reason
+/// that could not be a new request field alone was the REDEPLOY rather than the
+/// first deploy. `stacks::update` sends the domain on every edit and tears the
+/// vhost down only when the domain actually changes — so an ordinary YAML edit
+/// arrived here with the same domain and no address. This function rewrote the
+/// vhost from `proxy_site_config`, which carries no certificate, and returned at
+/// the address check. The `:443` server block was gone, on an edit that never
+/// mentioned TLS, and `https.conf` had already sent a year of
+/// `Strict-Transport-Security` — so every browser that had seen the site refused
+/// the plain-HTTP replacement. A hard outage with no way back for the visitor,
+/// not a downgrade anyone can click past.
 ///
-/// Two separate repairs hide behind that, and only the second is new work. The
-/// OMISSION half is already solved one door over: the Docker-app deploy path
-/// falls back to the caller's own address rather than treating an absent one as
-/// "no TLS". Stacks have no such fallback. The MODE half is the new part — a
-/// supplied certificate has to be stored and re-read on every redeploy, so that
-/// an absent address stops being the only signal. `external_tls` is the shape to
-/// copy FROM and not the precedent to copy: it declines TLS on this box, so
-/// there is no `:443` block for a redeploy to lose, which is exactly what makes
-/// the rewrite above destructive for a supplied certificate and harmless there.
+/// The mode is now STORED by the panel (`docker_stacks.tls_mode`, with the
+/// alias beside it) and sent on every deploy, arriving here as [`TlsIntent`].
+/// The two repairs that were named: the OMISSION half is closed because an
+/// absent address is no longer the signal — a stored mode is; the MODE half is
+/// the `Provided` arm, which short-circuits BEFORE the HTTP-first write below,
+/// because that write is the one that strips `:443` from behind HSTS. A
+/// provided domain whose certificate cannot be served is left exactly as it
+/// was and reported — never degraded to HTTP. `external_tls` remains the shape
+/// that was copied FROM and not the precedent: it declines TLS on this box, so
+/// there is no `:443` block for a redeploy to lose.
 ///
 /// Reported as #104; the design was accepted in writing on 2026-08-12 and its
 /// three points are binding:
 ///   1. Multiple registered certificates from the start, each named at upload
 ///      time — not a single default slot. Migrating a one-slot design after
-///      domains have been claimed against it is the expensive version.
+///      domains have been claimed against it is the expensive version. Built:
+///      the registry under `ssl::SSL_REGISTRY_DIR`, one directory per alias,
+///      served by `routes/ssl_registry.rs`.
 ///   2. Referenced by alias, never by filesystem path. A claim naming a path
-///      breaks the first time anything moves.
+///      breaks the first time anything moves. Built: `TlsIntent::Provided`
+///      carries the alias and `ssl::registry_paths` resolves it here.
 ///   3. SAN validation AT CLAIM TIME — the panel checks the claimed domain
 ///      actually falls under the supplied certificate's SAN, rather than
 ///      trusting the operator and failing at TLS handshake time later. The
@@ -195,11 +288,12 @@ fn proxy_site_config(port: u16) -> SiteConfig {
 ///      error goes undetected until a browser complains. ⭐ DO NOT BUILD THIS
 ///      — it already exists and is unit-tested: `ssl::cert_covers_domain`
 ///      (`services/ssl.rs`), called from the site upload path at
-///      `routes/ssl.rs`. It handles wildcards, the CN fallback for a
-///      certificate carrying no SAN, case and trailing-dot normalisation, and
-///      refuses partial wildcards. It lives in the AGENT because this crate
-///      depends on an X.509 parser and the panel does not — which is where the
-///      reporter said the check belonged. The stack claim path REUSES it.
+///      `routes/ssl.rs`, from the registry's covers door, and re-asked in the
+///      `Provided` arm below as defence in depth. It handles wildcards, the CN
+///      fallback for a certificate carrying no SAN, case and trailing-dot
+///      normalisation, and refuses partial wildcards. It lives in the AGENT
+///      because this crate depends on an X.509 parser and the panel does not —
+///      which is where the reporter said the check belonged.
 ///
 /// ⚠ A fourth consideration is OURS, not the reporter's, and is NOT binding:
 /// renewal suppression made explicit for a provided certificate (already the
@@ -207,27 +301,37 @@ fn proxy_site_config(port: u16) -> SiteConfig {
 /// was never put to the reporter and must not be presented as agreed. Until
 /// v2.157.0 this comment listed it as accepted point 3 and omitted SAN
 /// validation entirely — inverting which of the two a contributor would treat
-/// as settled. The thread is the record: read it before building.
-///
-/// Prospective, not live: `PUT /api/stacks/{id}` has no caller in the shipped
-/// UI or the CLI today. It is documented public API, so "no caller" is not
-/// "unreachable", and the trap arms itself the moment stack editing gets a
-/// screen.
+/// as settled. The thread is the record: read it before building. (Nothing
+/// renews a stack's certificate today anyway, and the registry root sits
+/// outside every renewal path by construction — see `ssl::SSL_REGISTRY_DIR`.)
 async fn expose_domain(
     templates: &tera::Tera,
     domain: &str,
     port: u16,
-    ssl_email: Option<&str>,
+    tls: TlsIntent<'_>,
     use_traefik: bool,
     response: &mut serde_json::Value,
 ) {
     if use_traefik {
         // --- Traefik mode: write a dynamic route config file ---
-        let ssl = ssl_email.is_some();
+        if let TlsIntent::Provided { alias } = tls {
+            // Traefik's file provider has no per-route certificate form the
+            // agent writes, so a registered certificate cannot reach it. Refuse
+            // in words and write nothing — a route silently written without
+            // TLS would be the HSTS outage above, one proxy over.
+            tracing::warn!("Auto-proxy (Traefik): {domain} asked for registered certificate {alias}, which only nginx can serve");
+            response["proxy_warning"] = serde_json::json!(
+                "registered certificates are served by nginx; this server proxies through Traefik"
+            );
+            response["tls_refused"] = serde_json::json!(true);
+            return;
+        }
+        let ssl = matches!(tls, TlsIntent::Acme { .. });
         match traefik::write_route_config(domain, port, ssl) {
             Ok(()) => {
                 response["domain"] = serde_json::json!(domain);
                 response["proxy"] = serde_json::json!("traefik");
+                response["tls_mode"] = serde_json::json!(tls.mode());
                 if ssl {
                     response["ssl"] = serde_json::json!(true);
                 }
@@ -241,7 +345,133 @@ async fn expose_domain(
         return;
     }
 
+    // --- nginx mode, registered certificate: render HTTPS directly ---
+    //
+    // This arm runs BEFORE the HTTP-first write below and never reaches it. The
+    // HTTP-first write is what strips the `:443` block from behind a year of
+    // HSTS, so a provided domain is either rendered with its certificate or
+    // left exactly as it was — never rewritten to plain HTTP and never handed
+    // to the ACME path.
+    if let TlsIntent::Provided { alias } = tls {
+        let (cert_path, key_path) = ssl::registry_paths(alias);
+        let pem = match std::fs::read_to_string(&cert_path) {
+            Ok(pem) => pem,
+            Err(e) => {
+                tracing::warn!("Auto-proxy: {domain} names registered certificate {alias}, which is not on this server ({e}); nothing written");
+                response["proxy_warning"] = serde_json::json!(format!(
+                    "no certificate named {alias} is registered on this server, so the vhost for \
+                     {domain} was left as it was rather than served over plain HTTP. Register the \
+                     certificate and redeploy."
+                ));
+                response["tls_refused"] = serde_json::json!(true);
+                return;
+            }
+        };
+        // Binding point 3, re-asked here: the panel already checked at claim
+        // time, but the pair may have been replaced since, and a vhost that
+        // serves the wrong name is the quiet failure this whole feature exists
+        // to stop.
+        if let Err(reason) = ssl::cert_covers_domain(&pem, domain) {
+            tracing::warn!("Auto-proxy: registered certificate {alias} does not cover {domain}: {reason}");
+            response["proxy_warning"] = serde_json::json!(format!(
+                "the registered certificate {alias} cannot serve {domain}: {reason} The vhost was \
+                 left as it was."
+            ));
+            response["tls_refused"] = serde_json::json!(true);
+            return;
+        }
+        // Rendered through the ordinary renderer with the registry paths named
+        // outright — NOT through `enable_ssl_for_site`, which hardcodes the
+        // per-domain tree and would point the vhost at a directory this
+        // certificate is deliberately not in.
+        let mut site_config = proxy_site_config(port);
+        site_config.ssl = Some(true);
+        site_config.ssl_cert = Some(cert_path);
+        site_config.ssl_key = Some(key_path);
+        let rendered = match nginx::render_site_config(templates, domain, &site_config) {
+            Ok(rendered) => rendered,
+            Err(e) => {
+                tracing::warn!("Auto-proxy: failed to render HTTPS config for {domain}: {e}");
+                response["proxy_warning"] =
+                    serde_json::json!(format!("Failed to render nginx config: {e}"));
+                return;
+            }
+        };
+        let target = nginx::vhost_target(domain);
+        let config_path = target.path().to_string();
+        let previous = std::fs::read_to_string(&config_path).ok();
+        let tmp_path = format!("{config_path}.tmp");
+        let write_result = std::fs::write(&tmp_path, &rendered)
+            .and_then(|_| std::fs::rename(&tmp_path, &config_path));
+        if let Err(e) = write_result {
+            std::fs::remove_file(&tmp_path).ok();
+            tracing::warn!("Auto-proxy: failed to write nginx config for {domain}: {e}");
+            response["proxy_warning"] =
+                serde_json::json!(format!("Failed to write nginx config: {e}"));
+            return;
+        }
+        if !target.is_live() {
+            tracing::info!("Auto-proxy: {domain} is disabled, saved the HTTPS route to its parked configuration and left the maintenance response in service");
+            response["proxy_warning"] = serde_json::json!(format!(
+                "{domain} is disabled, so the proxy configuration was saved but is not \
+                 serving. Enable the site to bring it up."
+            ));
+            // The certificate IS bound — the parked body carries it and serves it
+            // the moment the site is enabled — so this is not a refused TLS leg,
+            // and the panel must not read it as one.
+            response["domain"] = serde_json::json!(domain);
+            response["ssl"] = serde_json::json!(true);
+            response["parked"] = serde_json::json!(true);
+            response["tls_mode"] = serde_json::json!("provided");
+            response["tls_certificate"] = serde_json::json!(alias);
+            return;
+        }
+        match nginx::test_config().await {
+            Ok(output) if output.success => {
+                if let Err(e) = nginx::reload().await {
+                    // The vhost is on disk and passes the test, but nothing is
+                    // serving it yet. Answering `ssl: true` here would have the
+                    // panel record a success over a domain still answering as
+                    // it did before.
+                    tracing::warn!("Auto-proxy: nginx reload failed after deploy for {domain}: {e}");
+                    response["proxy_warning"] = serde_json::json!(format!(
+                        "the HTTPS vhost for {domain} was written but nginx did not reload: {e}. \
+                         Redeploy the stack, or reload nginx, to bring it into service."
+                    ));
+                    response["tls_refused"] = serde_json::json!(true);
+                    return;
+                }
+                response["domain"] = serde_json::json!(domain);
+                response["proxy"] = serde_json::json!(true);
+                response["ssl"] = serde_json::json!(true);
+                response["tls_mode"] = serde_json::json!("provided");
+                response["tls_certificate"] = serde_json::json!(alias);
+                tracing::info!("Auto-proxy: {domain} → 127.0.0.1:{port} over registered certificate {alias}");
+            }
+            Ok(output) => {
+                let restored = nginx::restore_or_remove(&config_path, previous.as_deref());
+                tracing::warn!("Auto-proxy: nginx config test failed for {domain}: {}", output.stderr);
+                response["proxy_warning"] = serde_json::json!(format!(
+                    "Nginx config test failed: {}{}",
+                    output.stderr,
+                    nginx::restore_note(restored)
+                ));
+            }
+            Err(e) => {
+                let restored = nginx::restore_or_remove(&config_path, previous.as_deref());
+                tracing::warn!("Auto-proxy: nginx test error for {domain}: {e}");
+                response["proxy_warning"] = serde_json::json!(format!(
+                    "Nginx test error: {e}{}",
+                    nginx::restore_note(restored)
+                ));
+            }
+        }
+        return;
+    }
+
     // --- nginx mode: create nginx config pointing to the app's port ---
+    // HTTP first; the ACME arm below re-renders with the certificate once it
+    // has one. A provided certificate never reaches this write (see above).
     let site_config = proxy_site_config(port);
 
     match nginx::render_site_config(templates, domain, &site_config) {
@@ -310,9 +540,10 @@ async fn expose_domain(
     if response.get("proxy").is_none() {
         return;
     }
-    let email = match ssl_email {
-        Some(e) => e,
-        None => return,
+    response["tls_mode"] = serde_json::json!(tls.mode());
+    let email = match tls {
+        TlsIntent::Acme { email } => email,
+        _ => return,
     };
 
     // Wait for DNS propagation before attempting SSL (up to 30 seconds)
@@ -1105,6 +1336,12 @@ struct ComposeParseRequest {
     domain: Option<String>,
     /// Email for Let's Encrypt SSL (requires domain).
     ssl_email: Option<String>,
+    /// "none" | "acme" | "provided". Absent = legacy inference from ssl_email (an older panel).
+    #[serde(default)]
+    tls_mode: Option<String>,
+    /// Registry alias; provided mode only.
+    #[serde(default)]
+    tls_certificate: Option<String>,
     /// Host port the domain proxies to. Defaults to the first published port
     /// in the stack, which is the right answer for every package we ship.
     expose_port: Option<u16>,
@@ -1228,6 +1465,16 @@ async fn compose_deploy(
         }
     }
 
+    // The TLS shape is decided here for the same reason the port is resolved
+    // below: a request the agent cannot honour is refused BEFORE any container
+    // runs, not reported as a warning beside a running one.
+    let tls = TlsIntent::from_request(
+        body.tls_mode.as_deref(),
+        body.ssl_email.as_deref(),
+        body.tls_certificate.as_deref(),
+    )
+    .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))))?;
+
     // Resolve which published port the domain should point at before deploying,
     // so a stack that publishes nothing is refused up front rather than after
     // its containers are running.
@@ -1264,7 +1511,7 @@ async fn compose_deploy(
                 &state.templates,
                 domain,
                 port,
-                body.ssl_email.as_deref(),
+                tls,
                 false,
                 &mut response,
             )
@@ -1914,5 +2161,49 @@ async fn resolve_pid_to_container(pid: u64) -> Option<String> {
         if !name.is_empty() { Some(name) } else { None }
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tls_intent_tests {
+    use super::TlsIntent;
+
+    #[test]
+    fn an_older_panel_that_sends_no_mode_keeps_the_address_rule() {
+        // Presence, not content: exactly what the inference did before.
+        assert_eq!(
+            TlsIntent::from_request(None, Some("ops@example.com"), None),
+            Ok(TlsIntent::Acme { email: "ops@example.com" })
+        );
+        assert_eq!(TlsIntent::from_request(None, None, None), Ok(TlsIntent::None));
+        // An alias without a mode is ignored, as an older panel could never send one.
+        assert_eq!(TlsIntent::from_request(None, None, Some("wild")), Ok(TlsIntent::None));
+    }
+
+    #[test]
+    fn each_mode_needs_its_own_field() {
+        assert_eq!(TlsIntent::from_request(Some("none"), Some("x@y.z"), None), Ok(TlsIntent::None));
+        assert_eq!(
+            TlsIntent::from_request(Some("acme"), Some("x@y.z"), None),
+            Ok(TlsIntent::Acme { email: "x@y.z" })
+        );
+        assert!(TlsIntent::from_request(Some("acme"), None, None).is_err());
+        assert!(TlsIntent::from_request(Some("acme"), Some("   "), None).is_err());
+        assert_eq!(
+            TlsIntent::from_request(Some("provided"), None, Some("wildcard-2026")),
+            Ok(TlsIntent::Provided { alias: "wildcard-2026" })
+        );
+        assert!(TlsIntent::from_request(Some("provided"), None, None).is_err());
+        // The alias is a directory name on this box; the grammar is enforced here too.
+        assert!(TlsIntent::from_request(Some("provided"), None, Some("../ssl")).is_err());
+        assert!(TlsIntent::from_request(Some("provided"), None, Some("Upper")).is_err());
+        assert!(TlsIntent::from_request(Some("letsencrypt"), Some("x@y.z"), None).is_err());
+    }
+
+    #[test]
+    fn the_answer_uses_the_shared_vocabulary() {
+        assert_eq!(TlsIntent::None.mode(), "none");
+        assert_eq!(TlsIntent::Acme { email: "x@y.z" }.mode(), "acme");
+        assert_eq!(TlsIntent::Provided { alias: "a" }.mode(), "provided");
     }
 }

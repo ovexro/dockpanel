@@ -618,7 +618,7 @@ pub async fn status_page(
 /// is the absence of one; and it outranks `critical`/`warning`/`ok` because those
 /// three say when the certificate dies while this says nothing is coming to save
 /// it. The days column still carries the clock, so no information is displaced.
-fn expiry_status(days_left: Option<i64>, renewal_failing: bool) -> &'static str {
+pub(crate) fn expiry_status(days_left: Option<i64>, renewal_failing: bool) -> &'static str {
     match days_left {
         Some(d) if d < 0 => "expired",
         _ if renewal_failing => "renewal_failed",

@@ -39,6 +39,7 @@ pub mod staging;
 pub mod sites;
 pub mod system_logs;
 pub mod teams;
+pub mod tls_certificates;
 pub mod ssl;
 pub mod system;
 pub mod terminal;
@@ -1080,6 +1081,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/stacks/{id}/start", post(stacks::start))
         .route("/api/stacks/{id}/stop", post(stacks::stop))
         .route("/api/stacks/{id}/restart", post(stacks::restart))
+        // TLS certificate registry — named certificates a stack claims by alias (#104)
+        .route("/api/tls-certificates", get(tls_certificates::list).post(tls_certificates::create))
+        .route("/api/tls-certificates/{id}", put(tls_certificates::replace).delete(tls_certificates::remove))
         // Docker Apps (admin)
         .route("/api/apps/updates", get(docker_apps::check_updates))
         .route("/api/apps/gpu-info", get(docker_apps::gpu_info))

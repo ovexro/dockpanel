@@ -278,6 +278,13 @@ Deploy from a Docker Compose file.
 dockpanel apps compose /path/to/docker-compose.yml
 ```
 
+A stack deployed this way carries no domain. To front a stack with a domain — over
+Let's Encrypt or a registered certificate — create it through the panel
+(`POST /api/stacks`), which records how the domain is served. Registered
+certificates are managed from the panel, not the CLI: the CLI speaks to the agent
+alone, and a certificate the panel's database does not know cannot be referenced by
+a stack.
+
 ---
 
 ### `dockpanel services`

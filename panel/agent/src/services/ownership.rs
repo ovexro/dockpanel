@@ -340,6 +340,97 @@ pub fn cert_dir_in_use_elsewhere(domain: &str) -> bool {
     false
 }
 
+/// Is the registered certificate `alias` still referenced by any vhost on this
+/// box — in service or parked?
+///
+/// The same question as [`cert_dir_in_use_elsewhere`] asked of the other tree,
+/// with one difference: there is no "own" vhost to skip, because a registered
+/// certificate belongs to no domain. Any vhost naming its directory is a reason
+/// not to delete it — a parked one included, since enabling that site would put
+/// a vhost pointing at a missing file back into service, which fails the next
+/// `nginx -t` for every site on the box.
+///
+/// Answered from the vhosts rather than the panel's database for the reason the
+/// sibling gives: the agent has no database, and the vhosts are what nginx will
+/// actually parse. A vhost tree that cannot be read is assumed to reference it.
+pub fn registry_cert_in_use(alias: &str) -> bool {
+    let needle = format!("{}/{alias}/", super::ssl::SSL_REGISTRY_DIR);
+    registry_needle_in_use(
+        &needle,
+        std::path::Path::new("/etc/nginx/sites-enabled"),
+        // The parent of the parked path `nginx::vhost_paths` spells.
+        std::path::Path::new("/etc/nginx/sites-available"),
+    )
+}
+
+/// Every vhost file that names the registered certificate `alias`, in service
+/// or parked — so a refusal to delete it can say WHICH files, and the operator
+/// knows whether to move a domain or clear a parked configuration. `Err` means
+/// a tree could not be read, which the caller must treat as "in use".
+pub fn registry_cert_references(alias: &str) -> Result<Vec<String>, String> {
+    let needle = format!("{}/{alias}/", super::ssl::SSL_REGISTRY_DIR);
+    registry_needle_references(
+        &needle,
+        std::path::Path::new("/etc/nginx/sites-enabled"),
+        // The parent of the parked path `nginx::vhost_paths` spells.
+        std::path::Path::new("/etc/nginx/sites-available"),
+    )
+}
+
+/// The directory walk behind [`registry_cert_in_use`], with the two roots as
+/// arguments so a test can point it at a scratch tree. `true` for any
+/// reference, and for a tree that could not be read.
+fn registry_needle_in_use(
+    needle: &str,
+    live_dir: &std::path::Path,
+    parked_dir: &std::path::Path,
+) -> bool {
+    match registry_needle_references(needle, live_dir, parked_dir) {
+        Ok(refs) => !refs.is_empty(),
+        Err(_) => true,
+    }
+}
+
+/// The files under the two roots whose text names `needle`.
+///
+/// Both trees are read whole — the parked one too, without filtering on the
+/// parked filename, which `nginx::vhost_paths` alone may spell. A hand-kept
+/// copy in that directory naming the pair is a reader nginx could be handed
+/// next, so it counts. An unreadable in-service tree is an error. A parked
+/// tree that does not exist holds nothing parked; any other failure to read
+/// it is an error for the same fail-closed reason as the sibling — refusing a
+/// delete is recoverable, deleting a referenced pair is not.
+fn registry_needle_references(
+    needle: &str,
+    live_dir: &std::path::Path,
+    parked_dir: &std::path::Path,
+) -> Result<Vec<String>, String> {
+    let mut found = Vec::new();
+    let live = std::fs::read_dir(live_dir)
+        .map_err(|e| format!("cannot read {}: {e}", live_dir.display()))?;
+    for entry in live.flatten() {
+        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+            if content.contains(needle) {
+                found.push(entry.path().display().to_string());
+            }
+        }
+    }
+    let parked = match std::fs::read_dir(parked_dir) {
+        Ok(parked) => parked,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(found),
+        Err(e) => return Err(format!("cannot read {}: {e}", parked_dir.display())),
+    };
+    for entry in parked.flatten() {
+        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+            if content.contains(needle) {
+                found.push(entry.path().display().to_string());
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -594,5 +685,65 @@ mod tests {
         // The legacy space addresses the OLD name, not the scoped one — that is
         // the entire reason it exists.
         assert_eq!(GitScope::PreviewLegacy.scoped("a-pr-b"), "a-pr-b");
+    }
+
+    /// A scratch vhost tree: an in-service directory and a parked one.
+    struct TmpTree(std::path::PathBuf);
+
+    impl Drop for TmpTree {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    fn tmptree() -> (TmpTree, std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("dp-reg-{}", uuid::Uuid::new_v4()));
+        let live = root.join("sites-enabled");
+        let parked = root.join("sites-available");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::create_dir_all(&parked).unwrap();
+        (TmpTree(root), live, parked)
+    }
+
+    #[test]
+    fn a_registered_certificate_is_in_use_while_any_vhost_names_it() {
+        let needle = format!("{}/wild/", super::super::ssl::SSL_REGISTRY_DIR);
+        let (_t, live, parked) = tmptree();
+        assert!(!registry_needle_in_use(&needle, &live, &parked));
+
+        // An in-service vhost.
+        std::fs::write(
+            live.join("a.example.com.conf"),
+            format!("server {{\n    ssl_certificate {needle}fullchain.pem;\n}}\n"),
+        )
+        .unwrap();
+        assert!(registry_needle_in_use(&needle, &live, &parked));
+        // A DIFFERENT alias whose name merely shares a prefix is not this one.
+        assert!(!registry_needle_in_use(
+            &format!("{}/wil/", super::super::ssl::SSL_REGISTRY_DIR),
+            &live,
+            &parked
+        ));
+        std::fs::remove_file(live.join("a.example.com.conf")).unwrap();
+
+        // A parked vhost counts: enabling the site would bring the reference back.
+        std::fs::write(
+            parked.join("b.example.com.parked"),
+            format!("ssl_certificate_key {needle}privkey.pem;\n"),
+        )
+        .unwrap();
+        assert!(registry_needle_in_use(&needle, &live, &parked));
+        std::fs::remove_file(parked.join("b.example.com.parked")).unwrap();
+        assert!(!registry_needle_in_use(&needle, &live, &parked));
+    }
+
+    #[test]
+    fn an_unreadable_vhost_tree_is_assumed_to_reference_it() {
+        let needle = format!("{}/wild/", super::super::ssl::SSL_REGISTRY_DIR);
+        let (_t, live, parked) = tmptree();
+        let missing = live.join("nope");
+        assert!(registry_needle_in_use(&needle, &missing, &parked));
+        // A parked tree that has never existed holds nothing parked.
+        assert!(!registry_needle_in_use(&needle, &live, &parked.join("nope")));
     }
 }

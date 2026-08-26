@@ -77,6 +77,13 @@ interface StackInfo {
   service_count: number;
   domain: string | null;
   ssl_email: string | null;
+  // The STORED mode, honoured by the agent on every redeploy. The link scheme
+  // below keys on this and never on ssl_email: a stack served by a registered
+  // certificate has no email, and inferring "no TLS" from that absence is the
+  // defect that put a plain-HTTP link beside an HSTS-pinned domain.
+  tls_mode: "none" | "acme" | "provided";
+  /** Registry alias; provided mode only. */
+  tls_certificate: string | null;
   running: number;
   total: number;
   status: string;
@@ -511,6 +518,14 @@ export default function Apps() {
   const [composeName, setComposeName] = useState("");
   const [composeDomain, setComposeDomain] = useState("");
   const [composeSslEmail, setComposeSslEmail] = useState("");
+  // Default `none` is today's blank-email behaviour spelled out: the operator
+  // now picks a mode instead of the panel inferring one from an empty box.
+  const [composeTlsMode, setComposeTlsMode] = useState<"none" | "acme" | "provided">("none");
+  const [composeTlsCertificate, setComposeTlsCertificate] = useState("");
+  // null = not asked yet. Fetched only when "Registered certificate" is chosen,
+  // so a form that never uses the registry never pays for the request.
+  const [registeredCerts, setRegisteredCerts] = useState<{ id: string; alias: string; dns_names: string[] }[] | null>(null);
+  const [registeredCertsError, setRegisteredCertsError] = useState("");
   const [composeChecks, setComposeChecks] = useState<ComposeValidation | null>(null);
 
   // Image management state (Feature #6)
@@ -1015,6 +1030,18 @@ export default function Apps() {
     }
   };
 
+  // The TLS half of the compose form, reset in one place — on success, Cancel
+  // and Escape alike — so a reopened dialog never carries a previous alias, and
+  // the registry list is asked again (a certificate registered in another tab
+  // is otherwise invisible for the life of the page).
+  const resetComposeTls = () => {
+    setComposeSslEmail("");
+    setComposeTlsMode("none");
+    setComposeTlsCertificate("");
+    setRegisteredCerts(null);
+    setRegisteredCertsError("");
+  };
+
   const handleComposeDeploy = async () => {
     if (!composeYaml.trim()) return;
     const stackName = composeName.trim() || `stack-${Date.now()}`;
@@ -1026,6 +1053,11 @@ export default function Apps() {
         yaml: composeYaml,
         domain: composeDomain.trim() || null,
         ssl_email: composeSslEmail.trim() || null,
+        // Sent as a plain string, and the alias only in provided mode: neither
+        // is a clearable column, so neither takes the null-for-empty spelling
+        // the two lines above are the file's only allowed uses of.
+        tls_mode: composeTlsMode,
+        ...(composeTlsMode === "provided" ? { tls_certificate: composeTlsCertificate } : {}),
       });
       const failed = result.deploy_result.services.filter(s => s.status === "failed");
       // Refresh either way. A partial failure leaves real containers running
@@ -1044,7 +1076,7 @@ export default function Apps() {
         setComposeChecks(null);
         setComposeName("");
         setComposeDomain("");
-        setComposeSslEmail("");
+        resetComposeTls();
         const proxyNote = result.deploy_result.proxy_warning
           ? ` — but the domain could not be set up: ${result.deploy_result.proxy_warning}`
           : result.deploy_result.ssl_warning
@@ -1056,6 +1088,11 @@ export default function Apps() {
         });
       }
     } catch (e) {
+      // A refusal can arrive AFTER the stack exists: a registered certificate
+      // that did not reach the vhost answers 502 with the containers running
+      // and the row kept, so the list must show it — or a second Deploy click
+      // makes a second stack under the same name.
+      loadApps();
       setComposeError(e instanceof Error ? e.message : "Deploy failed");
     } finally {
       setComposeDeploying(false);
@@ -1475,7 +1512,7 @@ volumes:
                     </span>
                     {stack.domain && (
                       <a
-                        href={`${stack.ssl_email ? "https" : "http"}://${stack.domain}`}
+                        href={`${stack.tls_mode !== "none" ? "https" : "http"}://${stack.domain}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
@@ -1483,6 +1520,16 @@ volumes:
                       >
                         {stack.domain}
                       </a>
+                    )}
+                    {stack.domain && stack.tls_mode === "acme" && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-dark-700 text-dark-300" title="Certificate ordered from Let's Encrypt">
+                        Let's Encrypt
+                      </span>
+                    )}
+                    {stack.domain && stack.tls_mode === "provided" && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-dark-700 text-dark-300" title="Served by a registered certificate (Monitoring → Certificates)">
+                        cert: {stack.tls_certificate ?? "?"}
+                      </span>
                     )}
                   </div>
                   <div className="flex items-center gap-2">
@@ -2937,7 +2984,7 @@ volumes:
           className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4 dp-modal-overlay"
           role="dialog"
           aria-labelledby="compose-dialog-title"
-          onKeyDown={(e) => { if (e.key === "Escape") { setShowCompose(false); setComposeParsed(null); setComposeError(""); }}}
+          onKeyDown={(e) => { if (e.key === "Escape") { setShowCompose(false); setComposeParsed(null); setComposeError(""); resetComposeTls(); }}}
         >
           <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto dp-modal">
             <div className="flex items-center justify-between mb-4">
@@ -3036,7 +3083,18 @@ volumes:
                   id="compose-domain"
                   type="text"
                   value={composeDomain}
-                  onChange={(e) => setComposeDomain(e.target.value)}
+                  onChange={(e) => {
+                    setComposeDomain(e.target.value);
+                    // A TLS choice is meaningless without a domain, and the
+                    // backend refuses a mode other than none for one — so
+                    // emptying the box takes the choice with it rather than
+                    // leaving a hidden "acme" behind a disabled select.
+                    if (!e.target.value.trim()) {
+                      setComposeTlsMode("none");
+                      setComposeTlsCertificate("");
+                      setComposeSslEmail("");
+                    }
+                  }}
                   placeholder="watchdog.example.com"
                   className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
                 />
@@ -3045,19 +3103,90 @@ volumes:
                 </p>
               </div>
               <div>
-                <label htmlFor="compose-ssl-email" className="block text-sm font-medium text-dark-100 mb-1">SSL Email <span className="text-dark-400 font-normal">(optional)</span></label>
-                <input
-                  id="compose-ssl-email"
-                  type="email"
-                  value={composeSslEmail}
-                  onChange={(e) => setComposeSslEmail(e.target.value)}
-                  placeholder="admin@example.com"
+                <label htmlFor="compose-tls-mode" className="block text-sm font-medium text-dark-100 mb-1">HTTPS</label>
+                <select
+                  id="compose-tls-mode"
+                  value={composeTlsMode}
                   disabled={!composeDomain.trim()}
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500 disabled:opacity-50"
-                />
-                <p className="text-xs text-dark-300 mt-1">
-                  Requests a Let's Encrypt certificate. Leave blank to serve plain HTTP.
-                </p>
+                  onChange={(e) => {
+                    const mode = e.target.value as "none" | "acme" | "provided";
+                    setComposeTlsMode(mode);
+                    // The email is only meaningful to an ACME order. Keeping a
+                    // typed address behind a hidden input would send it with a
+                    // `none` or `provided` stack, where the backend reads its
+                    // presence as nothing but the payload still carries it.
+                    if (mode !== "acme") setComposeSslEmail("");
+                    if (mode !== "provided") setComposeTlsCertificate("");
+                    if (mode === "provided" && registeredCerts === null) {
+                      setRegisteredCertsError("");
+                      api.get<{ id: string; alias: string; dns_names: string[] }[]>("/tls-certificates")
+                        .then((rows) => setRegisteredCerts(rows))
+                        .catch((err) => {
+                          // Left at null so choosing the mode again asks again;
+                          // an empty list here would read as "nothing registered"
+                          // for the life of the page after one failed request.
+                          setRegisteredCertsError(err instanceof Error ? err.message : "Could not load registered certificates");
+                        });
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-dark-800 border border-dark-500 rounded-lg text-sm text-dark-100 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 disabled:opacity-50"
+                >
+                  <option value="none">No HTTPS — plain HTTP, or TLS terminated upstream</option>
+                  <option value="acme">Let's Encrypt certificate</option>
+                  <option value="provided">Registered certificate</option>
+                </select>
+                {composeTlsMode === "acme" && (
+                  <>
+                    <input
+                      id="compose-ssl-email"
+                      type="email"
+                      value={composeSslEmail}
+                      onChange={(e) => setComposeSslEmail(e.target.value)}
+                      placeholder="admin@example.com"
+                      aria-label="SSL Email"
+                      className="mt-2 w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                    />
+                    <p className="text-xs text-dark-300 mt-1">
+                      Account email for the Let's Encrypt order. Required in this mode.
+                    </p>
+                  </>
+                )}
+                {composeTlsMode === "provided" && (
+                  <>
+                    <select
+                      id="compose-tls-certificate"
+                      value={composeTlsCertificate}
+                      onChange={(e) => setComposeTlsCertificate(e.target.value)}
+                      aria-label="Registered certificate"
+                      className="mt-2 w-full px-3 py-2 bg-dark-800 border border-dark-500 rounded-lg text-sm font-mono text-dark-100 focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                    >
+                      <option value="">
+                        {registeredCerts === null ? "Loading…" : "Choose a certificate"}
+                      </option>
+                      {(registeredCerts ?? []).map((c) => (
+                        <option key={c.id} value={c.alias}>
+                          {c.alias}{c.dns_names.length > 0 ? ` — ${c.dns_names.join(", ")}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {registeredCertsError ? (
+                      <p className="text-xs text-danger-400 mt-1">{registeredCertsError}</p>
+                    ) : registeredCerts !== null && registeredCerts.length === 0 ? (
+                      <p className="text-xs text-dark-300 mt-1">
+                        No certificates are registered on this server yet. Register one under Monitoring → Certificates, then pick it here.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-dark-300 mt-1">
+                        The certificate must cover the domain above; the claim is refused otherwise. Served by nginx only.
+                      </p>
+                    )}
+                  </>
+                )}
+                {composeTlsMode === "none" && (
+                  <p className="text-xs text-dark-300 mt-1">
+                    {composeDomain.trim() ? "Serves plain HTTP on the domain." : "Enter a domain to choose how it is served."}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -3077,7 +3206,7 @@ volumes:
             {!composeParsed && (
               <div className="flex justify-end gap-2">
                 <button
-                  onClick={() => { setShowCompose(false); setComposeYaml(""); setComposeParsed(null); setComposeError(""); }}
+                  onClick={() => { setShowCompose(false); setComposeYaml(""); setComposeParsed(null); setComposeError(""); resetComposeTls(); }}
                   className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400"
                 >
                   Cancel
@@ -3175,7 +3304,14 @@ volumes:
                   </button>
                   <button
                     onClick={handleComposeDeploy}
-                    disabled={composeDeploying}
+                    // The backend refuses acme without an email and provided
+                    // without an alias; refusing here too keeps the dialog
+                    // from round-tripping a deploy it already knows will fail.
+                    disabled={
+                      composeDeploying ||
+                      (composeTlsMode === "acme" && !composeSslEmail.trim()) ||
+                      (composeTlsMode === "provided" && !composeTlsCertificate)
+                    }
                     className="px-4 py-2 bg-rust-600 text-white rounded-lg text-sm font-medium hover:bg-rust-700 disabled:opacity-50 flex items-center gap-2"
                   >
                     {composeDeploying && (
