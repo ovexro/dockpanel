@@ -715,7 +715,10 @@ pub async fn certificate_dashboard(
     let failing = renewal_failing_sites(&state.db, &ids).await?;
     let items: Vec<serde_json::Value> = certs.iter().map(|(id, domain, _, expiry)| {
         let days_left = expiry.map(|e| (e - now).num_days());
-        serde_json::json!({ "site_id": id, "domain": domain, "expiry": expiry, "days_left": days_left, "status": expiry_status(days_left, failing.contains(id)) })
+        // `stack_id` is null on every row here and still on the wire: this list is
+        // site-scoped by construction, and the page that consumes both lists must
+        // not see the field appear and disappear between them.
+        serde_json::json!({ "site_id": id, "stack_id": serde_json::Value::Null, "domain": domain, "expiry": expiry, "days_left": days_left, "status": expiry_status(days_left, failing.contains(id)) })
     }).collect();
 
     Ok(Json(serde_json::json!({ "certificates": items })))
@@ -774,6 +777,11 @@ pub async fn certificate_dashboard_for_admin(
             let days_left = expiry.map(|e| (e - now).num_days());
             serde_json::json!({
                 "site_id": id,
+                // Always on the wire, even as null. A field that is present on
+                // some rows and absent on others reaches TypeScript as
+                // `undefined`, and `undefined !== null` is true — which would
+                // hand every ordinary site row the control meant for stacks.
+                "stack_id": serde_json::Value::Null,
                 "domain": domain,
                 "expiry": expiry,
                 "days_left": days_left,
@@ -783,6 +791,38 @@ pub async fn certificate_dashboard_for_admin(
             })
         })
         .collect();
+
+    // Every stack on this host that has a domain, read ONCE. The walk below needs
+    // to ask "is this certificate a stack's?" per directory on disk, and a query
+    // per directory would be a round trip per certificate.
+    //
+    // `ssl_expiry` comes along for the offline arm at the bottom, which is the
+    // only reader that has nothing else to fall back on.
+    let stacks: Vec<(Uuid, String, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)> =
+        sqlx::query_as(
+            "SELECT id, domain, tls_mode, ssl_email, ssl_expiry FROM docker_stacks \
+             WHERE server_id = $1 AND domain IS NOT NULL",
+        )
+        .bind(server_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| internal_error("admin certificate list stacks", e))?;
+
+    // ⛔ Only an ACME stack is ours. A `provided` stack serves its certificate from
+    //    the registry, and the file this walk finds under /etc/dockpanel/ssl is a
+    //    LEFTOVER from before the switch — offering to renew it, or stamping the
+    //    row with its expiry, would be the panel describing a certificate the
+    //    stack does not serve. Read through the one spelling of the rule.
+    let acme_stack = |domain: &str| -> Option<(Uuid, Option<chrono::DateTime<chrono::Utc>>)> {
+        stacks
+            .iter()
+            .find(|(_, d, mode, email, _)| {
+                d.eq_ignore_ascii_case(domain)
+                    && crate::routes::stacks::effective_tls_mode(mode.as_deref(), email.as_deref())
+                        == "acme"
+            })
+            .map(|(id, _, _, _, recorded)| (*id, *recorded))
+    };
 
     // Best-effort, and its failure is REPORTED rather than swallowed: without it
     // the list silently reverts to the DB-only view that caused the problem.
@@ -797,24 +837,62 @@ pub async fn certificate_dashboard_for_admin(
                         continue;
                     }
                     let days_left = c.get("days_remaining").and_then(|d| d.as_i64());
+                    let expiry = c.get("not_after").and_then(|d| d.as_str())
+                        .and_then(crate::helpers::parse_agent_cert_expiry);
+                    let stack = acme_stack(domain);
+                    let stack_id = stack.map(|(id, _)| id);
+
+                    // BOOTSTRAP. The agent's walk is the only thing that knows when
+                    // a stack's certificate expires, and until now the panel read
+                    // that answer, rendered it, and threw it away — so nothing in
+                    // Postgres could ever answer the question, and the arm below
+                    // had nothing to fall back on.
+                    //
+                    // ⛔ Best-effort by construction: `let _`, never `?`. This is a
+                    //    GET, and a failed bookkeeping write must not turn a page
+                    //    the operator asked for into an error. The next read
+                    //    retries it.
+                    // ⚠ Only when it actually MOVED. This runs per certificate on
+                    //    disk, on every load of this page, and a row that already
+                    //    holds the right date does not need writing — an admin
+                    //    refreshing would otherwise issue one UPDATE per stack
+                    //    certificate every time, for ever, to change nothing.
+                    if let (Some((id, recorded)), Some(exp)) = (stack, expiry) {
+                        if recorded != Some(exp) {
+                            let _ = sqlx::query(
+                                "UPDATE docker_stacks SET ssl_expiry = $1 WHERE id = $2",
+                            )
+                            .bind(exp)
+                            .bind(id)
+                            .execute(&state.db)
+                            .await;
+                        }
+                    }
+
                     items.push(serde_json::json!({
                         "site_id": serde_json::Value::Null,
+                        "stack_id": stack_id,
                         "domain": domain,
-                        "expiry": c.get("not_after").and_then(|d| d.as_str())
-                            .and_then(crate::helpers::parse_agent_cert_expiry),
+                        "expiry": expiry,
                         "days_left": days_left,
-                        // Never `renewal_failed`, and not because these were
-                        // checked. A certificate in this half has no site row,
-                        // so nothing can raise a renewal alert against it and
-                        // the panel does not renew it from here either — the
-                        // rung would be asserting a failure of machinery that
-                        // was never pointed at this certificate.
+                        // ⚠ Still never `renewal_failed`, but the reason has
+                        // shrunk and the old one must not be left standing. It
+                        // used to say nothing could raise a renewal alert against
+                        // these and that the panel never renewed them from here;
+                        // both became false in v2.161.0/v2.162.0, which renew a
+                        // stack's certificate on a schedule AND raise
+                        // `ssl_renewal_failure` when that fails. What is still
+                        // true is narrower: that alert is keyed by server and
+                        // state_key with a NULL site_id, and the lookup feeding
+                        // this rung asks `site_id = ANY(...)`, so it cannot see
+                        // one. The rung is unreachable here — recorded, not
+                        // claimed to be inapplicable.
                         "status": expiry_status(days_left, false),
                         "issuer": c.get("issuer"),
                         "owner_email": serde_json::Value::Null,
-                        // No site row, so no renewal from here and no Renew button.
-                        // The Diagnostics Fix button explains the same thing in a
-                        // sentence when it is clicked on one of these.
+                        // A certificate on disk that belongs to no site and no
+                        // ACME stack: nothing here can renew or remove it, and the
+                        // page says so rather than offering a control that fails.
                         "managed": false,
                     }));
                 }
@@ -822,7 +900,42 @@ pub async fn certificate_dashboard_for_admin(
             true
         }
         Err(e) => {
-            tracing::warn!("Admin certificate list: this server's agent could not enumerate certificates ({e}) — showing site-backed certificates only");
+            tracing::warn!("Admin certificate list: this server's agent could not enumerate certificates ({e}) — falling back to what the panel recorded");
+
+            // ⭐ THE OFFLINE ANSWER, and the reason `docker_stacks.ssl_expiry`
+            //    exists. A site keeps its row in the list when the agent is
+            //    unreachable, because the panel stores `sites.ssl_expiry`. A stack
+            //    had no such column, so every stack certificate simply VANISHED
+            //    from this page for as long as the agent was down — at exactly the
+            //    moment an operator is most likely to be looking at it.
+            //
+            //    These rows are the panel's own record, not a live read. They
+            //    carry no issuer (nothing re-read the file) and no control: this
+            //    half of the page is reached only when the agent cannot be asked,
+            //    and a Renew button here would post to a host that is not
+            //    answering.
+            for (id, domain, mode, email, expiry) in &stacks {
+                if crate::routes::stacks::effective_tls_mode(mode.as_deref(), email.as_deref())
+                    != "acme"
+                {
+                    continue;
+                }
+                let Some(expiry) = expiry else { continue };
+                let days_left = Some((*expiry - now).num_days());
+                items.push(serde_json::json!({
+                    "site_id": serde_json::Value::Null,
+                    "stack_id": id,
+                    "domain": domain,
+                    "expiry": expiry,
+                    "days_left": days_left,
+                    "status": expiry_status(days_left, false),
+                    "issuer": serde_json::Value::Null,
+                    "owner_email": serde_json::Value::Null,
+                    "managed": true,
+                    // The one thing this row must not do is look like a live read.
+                    "stale": true,
+                }));
+            }
             false
         }
     };

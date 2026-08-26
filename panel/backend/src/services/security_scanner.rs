@@ -973,13 +973,22 @@ async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &s
     //    ⚠ Its own action string, deliberately. Sharing `auto_heal.renew_ssl`
     //    would let either gate satisfy the other's arm and let one loop's
     //    attempt mute the other's.
+    //    ⛔ SERVER-SCOPED, for the same reason the lookup in step 1 is. A domain
+    //       is unique only per server, and step 6 stamps every row it writes with
+    //       the host that raised the finding. Counting name-only made two hosts
+    //       carrying the same domain share ONE six-hour budget: host A's renewal
+    //       muted host B's, so B's certificate could sit unrenewed for as long as
+    //       A kept succeeding — the exact fleet hazard this file's host discipline
+    //       exists to prevent, in the one query that had not learned it.
     let recent: Option<(i64,)> = sqlx::query_as(
         "SELECT COUNT(*) FROM activity_logs \
          WHERE action = 'auto_fix.renew_stack_ssl' \
          AND target_name = $1 \
+         AND server_id = $2 \
          AND created_at > NOW() - INTERVAL '6 hours'",
     )
     .bind(domain)
+    .bind(member.id)
     .fetch_optional(pool)
     .await
     .ok()
@@ -1046,8 +1055,51 @@ async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &s
     .await;
 
     match result {
-        Ok(_) => {
+        Ok(ref v) => {
             tracing::info!("Auto-fix: Compose stack certificate renewed for {domain}");
+
+            // ⛔ THE PARSE IS MANDATORY — the wire value and the column are not the
+            //    same kind of thing. The agent prints the `time` crate's Display
+            //    (`2026-10-23 09:41:07.0 +00:00:00`), a STRING; `ssl_expiry` is
+            //    TIMESTAMPTZ. Binding the string straight in is rejected by
+            //    Postgres, and `parse_agent_cert_expiry` exists for exactly this
+            //    shape — its own unit test uses that literal as the proof.
+            //
+            // ⛔ `stack_id` is the id resolved in step 1. Re-reading the row to
+            //    fetch it would add a second `FROM docker_stacks WHERE
+            //    lower(domain) = lower($1) AND server_id = $2` and a second
+            //    `.bind(domain).bind(member.id)` — turning the two arms that
+            //    protect this door's host discipline red for no gain.
+            //
+            //    A failed UPDATE is NOT a failed renewal: the certificate is
+            //    already on disk. Recording nothing is a stale row, not a lost
+            //    certificate, and the next scan rewrites it.
+            match v
+                .get("expiry")
+                .and_then(|x| x.as_str())
+                .and_then(crate::helpers::parse_agent_cert_expiry)
+            {
+                Some(expiry) => {
+                    if let Err(e) = sqlx::query(
+                        "UPDATE docker_stacks SET ssl_expiry = $1 WHERE id = $2",
+                    )
+                    .bind(expiry)
+                    .bind(stack_id)
+                    .execute(pool)
+                    .await
+                    {
+                        tracing::warn!(
+                            "Auto-fix: renewed {domain} but could not record its expiry: {e}"
+                        );
+                    }
+                }
+                // Wire-format drift, and `info!` because nothing shipped runs at
+                // debug. The renewal succeeded; only the bookkeeping did not.
+                None => tracing::info!(
+                    "Auto-fix: renewed {domain} but the agent's expiry was unreadable: {:?}",
+                    v.get("expiry")
+                ),
+            }
             crate::services::system_log::log_event(
                 pool,
                 "info",

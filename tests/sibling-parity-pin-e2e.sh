@@ -192,7 +192,7 @@ fi
 RENDER_DOORS=$(grep -rlE 'ssl/provision|/ssl/\{[a-z_]*\}/renew|/ssl/\{\}/renew' panel/backend/src --include='*.rs' 2>/dev/null \
                | grep -vE '/routes/mod\.rs$' | sort || true)
 DOOR_N=$(printf '%s\n' "$RENDER_DOORS" | grep -c . || true)
-if [ "${DOOR_N:-0}" -lt 4 ]; then
+if [ "${DOOR_N:-0}" -lt 6 ]; then
   bad "B3 only $DOOR_N vhost-rendering SSL doors enumerated — the derivation broke, this arm measures nothing"
 else
   ok "B3 $DOOR_N panel files call a vhost-rendering agent SSL route"
@@ -204,6 +204,19 @@ else
       *routes/mail.rs)               COMP='rebuild_vhost_for_domain\(' ;;
       *services/auto_healer.rs)      COMP='build_nginx_body\(' ;;
       *services/security_scanner.rs) COMP='build_nginx_body\(' ;;
+      # ⛔ THE ONE DOOR WHOSE COMPENSATION IS AN ABSENCE, and it is a decision,
+      #    not an oversight. Every other door here hands the agent a `runtime`,
+      #    which makes it RE-RENDER the vhost from a body that carries none of the
+      #    site's limits or hardening — hence the rebuild each one owes. The
+      #    Compose-stack renewal deliberately sends no `runtime`, because the panel
+      #    cannot describe a stack's vhost at all: the published port is derived
+      #    from the compose file on the agent, and a re-render would publish a
+      #    proxy with no upstream and take the stack off the air to install a
+      #    certificate. The agent reads that absence and only reloads.
+      #    So what this door owes is not a rebuild — it is that its request body
+      #    STAYS the two fields below. Grow it a `runtime` and this arm goes red,
+      #    which is exactly when the compensation question reopens.
+      *routes/stacks.rs)             COMP='Some\(serde_json::json!\(\{ "email": contact \}\)\)' ;;
       *) B4_BAD="$B4_BAD $f(UNKNOWN-DOOR)"; continue ;;
     esac
     grep -qE -- "$COMP" "$f" 2>/dev/null || B4_BAD="$B4_BAD $f"

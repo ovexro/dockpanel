@@ -14,8 +14,12 @@ interface Certificate {
   /** Admin view only. */
   owner_email?: string | null;
   issuer?: string | null;
-  /** false = on disk, but attached to no site, so DockPanel cannot renew it here. */
+  /** The Compose stack this certificate belongs to, if it belongs to one. */
+  stack_id?: string | null;
+  /** false = on disk, belonging to neither a site nor an ACME stack, so nothing here can renew it. */
   managed?: boolean;
+  /** true = read back out of the panel's own record because the agent could not be reached. */
+  stale?: boolean;
 }
 
 // Exported so the registry section below the site table paints the SAME badge
@@ -80,11 +84,24 @@ export default function Certificates() {
     loadCerts();
   }, [allCerts]);
 
+  // ⛔ ONE IDENTITY PER ROW, and it is never null. `renewingId === cert.site_id`
+  //    was safe only while every row carrying controls had a site id; a stack row
+  //    has `site_id: null`, so the moment such a row gains a button that
+  //    comparison is `null === null` for EVERY stack row at once and they all
+  //    spin together on one click.
+  const rowId = (cert: Certificate) => cert.site_id ?? cert.stack_id ?? cert.domain;
+
   const handleRenew = async (cert: Certificate) => {
-    setRenewingId(cert.site_id);
+    setRenewingId(rowId(cert));
     setMessage({ text: "", type: "" });
     try {
-      await api.post(`/ssl/${cert.site_id}/renew`);
+      // A stack has no `sites` row, so the site-shaped route could never address
+      // one — which is why this page used to say it could do nothing at all.
+      await api.post(
+        cert.stack_id != null
+          ? `/stacks/${cert.stack_id}/renew-ssl`
+          : `/ssl/${cert.site_id}/renew`,
+      );
       setMessage({ text: `Certificate renewed for ${cert.domain}`, type: "success" });
       loadCerts();
     } catch (e) {
@@ -239,17 +256,47 @@ export default function Certificates() {
                     )}
                     {isAdmin && (
                     <td className="px-4 py-3 text-right">
-                      {cert.site_id === null ? (
-                        // Both controls address a SITE (`/ssl/{site_id}/renew`,
-                        // `DELETE /ssl/{site_id}`), and this certificate has no site
-                        // row — so rendering them would be the same defect the rest
-                        // of this ship removes: a control that cannot do what it says.
+                      {cert.managed === false ? (
+                        // Neither a site nor an ACME stack stands behind this file,
+                        // so nothing on this page can renew or remove it — and
+                        // rendering a control anyway is the defect this page exists
+                        // to remove: one that cannot do what it says.
+                        // ⚠ The old spelling of this branch tested `site_id === null`,
+                        // which was the same question ONLY while a stack could never
+                        // be managed here. It can now, and a stack's `site_id` is
+                        // null, so that test would have hidden the very control this
+                        // ship adds. `managed` is the handler's own answer.
                         <span
                           className="text-xs text-dark-300"
-                          title="DockPanel did not issue this certificate for a site, so it cannot renew or remove it from here."
+                          title="This certificate belongs to no site and no Let's Encrypt stack on this server, so DockPanel cannot renew or remove it from here."
                         >
                           Not managed here
                         </span>
+                      ) : cert.stale ? (
+                        // The panel's stored record, shown because the agent could
+                        // not be reached. Renewing goes THROUGH that agent, so a
+                        // button here would post to a host already known to be
+                        // silent.
+                        <span
+                          className="text-xs text-dark-300"
+                          title="This server's agent could not be reached, so this row is what DockPanel last recorded. Renewing needs the agent."
+                        >
+                          Agent unreachable
+                        </span>
+                      ) : cert.stack_id != null ? (
+                        // A Compose stack. It has no `sites` row, so it gets the
+                        // stack-shaped route and no Delete: removing a stack's
+                        // certificate is not a thing this page can do, and offering
+                        // it would be another control that cannot keep its word.
+                        <button
+                          onClick={() => handleRenew(cert)}
+                          disabled={renewingId === rowId(cert)}
+                          className="px-2 py-1 text-xs text-dark-300 hover:text-dark-50 bg-dark-700 rounded hover:bg-dark-600 transition-colors disabled:opacity-50 flex items-center gap-1 ml-auto"
+                          title="Reissue this stack's Let's Encrypt certificate"
+                        >
+                          {renewingId === rowId(cert) && <span className="w-3 h-3 border-2 border-dark-400/30 border-t-dark-200 rounded-full animate-spin" />}
+                          {renewingId === rowId(cert) ? "Renewing..." : "Renew"}
+                        </button>
                       ) : deleteTarget === cert.site_id ? (
                         <div className="flex items-center justify-end gap-1">
                           <button
@@ -271,12 +318,12 @@ export default function Certificates() {
                         <div className="flex items-center justify-end gap-1">
                           <button
                             onClick={() => handleRenew(cert)}
-                            disabled={renewingId === cert.site_id}
+                            disabled={renewingId === rowId(cert)}
                             className="px-2 py-1 text-xs text-dark-300 hover:text-dark-50 bg-dark-700 rounded hover:bg-dark-600 transition-colors disabled:opacity-50 flex items-center gap-1"
                             title="Renew certificate"
                           >
-                            {renewingId === cert.site_id && <span className="w-3 h-3 border-2 border-dark-400/30 border-t-dark-200 rounded-full animate-spin" />}
-                            {renewingId === cert.site_id ? "Renewing..." : "Renew"}
+                            {renewingId === rowId(cert) && <span className="w-3 h-3 border-2 border-dark-400/30 border-t-dark-200 rounded-full animate-spin" />}
+                            {renewingId === rowId(cert) ? "Renewing..." : "Renew"}
                           </button>
                           <button
                             onClick={() => setDeleteTarget(cert.site_id)}

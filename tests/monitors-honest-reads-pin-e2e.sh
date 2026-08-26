@@ -301,10 +301,12 @@ echo "== §D  every ladder call site passes the second axis =="
 # vacuous arms hiding behind a control whose number said so.
 SITES=$(calls "$M" "expiry_status" | grep -vF 'Option<i64>')
 N_SITES=$(grep -c . <<< "$SITES")
-# ⛔ READ THIS NUMBER. Three call sites: the per-caller list, the admin list, and
-# the host-scan half. A count that drifts means a caller was added or lost, and
-# every arm below would still be describing only the ones it can see.
-if [ "$N_SITES" -eq 3 ]; then
+# ⛔ READ THIS NUMBER. Four call sites: the per-caller list, the admin list, the
+# host-scan half, and — since v2.162.0 — the OFFLINE half, which lists a stack's
+# certificate from `docker_stacks.ssl_expiry` when the agent cannot be asked at
+# all. A count that drifts means a caller was added or lost, and every arm below
+# would still be describing only the ones it can see.
+if [ "$N_SITES" -eq 4 ]; then
   ok "D-control the ladder has $N_SITES call sites"
 else
   bad "D-control the ladder has $N_SITES call sites — expected 3"
@@ -321,9 +323,14 @@ else
   bad "D1 $ONE_ARG call site(s) pass the clock alone"
 fi
 
-# POSITIVE: two of the three consult the lookup, and the third passes `false`
-# because it CANNOT have an answer — a certificate with no site row cannot have
-# an alert raised against it and is not renewed from here either.
+# POSITIVE: two of the four consult the lookup; the other two pass `false`, and
+# for reasons that are NOT the same — which is why D3b exists beside D3 rather
+# than the count being quietly raised. The host-scan half has no site row to ask
+# about. The offline half has no agent to ask at all, so even a live answer is
+# out of reach; it is the panel reading back its own record.
+# ⚠ A count arm cannot tell the two apart — both spell `(days_left, false)`. If
+# one of them ever grew an answer it could have consulted, only a named arm
+# would notice.
 N_LOOKUP=$(grep -cx '(days_left, failing.contains(id))' <<< "$SITES")
 N_FALSE=$(grep -cx '(days_left, false)' <<< "$SITES")
 if [ "$N_LOOKUP" -eq 2 ]; then
@@ -331,10 +338,18 @@ if [ "$N_LOOKUP" -eq 2 ]; then
 else
   bad "D2 both site-backed lists consult the lookup — found $N_LOOKUP"
 fi
-if [ "$N_FALSE" -eq 1 ]; then
-  ok "D3 the host-scan half passes false, having no site row to ask about"
+if [ "$N_FALSE" -eq 2 ]; then
+  ok "D3 the two site-less halves pass false, having no site row to ask about"
 else
-  bad "D3 the host-scan half passes false — found $N_FALSE such site(s)"
+  bad "D3 the two site-less halves pass false — found $N_FALSE such site(s)"
+fi
+# The offline half's OWN arm. `stale` is the one thing that row carries and no
+# other row does, and it is the honest half of the bargain: a row assembled from
+# the panel's stored date must never be mistaken for a live read of the box.
+if [ "$(printf '%s' "$M" | /usr/bin/grep -oF '"stale": true,' | wc -l | tr -d ' ')" -eq 1 ]; then
+  ok "D3b the offline half marks its rows as the panel's record, not a live read"
+else
+  bad "D3b the offline half does not mark its rows stale — an operator cannot tell a stored date from a fresh one"
 fi
 
 # POSITIVE: the two site-backed lists actually CALL the lookup, so D2's value

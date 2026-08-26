@@ -192,6 +192,18 @@ pub struct ProvisionOpts<'a> {
     /// PEM of the certificate being replaced (RFC 9773 ARI `replaces` hint).
     /// When set, the CA can correlate the renewal with the prior issuance.
     pub replaces_pem: Option<&'a str>,
+    /// Order even though the certificate already installed for this domain was
+    /// demonstrably issued by somebody else.
+    ///
+    /// ⛔ FALSE IS THE SAFE VALUE, AND ABSENT MEANS FALSE. Both writers take
+    /// `Option<&ProvisionOpts>` and several callers pass `None` — the compose
+    /// deploy, the git build. Those are exactly the callers that never asked the
+    /// issuer question, so `None` must fail CLOSED or the guard protects only
+    /// the doors that did not need it.
+    ///
+    /// Set it only where a human has been told what will be destroyed and said
+    /// yes anyway (`dockpanel ssl provision --force`).
+    pub replace_foreign: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -414,12 +426,32 @@ pub const CA_DECLINED: &str = "[ca] ";
 /// marker defaults to "this machine's fault" and keeps its incident id.
 pub const DNS_PROVIDER_DECLINED: &str = "[dns] ";
 
+/// A refusal, not a fault — the third thing an ACME order can end as.
+///
+/// ⛔ WITHOUT THIS MARKER THE SENTENCE IS THROWN AWAY. Everything unlabelled
+/// leaves this crate as a 500, and the panel hides every agent 5xx behind an
+/// incident id — correctly, because an unlabelled 500 really is an internal
+/// fault nobody outside can act on. But "somebody else's certificate is
+/// installed here and I will not overwrite it" is the most actionable message
+/// this door produces, and answering it with a reference number is precisely the
+/// outcome this guard exists to improve on.
+pub const FOREIGN_CERT_REFUSED: &str = "[foreign] ";
+
 pub async fn provision_cert(
     account: &Account,
     domain: &str,
     opts: Option<&ProvisionOpts<'_>>,
 ) -> Result<CertInfo, String> {
     tracing::info!("Provisioning SSL for {domain}");
+
+    // ⛔ THE CHOKE POINT. Asked before the order, not after, because the damage is
+    //    done by the write below and a refused order costs nothing.
+    if !opts.map(|o| o.replace_foreign).unwrap_or(false) {
+        if let Some(issuer) = foreign_installed_issuer(domain).await {
+            tracing::warn!("Refusing ACME order for {domain}: installed certificate is from {issuer}");
+            return Err(foreign_cert_refusal(domain, &issuer));
+        }
+    }
 
     // Create order with optional profile + ARI replaces hint
     let identifier = Identifier::Dns(domain.to_string());
@@ -558,6 +590,19 @@ pub async fn provision_cert_dns01(
 ) -> Result<CertInfo, String> {
     let label = if wildcard { "wildcard" } else { "dns01" };
     tracing::info!("Provisioning SSL ({label}) for {domain}");
+
+    // ⛔ THE CHOKE POINT, and this writer needs it MORE than its sibling. For a
+    //    wildcard the caller hands us the zone APEX, and the apex directory is
+    //    what every sibling vhost in that zone points at — so an unguarded order
+    //    here replaces one certificate and takes an unbounded number of sites
+    //    with it. `domain` is both what we check and what we write, by
+    //    construction, so the two can never name different files.
+    if !opts.map(|o| o.replace_foreign).unwrap_or(false) {
+        if let Some(issuer) = foreign_installed_issuer(domain).await {
+            tracing::warn!("Refusing ACME {label} order for {domain}: installed certificate is from {issuer}");
+            return Err(foreign_cert_refusal(domain, &issuer));
+        }
+    }
 
     // Build identifiers
     let mut ids = vec![Identifier::Dns(domain.to_string())];
@@ -776,6 +821,70 @@ async fn get_cert_expiry(cert_path: &str) -> Option<String> {
 }
 
 /// Get SSL certificate status for a domain.
+/// The issuer of the certificate installed for `domain`, but ONLY when that
+/// issuer proves DockPanel did not put it there.
+///
+/// ⛔ THIS IS THE LAST GATE BEFORE AN ACME ORDER OVERWRITES A FILE. It is placed
+/// at the two write primitives rather than at their callers because the callers
+/// are not a list anybody can keep: twenty-six reachable call sites across the
+/// panel, the CLI, git deploys, template apps and Compose stacks reach these two
+/// functions, and before v2.162.0 exactly three of them asked this question. A
+/// per-caller guard is a census that goes stale the next time somebody adds a
+/// deploy path — which is how the Compose-stack door shipped without one.
+///
+/// ⭐ And unlike a caller-side guard, this one cannot end up asking about a
+/// different file than the one it protects: `get_cert_status` reads
+/// `{SSL_DIR}/{domain}/fullchain.pem`, which is the exact path both writers
+/// write, from the same `domain` binding. The panel's DNS-01 renewal guard has
+/// precisely that bug — it asks about the site's own name while the wildcard
+/// branch writes the zone apex.
+///
+/// ⚠ Returns `None` for "we do not know" as well as for "ours" — no certificate
+/// yet, an unreadable file, an issuer the parser could not produce. Every caller
+/// must treat `None` as PERMISSION TO PROCEED, because the alternative is
+/// refusing to issue because a file was briefly unreadable, and that ends in a
+/// site with no certificate at all. We act only on a positive identification.
+///
+/// ⛔ MIRRORS `panel/backend/src/helpers.rs::cert_provenance`, and cannot import
+/// it — the agent and the panel are separate crates with no shared dependency.
+/// Both spellings of the CA's name are deliberate there and deliberate here: the
+/// apostrophe is a typographic hazard, not a fact about the CA, and an issuer
+/// string that lost it must not read as foreign.
+pub async fn foreign_installed_issuer(domain: &str) -> Option<String> {
+    foreign_issuer_of(&get_cert_status(domain).await)
+}
+
+/// The decision itself, over a status the caller already holds.
+///
+/// Split out from the read for the same reason the panel splits
+/// `cert_provenance` from `foreign_cert_issuer`: this is the half that decides
+/// whether a file gets destroyed, and a decision that can only be exercised by
+/// putting a real certificate on a real disk is a decision nothing tests.
+pub(crate) fn foreign_issuer_of(status: &CertStatus) -> Option<String> {
+    if !status.has_cert {
+        return None;
+    }
+    let issuer = status.issuer.as_deref().map(str::trim).unwrap_or("");
+    if issuer.is_empty() {
+        return None;
+    }
+    let lowered = issuer.to_ascii_lowercase();
+    if lowered.contains("let's encrypt") || lowered.contains("lets encrypt") {
+        return None;
+    }
+    Some(issuer.to_string())
+}
+
+/// The refusal an ACME order earns when it would replace somebody else's
+/// certificate. One spelling, so both writers say the same thing.
+fn foreign_cert_refusal(domain: &str, issuer: &str) -> String {
+    format!(
+        "{FOREIGN_CERT_REFUSED}Refusing to issue a Let's Encrypt certificate for {domain}: the certificate already \
+         installed there was issued by {issuer}, not by DockPanel, and ordering would overwrite \
+         it. Renew it wherever it was issued, or pass --force if you intend to replace it."
+    )
+}
+
 pub async fn get_cert_status(domain: &str) -> CertStatus {
     let cert_path = format!("{SSL_DIR}/{domain}/fullchain.pem");
 
@@ -1514,5 +1623,73 @@ mod registered_certificate_tests {
         assert!(key_matches_cert("", &key).unwrap_err().contains("no certificate"));
         assert!(key_matches_cert(&cert, "").unwrap_err().contains("no private key"));
         assert!(key_matches_cert(&cert, &cert).unwrap_err().contains("no private key"));
+    }
+}
+
+
+// ⛔ TESTS ONLY BELOW THIS POINT — see the note above the first test module.
+#[cfg(test)]
+mod foreign_issuer_tests {
+    use super::*;
+
+    fn status(has_cert: bool, issuer: Option<&str>) -> CertStatus {
+        CertStatus {
+            domain: "example.com".to_string(),
+            has_cert,
+            issuer: issuer.map(str::to_string),
+            not_after: None,
+            days_remaining: None,
+        }
+    }
+
+    // ⚠ WHAT THIS COVERS AND WHAT IT DOES NOT. These exercise the DECISION —
+    // the half that answers "may this order overwrite the file?" — not the
+    // x509 parse that produces the issuer string, which needs a real file at a
+    // const path. The parse is exercised wherever `get_cert_status` is.
+
+    #[test]
+    fn a_purchased_certificate_is_foreign_and_names_its_issuer() {
+        assert_eq!(
+            foreign_issuer_of(&status(true, Some("DigiCert Inc"))).as_deref(),
+            Some("DigiCert Inc")
+        );
+        assert_eq!(
+            foreign_issuer_of(&status(true, Some("Cloudflare Origin CA"))).as_deref(),
+            Some("Cloudflare Origin CA")
+        );
+    }
+
+    #[test]
+    fn our_own_certificate_is_not_foreign_in_either_spelling() {
+        // The apostrophe is a typographic hazard, not a fact about the CA. A
+        // copy that knew only one spelling would refuse to renew a genuine
+        // Let's Encrypt certificate and let it lapse.
+        assert!(foreign_issuer_of(&status(true, Some("Let's Encrypt"))).is_none());
+        assert!(foreign_issuer_of(&status(true, Some("Lets Encrypt"))).is_none());
+        assert!(foreign_issuer_of(&status(true, Some("C=US, O=Let's Encrypt, CN=R11"))).is_none());
+        assert!(foreign_issuer_of(&status(true, Some("LET'S ENCRYPT"))).is_none());
+    }
+
+    #[test]
+    fn doubt_proceeds_it_never_refuses() {
+        // Every one of these is "we do not know", and every one must read as
+        // permission. Refusing on doubt is how a real certificate lapses and a
+        // site goes dark — the opposite failure, and the worse one.
+        assert!(foreign_issuer_of(&status(false, None)).is_none(), "no certificate yet");
+        assert!(foreign_issuer_of(&status(false, Some("DigiCert Inc"))).is_none(), "no cert outranks a stale issuer");
+        assert!(foreign_issuer_of(&status(true, None)).is_none(), "unreadable certificate");
+        assert!(foreign_issuer_of(&status(true, Some(""))).is_none(), "empty issuer");
+        assert!(foreign_issuer_of(&status(true, Some("   "))).is_none(), "whitespace issuer");
+    }
+
+    #[test]
+    fn the_refusal_names_the_issuer_and_wears_the_marker() {
+        // Without the marker the sentence leaves the agent as a 500 and the
+        // panel answers it with an incident id — throwing away the only part
+        // of it that helps.
+        let msg = foreign_cert_refusal("example.com", "DigiCert Inc");
+        assert!(msg.starts_with(FOREIGN_CERT_REFUSED), "refusal lost its marker: {msg}");
+        assert!(msg.contains("DigiCert Inc"), "refusal does not name the issuer: {msg}");
+        assert!(msg.contains("example.com"), "refusal does not name the domain: {msg}");
     }
 }

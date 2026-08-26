@@ -139,12 +139,22 @@ eq "A3 the auto-fix site lookup carries a server term" \
 # per server, so both must bind the member that raised the finding — a name-only
 # lookup on a fleet renews through the wrong host's agent.
 eq "A4 it binds the scanned member, not an arbitrary host" \
-   "$(occ "$F_SCAN" '.bind(domain).bind(member.id)')" "2"
-# ⛔ A COUNT CANNOT SEE A DOOR THAT DOES NOT BIND — a third domain-keyed lookup
-# added without the server term leaves this arm at 2 and green. So each door
-# also owns a literal arm: A3 for the site read, A4b for the stack read.
+   "$(occ "$F_SCAN" '.bind(domain).bind(member.id)')" "3"
+# ⛔ A COUNT CANNOT SEE A DOOR THAT DOES NOT BIND — a fourth domain-keyed lookup
+# added without the server term leaves this arm at 3 and green. So each door
+# also owns a literal arm: A3 for the site read, A4b for the stack read, A4c for
+# the stack renewal's cooldown. THIS IS NOT BOOKKEEPING: when the stack read
+# joined, bumping A4 from 1 to 2 left it satisfied by the site door alone, and a
+# mutation that deleted the new door's server term kept A4 GREEN — only A4b
+# caught it. The count tracks the total; the literal arms hold each door.
 eq "A4b the stack fallback lookup carries a server term too" \
    "$(occ "$F_SCAN" 'FROMdocker_stacksWHERElower(domain)=lower($1)ANDserver_id=$2')" "1"
+# The cooldown counts the rows the renewal writes, and those rows are stamped
+# per host. Counting them name-only let one host's renewal mute another's for six
+# hours — a domain is unique only per server, and this query is the last one in
+# the file that had not learned it.
+eq "A4c the stack renewal cooldown counts this host's attempts, not the fleet's" \
+   "$(occ "$F_SCAN" "action='auto_fix.renew_stack_ssl'ANDtarget_name=\$1ANDserver_id=\$2")" "1"
 # The signature is what makes the id REACHABLE at all.
 eq "A5 auto_fix_safe_findings receives the member, not just its handle" \
    "$(occ "$F_SCAN" 'asyncfnauto_fix_safe_findings(pool:&PgPool,member:&FleetMember,')" "1"
@@ -344,12 +354,20 @@ echo "── D. 'Unknown' is not 'OK' ──────────────
 # tile and this page came to disagree in the first place.
 eq "D1 there is a single expiry ladder" \
    "$(occ "$F_MON" "fnexpiry_status(days_left:Option<i64>,renewal_failing:bool)->&'staticstr{")" "1"
-# Three call sites, two lists: the admin list classifies its site-backed rows and
-# its host-only rows separately, and both must use the same ladder.
+# Four call sites, two lists: the admin list classifies its site-backed rows and
+# its host-only rows separately, the per-caller list classifies its own, and the
+# OFFLINE half classifies a stack read back out of Postgres when the agent could
+# not be asked. All four must use the same ladder — a second ladder is how two
+# screens came to describe the same certificate differently.
 # ⚠ The trailing comma is what excludes the DECLARATION, whose parameter list
-# reads `days_left:` — matching on the name alone would count four.
+# reads `days_left:` — matching on the name alone would count one more.
 eq "D2 both lists use it, on every row class" \
-   "$(occ "$F_MON" 'expiry_status(days_left,')" "3"
+   "$(occ "$F_MON" 'expiry_status(days_left,')" "4"
+# ⛔ AND THE FOURTH GETS ITS OWN ARM. Raising D2 from 3 to 4 leaves it satisfied
+# by the three that were already there — a count cannot tell which member is
+# missing. This one names the offline row by the field only it carries.
+eq "D2b the offline half classifies through the same ladder and says it is stored" \
+   "$(occ "$F_MON" '"stale":true,')" "1"
 eq "D3 a missing expiry is unknown" \
    "$(occ "$F_MON" 'None=>"unknown",')" "1"
 # ⚠ absence arms, and the token is spelled two ways on purpose: the defect was
@@ -455,6 +473,47 @@ eq "F8b and the stack door stops too" \
    "$(occ "$F_SCAN" 'Auto-fix:NOTrenewingtheComposestackcertificatefor{domain}')" "1"
 eq "F9 the healer stops rather than renewing" \
    "$(occ "$F_HEAL" 'Auto-heal:NOTrenewing{domain}')" "1"
+
+# ── F-CHOKE. The doors above are a CENSUS, and a census is a promise somebody
+# has to keep. It was short twice: "ALL THREE" while the tree held five, and the
+# stack door written with no guard because nothing enumerated the others. Twenty
+# -six reachable call sites reach an ACME order — Compose deploys, git deploys,
+# template apps, four CLI commands, raw curl — and before v2.162.0 exactly three
+# asked. So the question is now ALSO asked at the two functions all of them pass
+# through, where a door added tomorrow inherits it without anyone remembering.
+# ⛔ These arms are what stop that from being deleted as "redundant".
+eq "F10 the HTTP-01 writer asks before it orders" \
+   "$(occ "$F_ASSL" 'ifletSome(issuer)=foreign_installed_issuer(domain).await{')" "2"
+# ⛔ FAIL CLOSED. Both writers take `Option<&ProvisionOpts>` and the callers that
+# never asked the question pass None — the compose deploy, the git build. If
+# absent ever came to mean "go ahead", the guard would protect only the doors
+# that did not need it.
+eq "F11 an absent option means refuse, not proceed" \
+   "$(occ "$F_ASSL" 'if!opts.map(|o|o.replace_foreign).unwrap_or(false){')" "2"
+# The same three-state reading as the panel's helper, and it CANNOT import it:
+# separate crates, no shared dependency. Both apostrophe spellings are deliberate
+# in both copies — a straight quote is a typographic accident, not a different CA.
+eq "F12 the agent reads the issuer the same way the panel does" \
+   "$([ "$(occ "$F_ASSL" "lowered.contains(\"let'sencrypt\")||lowered.contains(\"letsencrypt\")")" = 1 ] && echo yes || echo no)" "yes"
+eq "F13 no certificate on disk is not 'foreign'" \
+   "$(occ "$F_ASSL" 'if!status.has_cert{returnNone;}')" "1"
+eq "F14 an unreadable issuer is not 'foreign' either" \
+   "$(occ "$F_ASSL" 'ifissuer.is_empty(){returnNone;}')" "1"
+# ⛔ A REFUSAL IS NOT A FAULT. Everything unlabelled leaves the agent as a 500,
+# and the panel hides every agent 5xx behind an incident id — which would answer
+# the most actionable message this door produces with a reference number.
+eq "F15 the marker exists" \
+   "$(occ "$F_ASSL" 'pubconstFOREIGN_CERT_REFUSED:&str="[foreign]";')" "1"
+# ⛔ AND THE SENTENCE ACTUALLY WEARS IT. F15 and F16 pin that the machinery
+# EXISTS — the constant, and the arm that reads it — and a mutation proved that
+# is not the same as it being USED: stripping the marker off the refusal string
+# left both of them green while the refusal quietly went back to being a 500 the
+# panel answers with an incident id. The declaration and the reader can both be
+# perfect while nothing joins them.
+eq "F15b and the refusal sentence actually carries it" \
+   "$(occ "$F_ASSL" '"{FOREIGN_CERT_REFUSED}Refusing')" "1"
+eq "F16 and the marker becomes a 4xx, not an internal fault" \
+   "$(occ "$F_ASSLR" 'ifletSome(reason)=e.strip_prefix(ssl::FOREIGN_CERT_REFUSED){')" "1"
 # ⚠ s387 moved this from a bare status count to the refusal's own sentence. The
 # count went 1 -> 2 when a SECOND, unrelated 422 landed in this file (a failed
 # ACME order now answers with its reason instead of an incident id), and a count
@@ -535,12 +594,30 @@ eq "G9 and reports whether the disk was actually read" \
 eq "G10 the page surfaces that limitation instead of hiding it" \
    "$(occ "$F_CERTS" 'allCerts&&!hostScan&&(')" "1"
 
-# A certificate with no site row has no site to renew or delete, so the page must
-# not offer either — the same defect class the rest of this ship removes.
+# A certificate that belongs to neither a site nor a Let's Encrypt stack has
+# nothing on this page that could renew or delete it, so the page must not offer
+# either — the same defect class the rest of this ship removes.
 eq "G11 an unmanaged row is marked as such by the handler" \
    "$(occ "$F_MON" '"managed":false,')" "1"
-eq "G12 and the page renders no control for it" \
-   "$(occ "$F_CERTS" 'cert.site_id===null?(')" "1"
+# ⛔ THE PAGE MUST READ THE HANDLER'S ANSWER, not re-derive it. This arm used to
+# pin `cert.site_id===null?(`, which asked the same question only while a stack
+# could never be managed from here. Once one can, `site_id` is null for a row
+# that DOES have a control, and the old spelling would have hidden the very
+# button v2.162.0 adds. `managed` is the one field that means what this branch
+# needs to mean, and pinning it keeps the two ends of that wire together.
+eq "G12 and the page renders no control for a row the handler calls unmanaged" \
+   "$(occ "$F_CERTS" 'cert.managed===false?(')" "1"
+# ⛔ AND THE STACK BRANCH GETS ITS OWN ARM. G12 is satisfied by the refusal
+# branch alone; it cannot tell whether the row that IS managed reaches anything.
+# A stack has no `sites` row, so the site-shaped route could never address one —
+# posting there is how this control lied for two releases.
+eq "G13 a stack row renews through the stack route, not the site one" \
+   "$(occ "$F_CERTS" '`/stacks/${cert.stack_id}/renew-ssl`')" "1"
+# The spinner keys off an identity every controllable row actually has. Keyed on
+# `site_id`, a null-site row makes `renewingId === cert.site_id` true for every
+# such row at once, and one click spins them all.
+eq "G14 the row identity used by the controls is never null" \
+   "$(occ "$F_CERTS" 'constrowId=(cert:Certificate)=>cert.site_id??cert.stack_id??cert.domain;')" "1"
 
 echo
 echo "── H. an uploaded certificate has to name the site it secures (s395) ──"

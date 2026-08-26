@@ -1004,9 +1004,26 @@ pub async fn update(
     // Only now is the new definition the one worth keeping. The TLS columns are
     // written from the plan, which already folded "absent means keep" in Rust —
     // no COALESCE, so the statement says exactly what the row will hold.
+    // `ssl_expiry` describes the certificate serving THIS ROW'S DOMAIN in ACME
+    // mode. Both of those can change here, and when either does the recorded date
+    // stops being about anything this row still owns — a stack moved to a new
+    // domain would keep publishing the old domain's countdown, and one switched to
+    // `provided` or `none` would keep publishing a date for a certificate the
+    // panel no longer renews. NULL is this column's word for "not recorded", so
+    // that is what it becomes; the next read of the host's certificates puts a
+    // true value back.
+    //
+    // ⛔ Kept, deliberately, when neither changed. Blanking on every edit would
+    // make an ordinary YAML change erase the one answer the offline view has.
+    // `vacating` is already the file's spelling of "the domain moved" — reusing it
+    // keeps one definition rather than a second that can drift from it.
+    let keeps_expiry = tls.mode == "acme" && vacating.is_none();
+
     sqlx::query(
         "UPDATE docker_stacks SET yaml = $1, service_count = $2, domain = $3, ssl_email = $4, \
-         tls_mode = $5, tls_certificate_id = $6, updated_at = NOW() WHERE id = $7",
+         tls_mode = $5, tls_certificate_id = $6, \
+         ssl_expiry = CASE WHEN $8 THEN ssl_expiry ELSE NULL END, \
+         updated_at = NOW() WHERE id = $7",
     )
     .bind(&body.yaml)
     .bind(service_count)
@@ -1015,6 +1032,7 @@ pub async fn update(
     .bind(tls.mode)
     .bind(tls.certificate_id)
     .bind(id)
+    .bind(keeps_expiry)
     .execute(&state.db)
     .await
     .map_err(|e| internal_error("update stacks", e))?;
@@ -1213,6 +1231,148 @@ async fn stack_action(
     }
 
     Ok(Json(result))
+}
+
+
+/// POST /api/stacks/{id}/renew-ssl — reissue a Compose stack's ACME certificate
+/// on the operator's say-so.
+///
+/// The Certificates page has always shown a stack's certificate and never been
+/// able to do anything about it: both of its controls address a SITE, and a stack
+/// has no `sites` row, so the row rendered "Not managed here" over a certificate
+/// this product had issued and — since v2.161.0 — renews on a schedule. That
+/// sentence was wrong twice over, and this is the control that makes the page
+/// able to say something true.
+///
+/// A SIBLING of the scanner's `renew_stack_certificate`, deliberately not an
+/// extraction. They differ in what they owe the caller, not just in who calls:
+/// the scanner writes the activity row that IS its own cooldown and fires and
+/// clears an alert; this one owes a REFUSAL WITH A SENTENCE, which is the entire
+/// reason an operator would press a button rather than wait a week.
+pub async fn renew_ssl(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    let stack: Stack = sqlx::query_as(&format!("{STACK_SELECT} WHERE s.id = $1"))
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("stack renew ssl", e))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Stack not found"))?;
+
+    let Some(domain) = stack.domain.as_deref().map(str::trim).filter(|d| !d.is_empty()) else {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "This stack has no domain, so there is no certificate to renew.",
+        ));
+    };
+
+    // ⛔ Dispatch through the row's OWN server. A domain is unique only per
+    //    server; renewing through whichever host the caller happened to be
+    //    looking at would write a certificate on the wrong machine.
+    let agent =
+        crate::helpers::agent_for_site_server(&state, Some(stack.server_id), domain).await?;
+
+    // The mode, through the one spelling of the rule.
+    let mode = effective_tls_mode(stack.tls_mode.as_deref(), stack.ssl_email.as_deref());
+    if mode != "acme" {
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!(
+                "{domain} is served in '{mode}' mode, not ACME. DockPanel reissues only the \
+                 Let's Encrypt certificates it obtains itself — a registered certificate is \
+                 replaced from the Certificates page, and a stack with no TLS has nothing to \
+                 renew."
+            ),
+        ));
+    }
+
+    let Some(contact) = stack.ssl_email.as_deref().map(str::trim).filter(|e| !e.is_empty()) else {
+        return Err(err(
+            StatusCode::PRECONDITION_FAILED,
+            "This stack is in ACME mode with no contact address, and a certificate authority \
+             will not accept an order without one. Add an address to the stack first.",
+        ));
+    };
+
+    // ⛔ THE ISSUER GUARD. The mode above is a DATABASE COLUMN; the thing about to
+    //    be overwritten is a FILE, and the column knows nothing about it. A
+    //    purchased certificate reaches that path by more than one route, and the
+    //    registry migration backfilled every stack carrying an address to `acme`,
+    //    so the mode guard waves all of them through.
+    //
+    //    `None` means "not proven foreign" and MUST proceed: refusing because an
+    //    agent hiccuped would let a real certificate lapse.
+    if let Some(issuer) = crate::helpers::foreign_cert_issuer(&agent, domain).await {
+        return Err(err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!(
+                "The certificate on {domain} was not issued by DockPanel (issuer: {issuer}). \
+                 Reissuing would replace it with a Let's Encrypt certificate. Renew it wherever \
+                 it was issued, or install a replacement under Certificates."
+            ),
+        ));
+    }
+
+    // The agent must be new enough to accept a renewal that describes no vhost.
+    // FROZEN at the release that taught it that; it names a capability, not the
+    // current version.
+    require_agent_at_least(
+        &agent,
+        super::tls_certificates::STACK_RENEWAL_MIN_AGENT,
+        "Renewing a Compose stack's certificate",
+    )
+    .await?;
+
+    // ⛔ NO `runtime` KEY. Its absence is the contract with the agent's in-place
+    //    branch: the panel cannot describe a stack's vhost (only the agent knows
+    //    the published port, which it derives from the compose file), and the
+    //    certificate paths do not move, so the agent reloads rather than
+    //    re-rendering. Sending one would publish a proxy vhost with no upstream
+    //    and take the stack off the air to install a certificate.
+    let result = agent
+        .post_long(
+            &format!("/ssl/{domain}/renew"),
+            Some(serde_json::json!({ "email": contact })),
+            crate::routes::ssl::DNS01_ORDER_TIMEOUT_SECS,
+        )
+        .await
+        .map_err(|e| agent_error("SSL renewal", e))?;
+
+    // Same parse as every other door: the agent prints a `time` crate Display,
+    // and the column is TIMESTAMPTZ.
+    let expiry = result
+        .get("expiry")
+        .and_then(|x: &serde_json::Value| x.as_str())
+        .and_then(crate::helpers::parse_agent_cert_expiry);
+    if let Some(exp) = expiry {
+        let _ = sqlx::query("UPDATE docker_stacks SET ssl_expiry = $1 WHERE id = $2")
+            .bind(exp)
+            .bind(id)
+            .execute(&state.db)
+            .await;
+    }
+
+    activity::log_activity(
+        &state.db,
+        claims.sub,
+        &claims.email,
+        "stack.renew_ssl",
+        Some("stack"),
+        Some(domain),
+        Some(&format!("stack_id={id}")),
+        None,
+    )
+    .await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "domain": domain,
+        "expiry": expiry,
+    })))
 }
 
 #[cfg(test)]

@@ -4,6 +4,79 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.162.0]
+
+### Security — every ACME order now asks whose certificate it is about to replace
+
+`provision_cert` writes `fullchain.pem` and `privkey.pem` into
+`/etc/dockpanel/ssl/<domain>/` unconditionally, so an ACME order aimed at a
+domain that already carries somebody else's certificate does not refresh it — it
+**destroys** it. A purchased wildcard, a Cloudflare Origin CA certificate, a
+corporate PKI certificate: replaced with a ninety-day Let's Encrypt one, and for
+a domain that cannot answer the challenge from this box the order then fails and
+leaves neither.
+
+Twenty-six reachable paths in this product order a certificate. **Three of them
+asked.** The rest — Compose stack create, update and rollback; template-app and
+Git deploys, including the unattended rollback watchdog and the scheduled and
+webhook deploys; `dockpanel ssl provision`, `dockpanel sites create --ssl` and
+both halves of `dockpanel apply`; and the panel's own *Provision SSL* button —
+did not. The census that was supposed to enumerate them had been short twice.
+
+**The question is now asked where all twenty-six converge**, inside the two
+functions that write the file, so a path added tomorrow inherits the guard
+without anyone having to remember. It fails closed: a caller that supplies no
+options at all — which is how the deploy paths call it — refuses. Doubt still
+proceeds: no certificate on disk, an unreadable file or an issuer the parser
+cannot produce are all "not proven foreign", because refusing on doubt is how a
+real certificate lapses and a site goes dark.
+
+`dockpanel ssl provision --force` replaces one deliberately, after the refusal
+has named the issuer that would be lost.
+
+The worst case this closes is the DNS-01 wildcard door, whose write target is the
+Cloudflare **zone apex** — the directory every sibling vhost in that zone points
+at — so a single unguarded order there could have taken an unbounded number of
+sites down at once.
+
+### Fixed — the mail door's certificate guard was absent for exactly the domains that needed it
+
+`provision_mail_host_cert` asked the issuer question inside `if let Some(site)`,
+so it asked only about a domain that owns a `sites` row. A Compose stack's domain
+**can never** own one, and a Docker app's cannot either — so for the population
+with no other protection here, a check that read as present was doing nothing.
+It is now asked for every mail host, and still skipped only where the site's own
+columns already settle it.
+
+### Added — the panel can say when a Compose stack's certificate expires
+
+`docker_stacks` gained an `ssl_expiry` column (migration 118). It is written when
+the scheduled renewal succeeds and bootstrapped from the agent's own record the
+first time an administrator opens **Certificates**; it is cleared when a stack
+changes domain or leaves ACME mode, because a date about a certificate the row no
+longer owns is worse than no date at all.
+
+The visible payoff is an outage: when a server's agent cannot be reached, its
+site certificates stayed on the page — the panel stores their expiry — while
+every stack certificate simply **vanished**, at exactly the moment an operator is
+most likely to be looking. They are now listed from the panel's own record and
+marked as such.
+
+### Fixed — the Certificates page can finally do something about a stack's certificate
+
+The page rendered *"Not managed here"* over a certificate DockPanel had issued
+and, since 2.161.0, renews every week. Both of its controls address a site, and a
+stack has no site row. Stack rows now carry a **Renew** button with a route that
+can reach them, guarded by the same mode and issuer checks as the scheduled
+renewal, and refusing with a sentence rather than a reference number.
+
+### Fixed — one host's stack renewal could mute another's
+
+The six-hour cooldown added in 2.161.0 counted attempts by domain alone while the
+lookup beside it is scoped per server. On a fleet carrying the same domain on two
+hosts they shared one budget, so a success on one could hold the other's renewal
+back.
+
 ## [2.161.0]
 
 ### Fixed — a Compose stack's Let's Encrypt certificate is now renewed on a schedule

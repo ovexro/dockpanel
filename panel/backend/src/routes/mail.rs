@@ -1205,18 +1205,34 @@ async fn provision_mail_host_cert(
         .await
         .unwrap_or(None);
 
-    if let Some((site_id, site_owner, ssl_enabled, ssl_wildcard, ssl_challenge)) = site {
-        // Only asked when the columns did not already settle it — it is a round
-        // trip to the box, and a wildcard is decided from the row alone.
-        let foreign = if ssl_enabled
-            && ssl_wildcard != Some(true)
-            && ssl_challenge.as_deref() != Some("dns-01")
-        {
-            crate::helpers::foreign_cert_issuer(agent, domain).await
-        } else {
-            None
-        };
+    // ⛔ ASKED FOR EVERY MAIL HOST, not only for one that owns a site row — and
+    //    that placement is the whole repair. The issuer question used to live
+    //    INSIDE the `if let` below, so it read as "this door asks" while asking
+    //    nothing at all for a domain with no `sites` row. That is not a rare
+    //    shape: `domain_claim::find_occupant` guarantees a Compose stack's domain
+    //    can never own a `sites` row, and a Docker app's cannot either — so for
+    //    exactly the population with no other protection here, the check that
+    //    looked present was absent, and the order below replaced whatever was on
+    //    disk.
+    //
+    //    Still skipped when the ROW already settles it: a wildcard or a DNS-01
+    //    site is decided from its columns alone, and this is a round trip to the
+    //    box. With no row there is nothing to settle it, so the file is asked.
+    let settled_by_row = match &site {
+        Some((_, _, ssl_enabled, ssl_wildcard, ssl_challenge)) => {
+            !(*ssl_enabled
+                && *ssl_wildcard != Some(true)
+                && ssl_challenge.as_deref() != Some("dns-01"))
+        }
+        None => false,
+    };
+    let foreign = if settled_by_row {
+        None
+    } else {
+        crate::helpers::foreign_cert_issuer(agent, domain).await
+    };
 
+    if let Some((site_id, site_owner, ssl_enabled, ssl_wildcard, ssl_challenge)) = site {
         if let MailCertVerdict::Refuse(blocker) = mail_cert_verdict(
             ssl_enabled,
             ssl_wildcard,
@@ -1226,6 +1242,18 @@ async fn provision_mail_host_cert(
             announce_mail_cert_conflict(db, domain, site_id, site_owner, server_id, blocker).await;
             return;
         }
+    } else if let Some(issuer) = foreign {
+        // A REFUSAL AND NOTHING ELSE. The alerting sibling cannot serve this
+        // branch: `announce_mail_cert_conflict` takes a non-optional site id and
+        // owner and hands them to the alert as its subject, and here there is no
+        // site to name. Recording that gap is a smaller wrong than inventing an
+        // id — the destructive outcome is stopped either way, and the operator
+        // still gets the sentence in the log.
+        tracing::warn!(
+            "Auto-SSL (mail): not ordering for {domain} — the certificate installed there was \
+             issued by {issuer}, not by DockPanel, and ordering would replace it"
+        );
+        return;
     }
 
     match agent.post(&format!("/ssl/provision/{domain}"), Some(serde_json::json!({

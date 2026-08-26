@@ -1081,6 +1081,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/stacks/{id}/start", post(stacks::start))
         .route("/api/stacks/{id}/stop", post(stacks::stop))
         .route("/api/stacks/{id}/restart", post(stacks::restart))
+        // The Certificates page's control for a stack's certificate. A stack has
+        // no `sites` row, so the site-shaped renew route could never address one.
+        .route("/api/stacks/{id}/renew-ssl", post(stacks::renew_ssl))
         // TLS certificate registry — named certificates a stack claims by alias (#104)
         .route("/api/tls-certificates", get(tls_certificates::list).post(tls_certificates::create))
         .route("/api/tls-certificates/{id}", put(tls_certificates::replace).delete(tls_certificates::remove))

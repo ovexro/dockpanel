@@ -200,7 +200,28 @@ hasnt "E3 no RESTRICT — a blocking key is a boot that cannot happen" "$FMG" 'R
 has "E4 the backfill derives the mode from the only signal that existed" "$FMG" "SETtls_mode=CASEWHENssl_emailISNOTNULLANDssl_email<>''THEN'acme'ELSE'none'END"
 has "E4 …and only where nothing is recorded yet" "$FMG" 'WHEREtls_modeISNULL'
 has "E5 an alias is unique per server" "$FMG" 'UNIQUE(server_id,alias)'
-eq "E6 this migration is the newest on disk" "$(ls panel/backend/migrations/*.sql | sort | tail -1)" "$MIG"
+# E6 was "this migration is the newest on disk", which said what it meant only
+# while nothing had landed since — it went red on the first later migration
+# (v2.162.0's stack ssl_expiry) with nothing wrong. The DURABLE form of the same
+# invariant is that no later migration re-declares what this suite pins above.
+#
+# ⛔ Reads STRIPPED sql. Every other arm here does, and for the reason the header
+# gives: against raw text this arm would be satisfied — or falsely tripped — by a
+# later migration's own PROSE describing what it deliberately does not do.
+# ⛔ Per STATEMENT, not per file: a migration that alters docker_stacks for an
+# unrelated reason and mentions a pinned column in a different statement is not a
+# redeclaration. Flattened first, so the repo's two-line ALTER idiom still matches.
+# ⛔ No `producer | grep -q` — pipefail is on and grep -q SIGPIPEs the producer.
+e6_redeclarations() {
+  local stmts
+  stmts=$(code "$1" | tr -d ' \n\\' | tr ';' '\n')
+  printf '%s\n' "$stmts" | /usr/bin/grep -cE 'ALTERTABLEdocker_stacks.*(tls_mode|tls_certificate_id)|(ALTER|DROP)TABLEtls_certificates' || true
+}
+E6_HITS=0
+for _later in $(ls panel/backend/migrations/*.sql | sort | awk -v m="$MIG" '$0 > m'); do
+  E6_HITS=$(( E6_HITS + $(e6_redeclarations "$_later") ))
+done
+eq "E6 no later migration re-declares the columns this suite pins" "$E6_HITS" "0"
 
 echo "== §F  the agent honours the mode and keeps the registry apart =="
 FD=$(flat "$D")

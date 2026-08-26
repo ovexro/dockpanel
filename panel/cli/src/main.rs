@@ -246,6 +246,10 @@ enum SslCmd {
         /// Proxy port (for proxy runtime)
         #[arg(long)]
         proxy_port: Option<u16>,
+        /// Issue even if the certificate already installed for this domain was
+        /// obtained somewhere else — it will be REPLACED.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -434,7 +438,8 @@ async fn main() {
                 email,
                 runtime,
                 proxy_port,
-            } => commands::ssl::cmd_ssl_provision(&token, &domain, &email, &runtime, proxy_port).await,
+                force,
+            } => commands::ssl::cmd_ssl_provision(&token, &domain, &email, &runtime, proxy_port, force).await,
         },
         Commands::Backup { command } => match command {
             BackupCmd::Create { domain } => commands::backup::cmd_backup_create(&token, &domain).await,

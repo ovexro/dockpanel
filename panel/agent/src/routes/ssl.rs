@@ -44,6 +44,17 @@ fn ca_or_internal(e: String) -> (StatusCode, Json<serde_json::Value>) {
             Json(serde_json::json!({ "error": reason, "code": "dns_provider_failed" })),
         );
     }
+    // A REFUSAL IS NOT A FAULT, and it must not arrive as one. Nothing went
+    // wrong here: the agent looked at what is installed, found a certificate this
+    // product did not issue, and declined to replace it. A 4xx says that; the 500
+    // below would send the panel's own rule into action and answer the most
+    // actionable message this door produces with an incident id.
+    if let Some(reason) = e.strip_prefix(ssl::FOREIGN_CERT_REFUSED) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": reason, "code": "foreign_certificate" })),
+        );
+    }
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(serde_json::json!({ "error": e })),
@@ -65,6 +76,11 @@ struct ProvisionRequest {
     /// RFC 9773 `replaces` hint so the CA can correlate issuance history.
     #[serde(default)]
     replaces_pem: Option<String>,
+    /// Order even over a certificate this product demonstrably did not issue.
+    /// ⛔ Defaults to FALSE, which is what makes an older panel — and any caller
+    /// that never learned to ask — fail closed at the writer.
+    #[serde(default)]
+    force: bool,
 }
 
 /// POST /ssl/provision/{domain} — Provision Let's Encrypt cert and enable SSL.
@@ -92,6 +108,9 @@ async fn provision(
     let opts = ssl::ProvisionOpts {
         profile: body.profile.as_deref(),
         replaces_pem: body.replaces_pem.as_deref(),
+        // The operator's explicit intent, and the only way past the writer's
+        // foreign-certificate refusal.
+        replace_foreign: body.force,
     };
     // Only what the CA actually said is labelled. The panel hides every agent 5xx
     // behind an incident id — correctly, because this route also fails for reasons
@@ -370,6 +389,13 @@ async fn renew(
     let opts = ssl::ProvisionOpts {
         profile: body.profile.as_deref(),
         replaces_pem: replaces_pem.as_deref(),
+        // ⛔ NEVER on a renewal, and it costs this door nothing. A renewal aimed
+        //    at a certificate this product issued reads a Let's Encrypt issuer
+        //    and passes the writer's check untouched; a renewal aimed at anything
+        //    else is the destructive case the check exists for, whatever the
+        //    panel believed when it called. There is no renewal that needs to
+        //    replace a stranger's certificate.
+        replace_foreign: false,
     };
 
     let cert_info = tokio::time::timeout(
@@ -597,6 +623,11 @@ struct Dns01ProvisionRequest {
     profile: Option<String>,
     #[serde(default)]
     replaces_pem: Option<String>,
+    /// Order even over a certificate this product demonstrably did not issue.
+    /// ⛔ Defaults to FALSE, which is what makes an older panel — and any caller
+    /// that never learned to ask — fail closed at the writer.
+    #[serde(default)]
+    force: bool,
 }
 
 /// POST /ssl/provision-dns01/{domain} — Provision cert via DNS-01 (Cloudflare).
@@ -619,6 +650,7 @@ async fn provision_dns01(
     let opts = ssl::ProvisionOpts {
         profile: body.profile.as_deref(),
         replaces_pem: body.replaces_pem.as_deref(),
+        replace_foreign: body.force,
     };
     let cert_info = ssl::provision_cert_dns01(
         &account,

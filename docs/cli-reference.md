@@ -327,15 +327,14 @@ dockpanel ssl status example.com
 ```
 
 ```
-SSL CERTIFICATE
-─────────────────────────────────
-Domain:      example.com
-Issuer:      Let's Encrypt
-Valid From:  2026-03-15
-Expires:     2026-06-13
-Days Left:   85
-Auto-Renew:  yes
+SSL Certificate: example.com
+  Issuer:      R11
+  Expires:     2026-06-13 09:41:07.0 +00:00:00
+  Remaining:   85 days
 ```
+
+The days remaining are coloured: green above 30, amber above 7, red at or below.
+A domain with no certificate prints `No SSL certificate for example.com`.
 
 #### `dockpanel ssl provision`
 
@@ -351,6 +350,28 @@ dockpanel ssl provision example.com --email admin@example.com --runtime php
 | `--email` | Yes | | Let's Encrypt email |
 | `--runtime` | No | `static` | Site runtime: `static`, `php`, or `proxy` |
 | `--proxy-port` | No | | Upstream port (for proxy runtime) |
+| `--force` | No | | Issue even if the installed certificate came from elsewhere — it will be **replaced** |
+
+**Ordering over somebody else's certificate is refused.** Provisioning writes
+`fullchain.pem` and `privkey.pem` into `/etc/dockpanel/ssl/<domain>/`, so a
+domain already serving a purchased, Origin CA or corporate PKI certificate would
+have it destroyed rather than refreshed. The agent checks the installed
+certificate's issuer first and refuses by name:
+
+```
+Refusing to issue a Let's Encrypt certificate for example.com: the certificate
+already installed there was issued by DigiCert Inc, not by DockPanel, and
+ordering would overwrite it. Renew it wherever it was issued, or pass --force if
+you intend to replace it.
+```
+
+A certificate whose issuer cannot be read is **not** treated as somebody else's —
+refusing on doubt is how a real certificate lapses. The same guard covers
+`dockpanel sites create --ssl` and `dockpanel apply`, because it lives at the
+point where the file is written rather than at each command.
+
+> There is no `dockpanel ssl renew`. Renewal is the panel's job — the weekly
+> security scan reissues what it owns, including Compose stacks since 2.161.0.
 
 ---
 

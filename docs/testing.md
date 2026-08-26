@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.161.0.** The version stamp, the template count and every
+> **Reflects v2.162.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -372,7 +372,7 @@ found things from coming back.
 
 **On every commit** (`ci.yml`, `codeql.yml`):
 
-- **695 unit tests** across the crates — 437 in the backend, 258 in the agent.
+- **701 unit tests** across the crates — 437 in the backend, 264 in the agent.
   (The CLI crate carries none of its own today.) Re-derive rather than trust
   this line: `for c in agent backend cli; do (cd panel/$c && cargo test
   --release); done` and sum the `test result:` lines. Nothing recomputes this
@@ -402,12 +402,12 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Ninety-three suites, **3409 assertions**, all green at the current commit:
+survivable. Ninety-three suites, **3422 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
 | `carry-sweep-pin-e2e.sh` | 88 |
-| `ssl-controls-pin-e2e.sh` | 121 |
+| `ssl-controls-pin-e2e.sh` | 133 |
 | `db-import-pin-e2e.sh` | 53 |
 | `mail-smtp-dkim-pin-e2e.sh` | 25 |
 | `mail-auth-autosleep-pin-e2e.sh` | 28 |
@@ -497,7 +497,7 @@ survivable. Ninety-three suites, **3409 assertions**, all green at the current c
 | `ssrf-url-guard-pin-e2e.sh` | 8 |
 | `upload-refusal-pin-e2e.sh` | 23 |
 | `rename-carries-backups-pin-e2e.sh` | 43 |
-| `monitors-honest-reads-pin-e2e.sh` | 31 |
+| `monitors-honest-reads-pin-e2e.sh` | 32 |
 | `certificate-registry-pin-e2e.sh` | 126 |
 
 **On a schedule, from outside** (`live-surfaces.yml`, daily). Every layer above
