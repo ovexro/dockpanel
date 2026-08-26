@@ -1045,8 +1045,13 @@ fn offset_to_chrono(dt: time::OffsetDateTime) -> Option<chrono::DateTime<chrono:
 ///   survive any one stack's removal.
 /// - The per-domain renew door replaces whatever sits at the domain's path with
 ///   an ACME certificate. The registry is never at that path, so no renewal
-///   door can reach a certificate the operator supplied — nothing renews a
-///   stack's certificate today, and this keeps it that way by construction.
+///   door can reach a certificate the operator supplied. ⚠ Since v2.161.0 the
+///   per-domain path IS walked on a schedule — the panel's
+///   `security_scanner::renew_stack_certificate` renews a stack's ACME
+///   certificate weekly — so this placement is no longer belt-and-braces over a
+///   door nobody opens. It is the structural half of the guarantee; the other
+///   half is the panel declining any stack whose effective mode is not `acme`,
+///   and neither half may be removed on the assumption the other holds.
 ///
 /// `/etc/dockpanel` is already in the unit's writable set, so the new root
 /// needs no sandbox change.

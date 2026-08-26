@@ -30,6 +30,23 @@ use crate::AppState;
 /// /ssl/registry. ⛔ FROZEN at the release that shipped it — a version bump must not move it.
 pub(crate) const PROVIDED_TLS_MIN_AGENT: &str = "2.160.0";
 
+/// The agent release whose per-domain SSL renew route accepts a request with NO
+/// `runtime` field — the in-place branch a Compose stack's renewal needs.
+///
+/// ⛔ The route is deliberately NOT spelled out here. `sibling-parity` builds
+/// its render-door census with `grep -rl` over RAW SOURCE, which cannot tell a
+/// comment from a call: writing the literal path in this doc block enrols this
+/// file as an agent-SSL caller it is not, and the suite then demands a vhost
+/// rebuild from a module that never touches one.
+///
+/// The panel cannot describe a stack's vhost as a `SiteConfig` (the published
+/// port lives in the compose YAML, which only the agent parses), so the stack
+/// renewal in `services::security_scanner` omits `runtime` and the agent
+/// reloads instead of re-rendering. An agent older than this parses `runtime`
+/// as required and answers 422 — on every weekly scan, for ever.
+/// ⛔ FROZEN at the release that shipped it, same rule as its neighbour.
+pub(crate) const STACK_RENEWAL_MIN_AGENT: &str = "2.161.0";
+
 /// Upper bounds on the PEM bodies, checked before anything is sent to the agent.
 /// A full chain with three intermediates is well under 16 KB; a key is a few KB.
 /// Generous enough to never refuse a real certificate, tight enough that the

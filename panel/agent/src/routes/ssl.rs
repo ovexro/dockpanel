@@ -322,7 +322,11 @@ async fn upload_cert(
 #[derive(Deserialize)]
 struct RenewRequest {
     email: String,
-    runtime: String,
+    /// Absent when the caller has no `SiteConfig` to describe this domain with —
+    /// a Compose stack's certificate, which has no `sites` row behind it. See
+    /// `renew` for what its absence means.
+    #[serde(default)]
+    runtime: Option<String>,
     root: Option<String>,
     proxy_port: Option<u16>,
     php_socket: Option<String>,
@@ -391,36 +395,70 @@ async fn renew(
         (status, body)
     })?;
 
-    // Regenerate nginx config so any config changes since the original
-    // provision are picked up.
-    let site_config = SiteConfig {
-        runtime: body.runtime,
-        root: body.root,
-        proxy_port: body.proxy_port,
-        php_socket: body.php_socket,
-        ssl: None,
-        ssl_cert: None,
-        ssl_key: None,
-        rate_limit: None,
-        max_upload_mb: None,
-        php_memory_mb: None,
-        php_max_workers: None,
-        custom_nginx: None,
-        php_preset: None,
-        app_command: None,
-        fastcgi_cache: None,
-        redis_cache: None,
-        redis_db: None,
-        waf_enabled: None,
-        waf_mode: None,
-        csp_policy: None,
-        permissions_policy: None,
-        bot_protection: None,
-    };
+    // `runtime` is the caller saying "I can describe this domain's vhost". When
+    // it does, the vhost is rebuilt; when it doesn't, nginx is only told to
+    // re-read what is already on disk.
+    //
+    // The renewal itself never needs the rebuild: `provision_cert` overwrites
+    // fullchain.pem and privkey.pem inside the same `/etc/dockpanel/ssl/{domain}`
+    // the existing vhost already names, so the paths did not move. The rebuild
+    // exists to pick up config changes made since the original provision — which
+    // is only meaningful for a domain the panel holds a config FOR.
+    //
+    // A Compose stack is the domain it isn't. Its acme vhost is a proxy whose
+    // published port is derived HERE, from the compose file, and the panel has no
+    // row to send: renewing it from an invented `SiteConfig` would overwrite a
+    // working proxy with one carrying `proxy_port: None` and take the stack off
+    // the air to install a certificate. So the panel sends no `runtime`, and the
+    // absence is the instruction.
     let mut canonical = None;
-    match ssl::enable_ssl_for_site(&state.templates, &domain, &site_config).await {
-        Ok(outcome) => canonical = Some(outcome),
-        Err(e) => tracing::warn!("Nginx reload after renewal failed for {domain}: {e}"),
+    match body.runtime {
+        // Regenerate nginx config so any config changes since the original
+        // provision are picked up.
+        Some(runtime) => {
+            let site_config = SiteConfig {
+                runtime,
+                root: body.root,
+                proxy_port: body.proxy_port,
+                php_socket: body.php_socket,
+                ssl: None,
+                ssl_cert: None,
+                ssl_key: None,
+                rate_limit: None,
+                max_upload_mb: None,
+                php_memory_mb: None,
+                php_max_workers: None,
+                custom_nginx: None,
+                php_preset: None,
+                app_command: None,
+                fastcgi_cache: None,
+                redis_cache: None,
+                redis_db: None,
+                waf_enabled: None,
+                waf_mode: None,
+                csp_policy: None,
+                permissions_policy: None,
+                bot_protection: None,
+            };
+            match ssl::enable_ssl_for_site(&state.templates, &domain, &site_config).await {
+                Ok(outcome) => canonical = Some(outcome),
+                Err(e) => tracing::warn!("Nginx reload after renewal failed for {domain}: {e}"),
+            }
+        }
+        // Nothing was re-rendered, so there is no canonical URL to report having
+        // moved either — `canonical` stays None rather than being invented.
+        //
+        // And a reload that fails is NOT a failed renewal. The certificate is
+        // already written; answering with an error would have the panel record
+        // the renewal as failed and order a replacement from the CA on its next
+        // scan — burning rate limit every week over an nginx that needs one
+        // `reload`, and never fixing the reload. A warning is the whole remedy
+        // this door owes.
+        None => {
+            if let Err(e) = crate::services::nginx::reload().await {
+                tracing::warn!("Nginx reload after in-place renewal failed for {domain}: {e}");
+            }
+        }
     }
 
     tracing::info!("SSL certificate renewed for {domain}");
@@ -663,4 +701,47 @@ pub fn router() -> Router<AppState> {
         .route("/ssl/upload", post(upload_cert))
         .route("/ssl/{domain}/renew", post(renew))
         .route("/ssl/{domain}", delete(revoke))
+}
+
+// ── the renewal payload, from the panel's side of the wire ──────────────────
+//
+// At the END of the file on purpose: a `#[cfg(test)]` module in the middle of a
+// source file truncates every pin arm that reads the production body below it
+// (dockpanel-ops-p7), and this file is a subject of four suites.
+#[cfg(test)]
+mod renew_request_tests {
+    use super::*;
+
+    // The absence of `runtime` is a cross-crate contract, so this is the panel's
+    // stack payload byte for byte — an `email` and nothing else. Written to fail
+    // if a future edit makes the field required again, which would 422 every
+    // stack renewal the scanner attempts, weekly, on every install.
+    #[test]
+    fn a_payload_without_runtime_parses_and_asks_for_no_re_render() {
+        let body: RenewRequest =
+            serde_json::from_str(r#"{"email":"ops@example.com"}"#).expect("stack payload parses");
+
+        assert_eq!(body.email, "ops@example.com");
+        assert!(body.runtime.is_none(), "absent runtime must stay absent");
+        // The rest of the vhost description is absent with it — there is nothing
+        // here a SiteConfig could have been built from.
+        assert!(body.root.is_none());
+        assert!(body.proxy_port.is_none());
+        assert!(body.php_socket.is_none());
+        assert!(body.profile.is_none());
+    }
+
+    // And the site payload is unchanged: a caller that CAN describe the vhost
+    // still gets the re-render arm.
+    #[test]
+    fn a_payload_carrying_runtime_still_describes_a_vhost() {
+        let body: RenewRequest = serde_json::from_str(
+            r#"{"email":"ops@example.com","runtime":"php","root":"/var/www/x","php_socket":"unix:/run/php/php8.3-fpm.sock","profile":"classic"}"#,
+        )
+        .expect("site payload parses");
+
+        assert_eq!(body.runtime.as_deref(), Some("php"));
+        assert_eq!(body.root.as_deref(), Some("/var/www/x"));
+        assert_eq!(body.profile.as_deref(), Some("classic"));
+    }
 }

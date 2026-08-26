@@ -389,7 +389,7 @@ async fn scan_ssl_expiry() -> Vec<Finding> {
                 title: format!("SSL certificate expiring: {domain}"),
                 description: format!("Certificate expires {date_str}"),
                 file_path: Some(cert_path),
-                remediation: Some("Renew the SSL certificate via the Sites panel".into()),
+                remediation: Some("Renew the SSL certificate from the panel".into()),
             });
         }
     }

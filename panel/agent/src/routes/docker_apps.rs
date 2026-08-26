@@ -301,9 +301,13 @@ impl<'a> TlsIntent<'a> {
 /// was never put to the reporter and must not be presented as agreed. Until
 /// v2.157.0 this comment listed it as accepted point 3 and omitted SAN
 /// validation entirely — inverting which of the two a contributor would treat
-/// as settled. The thread is the record: read it before building. (Nothing
-/// renews a stack's certificate today anyway, and the registry root sits
-/// outside every renewal path by construction — see `ssl::SSL_REGISTRY_DIR`.)
+/// as settled. The thread is the record: read it before building. (Since
+/// v2.161.0 a stack's ACME certificate IS renewed on a schedule — the panel's
+/// `security_scanner::renew_stack_certificate` drives it — so the suppression
+/// this paragraph calls unbuilt now has something real to suppress. The
+/// registry root still sits outside every renewal path by construction, see
+/// `ssl::SSL_REGISTRY_DIR`, and the panel-side guard declines any stack whose
+/// effective mode is not `acme`.)
 async fn expose_domain(
     templates: &tera::Tera,
     domain: &str,

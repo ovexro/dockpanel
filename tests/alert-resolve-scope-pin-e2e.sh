@@ -665,6 +665,51 @@ for pair in "HEALER:$HEALER" "SCANNER:$SCANNER"; do
   fi
 done
 
+# ⭐ H8 — THE STACK RENEWAL'S FIRE AND RESOLVE, WHICH H7 STRUCTURALLY CANNOT SEE.
+#
+# H7 greps the WHOLE FILE for `resolve_ssl_renewal_failure`, so the SITE arm
+# satisfies it for the whole module — classic sibling satisfaction. The Compose
+# stack arm added at v2.161.0 cannot use that resolver at all: it takes a
+# non-optional `site_id` (a stack has none) and iterates a fixed key array that
+# cannot hold a domain-bearing composite. It therefore fires and resolves through
+# `resolve_alert` with its own key, and if those two spellings ever drift the
+# alert fires and never clears — thirty-minute escalations for a week about a
+# certificate that is already healthy. That is the exact defect
+# `resolve_ssl_renewal_failure` was written for, reached by a different door.
+#
+# So this arm reads the stack function's OWN body, and requires the key to come
+# from the SHARED function on both sides — a literal on either side is drift
+# waiting to happen.
+if S=$(subj "$SCANNER"); then
+  STACKFN=$(fnbody "$S" renew_stack_certificate)
+  STACKLINES=$(grep -c . <<< "$STACKFN")
+  # Floor: an empty or mis-anchored body would satisfy every absence below and
+  # print green for a function that no longer exists (lesson #143).
+  if [ "$STACKLINES" -ge 40 ]; then
+    ok "H8 renew_stack_certificate body extracted — $STACKLINES lines"
+
+    KEYUSES=$(grep -oF 'stack_renewal_state_key(domain)' <<< "$STACKFN" | wc -l | tr -d ' ')
+    if [ "$KEYUSES" = "2" ]; then
+      ok "H8a the stack alert's key is computed once and used by BOTH the fire and the resolve"
+    else
+      bad "H8a the stack alert's key is computed once and used by BOTH the fire and the resolve" \
+          "expected 2 uses of stack_renewal_state_key(domain), got $KEYUSES — a hand-spelled key on either side is a fire that never clears"
+    fi
+
+    if grep -qF 'resolve_alert(' <<< "$STACKFN"; then
+      ok "H8b the stack renewal-success path clears its own alert"
+    else
+      bad "H8b the stack renewal-success path clears its own alert" \
+          "this loop renews and never resolves — the alert escalates every 30 minutes for a week after a success"
+    fi
+  else
+    bad "H8 renew_stack_certificate body extracted" \
+        "got $STACKLINES lines, expected >= 40 — the anchor has moved and §H8 is measuring nothing"
+  fi
+else
+  bad "H8 $SCANNER is readable" "subject empty"
+fi
+
 echo
 echo "== §I  a disabled alert type is not a fired alert =="
 

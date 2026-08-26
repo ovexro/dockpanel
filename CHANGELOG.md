@@ -4,6 +4,48 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.161.0]
+
+### Fixed — a Compose stack's Let's Encrypt certificate is now renewed on a schedule
+
+A stack that claimed a domain in ACME mode received a ninety-day certificate and
+nothing ever re-ordered it. Both scheduled renewers select `FROM sites`, and a
+stack's domain can never own a `sites` row — `domain_claim` reserves the name for
+the stack — so neither could ever reach one. The certificate was reissued only as
+a side effect of an operator saving the stack, because the deploy path orders
+unconditionally. A stack edited more often than every ninety days therefore never
+lapsed by accident, and one left alone lapsed with certainty.
+
+It was not silent, which made it worse. The agent's weekly walk of
+`/etc/dockpanel/ssl` **did** raise a critical `ssl_expiry` finding naming the
+domain — and the operator then met two dead ends: remediation text pointing at
+the Sites panel, where the certificate is not, and a Diagnostics **Fix** button
+that answered *"this is a certificate DockPanel does not manage"* about a
+certificate DockPanel itself had issued.
+
+**What now happens.** The weekly security scan — the only automatic renewal on a
+stock install, since auto-healing is opt-in and seeded off — resolves a finding
+it cannot match to a site against `docker_stacks` on the host that raised it, and
+renews the certificate in place. The agent reloads nginx rather than re-rendering
+a vhost the panel cannot describe, because only the agent knows a stack's
+published port. A failure raises an alert that a later success **clears**.
+
+**What it will not touch.** A stack serving a registered certificate is declined:
+its certificate is the operator's own and lives outside the per-domain tree. And
+as at every other renewal door, the installed certificate's **issuer** is checked
+first — a certificate DockPanel did not issue is never replaced, however the
+database describes the stack. A certificate whose issuer cannot be read is still
+renewed, because refusing on doubt would let a real certificate lapse.
+
+### Fixed — the Diagnostics fix button no longer disowns a certificate the panel issued
+
+The "who claims this domain" lookup behind that refusal knew about mail domains,
+Git deploys and Docker apps, but not Compose stacks, so a stack's domain fell
+through to the sentence reserved for certificates from outside DockPanel. Stacks
+now join that list, matched case-insensitively like every other reader of the
+column. A stack serving a registered certificate gets its own sentence: the
+expiring file is a leftover, nothing serves it, and removing it is safe.
+
 ## [2.160.0]
 
 ### Added — a certificate can be registered once and referenced by name when a stack claims a domain (#104)

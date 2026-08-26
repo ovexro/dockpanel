@@ -87,6 +87,7 @@ SSL=panel/backend/src/routes/ssl.rs
 SITES=panel/backend/src/routes/sites.rs
 MON=panel/backend/src/routes/monitors.rs
 HELP=panel/backend/src/helpers.rs
+MAIL=panel/backend/src/routes/mail.rs
 ROUTER=panel/backend/src/routes/mod.rs
 ADIAG=panel/agent/src/services/diagnostics.rs
 ASSL=panel/agent/src/services/ssl.rs
@@ -97,7 +98,7 @@ CERTS=panel/frontend/src/pages/Certificates.tsx
 DIAGPAGE=panel/frontend/src/pages/Diagnostics.tsx
 DOCS=docs/guides/security-hardening.md
 
-for f in "$SCAN" "$HEAL" "$SYS" "$SSL" "$SITES" "$MON" "$HELP" "$ROUTER" "$ADIAG" \
+for f in "$SCAN" "$HEAL" "$SYS" "$SSL" "$SITES" "$MON" "$HELP" "$MAIL" "$ROUTER" "$ADIAG" \
          "$ASSL" "$ASSLR" "$ASEC" "$MIG" "$CERTS" "$DIAGPAGE" "$DOCS"; do
   [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
 done
@@ -107,7 +108,7 @@ done
 # the POST-comment-strip subject, because that is what the arms actually read —
 # a file that is all comments would otherwise pass a line-count guard and then
 # satisfy every absence arm vacuously.
-for pair in "$SCAN:6000" "$HEAL:20000" "$SYS:3000" "$SSL:12000" "$SITES:60000" \
+for pair in "$SCAN:6000" "$HEAL:20000" "$SYS:3000" "$SSL:12000" "$SITES:60000" "$MAIL:20000" \
             "$MON:12000" "$HELP:20000" "$ROUTER:40000" "$ADIAG:14000" \
             "$ASSL:8000" "$ASSLR:6000" "$ASEC:8000" "$CERTS:4000" "$DIAGPAGE:3000"; do
   f=${pair%:*}; min=${pair##*:}
@@ -118,6 +119,7 @@ done
 F_SCAN=$(subj "$SCAN"); F_HEAL=$(subj "$HEAL"); F_SYS=$(subj "$SYS")
 F_SSL=$(subj "$SSL");   F_SITES=$(subj "$SITES"); F_MON=$(subj "$MON")
 F_HELP=$(subj "$HELP"); F_ROUTER=$(subj "$ROUTER"); F_ADIAG=$(subj "$ADIAG")
+F_MAIL=$(subj "$MAIL")
 F_ASSL=$(subj "$ASSL"); F_ASSLR=$(subj "$ASSLR"); F_MIG=$(subj "$MIG")
 F_CERTS=$(subj "$CERTS"); F_DIAGPAGE=$(subj "$DIAGPAGE")
 
@@ -132,8 +134,17 @@ eq "A2 the global unique constraint is dropped" \
 
 eq "A3 the auto-fix site lookup carries a server term" \
    "$(occ "$F_SCAN" 'FROMsitessWHEREs.domain=$1ANDs.server_id=$2ANDs.ssl_enabled=TRUE')" "1"
+# TWO since v2.161.0: the site lookup above and the Compose-stack lookup the
+# same loop falls through to. Both resolve a DOMAIN, and a domain is unique only
+# per server, so both must bind the member that raised the finding — a name-only
+# lookup on a fleet renews through the wrong host's agent.
 eq "A4 it binds the scanned member, not an arbitrary host" \
-   "$(occ "$F_SCAN" '.bind(domain).bind(member.id)')" "1"
+   "$(occ "$F_SCAN" '.bind(domain).bind(member.id)')" "2"
+# ⛔ A COUNT CANNOT SEE A DOOR THAT DOES NOT BIND — a third domain-keyed lookup
+# added without the server term leaves this arm at 2 and green. So each door
+# also owns a literal arm: A3 for the site read, A4b for the stack read.
+eq "A4b the stack fallback lookup carries a server term too" \
+   "$(occ "$F_SCAN" 'FROMdocker_stacksWHERElower(domain)=lower($1)ANDserver_id=$2')" "1"
 # The signature is what makes the id REACHABLE at all.
 eq "A5 auto_fix_safe_findings receives the member, not just its handle" \
    "$(occ "$F_SCAN" 'asyncfnauto_fix_safe_findings(pool:&PgPool,member:&FleetMember,')" "1"
@@ -418,17 +429,30 @@ eq "F3 an unreadable issuer is 'unknown', never 'foreign'" \
 eq "F4 a host with no certificate is not foreign either" \
    "$(occ "$F_HELP" 'if!status.get("has_cert").and_then(|v|v.as_bool()).unwrap_or(false){')" "1"
 
-# ALL THREE DOORS. Every path that can overwrite fullchain.pem asks the question.
+# ALL FIVE DOORS. Every path that can overwrite fullchain.pem asks the question.
+# ⚠ Was "ALL THREE" and named three while the tree held five: the mail host door
+# has been unpinned since it was written, and v2.161.0 added the Compose-stack
+# door. A census whose prose counts lower than the tree is how a new door joins
+# without ever being asked — which is exactly how the stack door was written
+# without the guard in the first place.
 eq "F5 the shared manual renewal asks" \
    "$(occ "$F_SSL" 'crate::helpers::foreign_cert_issuer(&agent,&site.domain).await')" "1"
 eq "F6 the scanner's auto-fix asks (the loop that needs no opt-in)" \
    "$(occ "$F_SCAN" 'crate::helpers::foreign_cert_issuer(agent,domain).await')" "1"
+eq "F6b and its Compose-stack sibling asks too — the same loop, the same disk" \
+   "$(occ "$F_SCAN" 'crate::helpers::foreign_cert_issuer(&member.agent,domain).await')" "1"
 eq "F7 the auto-healer asks" \
    "$(occ "$F_HEAL" 'crate::helpers::foreign_cert_issuer(&agent,domain).await')" "1"
+eq "F7b the mail host door asks" \
+   "$(occ "$F_MAIL" 'crate::helpers::foreign_cert_issuer(agent,domain).await')" "1"
 # …and each one STOPS. A guard that computes a verdict and proceeds anyway is the
 # shape a careless edit leaves behind.
 eq "F8 the scanner stops rather than renewing" \
    "$(occ "$F_SCAN" 'Auto-fix:NOTrenewing{domain}')" "1"
+# Deliberately a DIFFERENT sentence from F8's, so neither arm can be satisfied by
+# the other's line — the sibling-satisfaction discipline this file keeps.
+eq "F8b and the stack door stops too" \
+   "$(occ "$F_SCAN" 'Auto-fix:NOTrenewingtheComposestackcertificatefor{domain}')" "1"
 eq "F9 the healer stops rather than renewing" \
    "$(occ "$F_HEAL" 'Auto-heal:NOTrenewing{domain}')" "1"
 # ⚠ s387 moved this from a bare status count to the refusal's own sentence. The

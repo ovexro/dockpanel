@@ -265,8 +265,13 @@ has "E1 one budget, named once" "$F_BSSL" "pub(crate)constDNS01_ORDER_TIMEOUT_SE
 # wildcard — the exact order the constant derives its arithmetic from — passing a
 # bare literal 180. The constant's own doc comment already said "every caller must
 # use THIS constant"; the arm counted only the callers that did.
+# ⭐ 6 -> 7 at v2.161.0: the scanner gained a SECOND renewal door, for a Compose
+# stack whose domain resolves to no site. It spends the shared budget like every
+# other door, so the total moves. The right-hand side is a typed literal, so a
+# new door legitimately moves this arm — bumping it is the repair, and changing
+# the panel to dodge it would be the defect.
 eq "E2 and every DNS-01 door spends THAT budget — issuance included" \
-   "$(( $(occ "$F_BSSL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_HEAL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_SCAN" "DNS01_ORDER_TIMEOUT_SECS") ))" "6"
+   "$(( $(occ "$F_BSSL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_HEAL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_SCAN" "DNS01_ORDER_TIMEOUT_SECS") ))" "7"
 # ⛔ A COUNT OF THE CONSTANT'S USES CANNOT SEE A CALLER THAT DOES NOT USE IT —
 # that is how the issuance door stayed invisible to E2 for a whole release (#671:
 # a count is blind to the thing it does not count). E2b asks the complementary

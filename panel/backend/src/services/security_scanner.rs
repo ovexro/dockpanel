@@ -440,6 +440,17 @@ async fn auto_fix_safe_findings(
                 let Some((site_id, runtime, proxy_port, php_version, root_path, user_id, ssl_profile)) =
                     site
                 else {
+                    // The subject came from the agent's FILESYSTEM walk of
+                    // /etc/dockpanel/ssl, which is where a Compose stack's ACME
+                    // certificate also lands — a stack's domain can never own a
+                    // `sites` row (`domain_claim::find_occupant` returns
+                    // `Occupant::Stack` and every `INSERT INTO sites` goes
+                    // through `ensure_claimable`), so this read cannot ever
+                    // match one. Until v2.161.0 a stack fell out of this loop
+                    // here with no log, no alert and no renewal: the panel
+                    // raised a critical `ssl_expiry` finding naming the domain
+                    // every week and then had nothing behind it.
+                    renew_stack_certificate(pool, member, domain).await;
                     continue;
                 };
 
@@ -752,6 +763,359 @@ async fn auto_fix_safe_findings(
             }
             // Don't auto-fix: malware, open_port, container_vuln, file_integrity
             _ => {}
+        }
+    }
+}
+
+/// Renew the ACME certificate of a Compose STACK whose domain the loop above
+/// could not resolve to a site.
+///
+/// A SIBLING of `auto_fix_safe_findings`, deliberately — not a helper the site
+/// path also calls. The site path stays inline and byte-stable: `carry-sweep`
+/// §J measures that function's own body for the profile it sends, and an
+/// extraction satisfies the arm from a sibling that was never broken.
+///
+/// Until v2.161.0 nothing in the tree re-ordered a stack's certificate on a
+/// schedule. `docker_stacks` carries no `ssl_expiry` and no renewal columns, so
+/// every sites-keyed renewer is structurally blind to it; the only thing that
+/// re-orders one is an operator-triggered stack create/update/restore. The
+/// agent's weekly walk of `/etc/dockpanel/ssl` DID raise the finding, so the
+/// operator was warned and then met two dead ends.
+///
+/// ⚠ No `ssl_expiry` write here, because there is no column to write it to
+/// (Tier 2). That is why this path records its outcome in `activity_logs`
+/// instead — and why that row is load-bearing, see step 4.
+/// The `state_key` a stack renewal failure both FIRES and RESOLVES under.
+///
+/// ⛔ ONE spelling, computed in ONE place, called by both sides. A fire and a
+/// resolve that spell the key separately are a severed pair: the alert fires,
+/// the resolve misses, and it pages every thirty minutes for a week about a
+/// certificate that is already healthy. That is not hypothetical here — it is
+/// the defect `resolve_ssl_renewal_failure` was written for, and this door
+/// cannot use that resolver (it takes `site_id: Uuid`, and this alert has none).
+///
+/// The domain has to be IN the key: `fire_alert_deduped` dedups on
+/// `(alert_type, site_id, state_key)` and ignores `server_id`, so with
+/// `site_id` NULL every failing stack on every host would otherwise share one
+/// twelve-hour bucket and only the first would ever be heard.
+///
+/// ⚠ `alerts.state_key` is `VARCHAR(100)`. A hostname may be 253 bytes, so the
+/// obvious `format!` overflows the column and the INSERT fails — the alert then
+/// silently never fires at all, which is worse than the bug it replaced. When
+/// the readable form does not fit, the domain is truncated AND a digest of the
+/// WHOLE domain is appended: truncation alone would collide two long siblings
+/// into the single bucket this key exists to prevent.
+fn stack_renewal_state_key(domain: &str) -> String {
+    const MAX: usize = 100;
+    let readable = format!("stack:{}:{}", notifications::ssl_renewal_key::FAILED, domain);
+    if readable.len() <= MAX {
+        return readable;
+    }
+    use sha2::{Digest, Sha256};
+    let digest = hex::encode(Sha256::digest(domain.as_bytes()));
+    let prefix = format!("stack:{}:", notifications::ssl_renewal_key::FAILED);
+    // 16 hex characters of SHA-256 — collision-free for any realistic number of
+    // domains on one panel, and it keeps enough of the name to be recognisable.
+    //
+    // ⚠ Taken by CHARACTER, not by byte. This domain is a directory name read
+    // off disk, not a validated field, so a byte slice could land inside a
+    // multi-byte sequence and panic — inside the scan loop, taking the whole
+    // sweep down. `char_indices` also keeps the result within the byte budget,
+    // since every char is at least one byte.
+    let budget = MAX - prefix.len() - 17;
+    let keep: String = domain.chars().take(budget).collect();
+    format!("{prefix}{keep}-{}", &digest[..16])
+}
+
+async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &str) {
+    // 1. Resolve, ON THE HOST THAT RAISED THE FINDING — the same host discipline
+    //    the site read above learned the hard way. A domain is unique only per
+    //    server, so a name-only lookup on a fleet can hand back another host's
+    //    stack and renew through the wrong agent.
+    //
+    //    ⛔ `lower(domain)`, matching `idx_docker_stacks_domain` and
+    //    `domain_claim::find_occupant`. The agent's finding carries whatever
+    //    case the certificate directory has.
+    let stack: Option<(uuid::Uuid, uuid::Uuid, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, user_id, ssl_email, tls_mode \
+         FROM docker_stacks WHERE lower(domain) = lower($1) AND server_id = $2",
+    )
+    .bind(domain)
+    .bind(member.id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let Some((stack_id, user_id, ssl_email, tls_mode)) = stack else {
+        // The silent drop must not survive the fix. A certificate under
+        // /etc/dockpanel/ssl belonging to neither a site nor a stack on this
+        // host is a real condition (a domain moved, a stack deleted without its
+        // certificate) and the operator's only evidence used to be nothing at all.
+        // ⛔ `info!`, not `debug!`: nothing shipped runs at debug. `main.rs`
+        // defaults the filter to "info" and setup.sh, update.sh and the compose
+        // file all pin RUST_LOG=info, so a debug line here is another silent
+        // drop wearing a log statement. It fires at most once per expiring
+        // certificate per weekly scan.
+        tracing::info!(
+            "Auto-fix: {domain} is expiring on {} but matches neither a site nor a Compose stack \
+             on that host — nothing here can renew it",
+            member.name
+        );
+        return;
+    };
+
+    // 2. THE MODE GUARD, and the whole safety of this change.
+    //
+    //    A `provided` stack serves an operator-supplied certificate from
+    //    /etc/dockpanel/ssl-registry/<alias>/. `provision_cert` writes to
+    //    {SSL_DIR}/{domain} unconditionally, so ordering for that domain would
+    //    at best leave a second unused certificate on disk — and any future
+    //    change that let the registry path become the renew target would
+    //    replace a paid-for certificate with a Let's Encrypt one, silently,
+    //    weekly. `agent/services/ssl.rs` says exactly this in the author's words.
+    //
+    //    ⛔ Reuse `effective_tls_mode`. The NULL⇒ssl_email rule must have ONE
+    //    spelling: a second one in SQL here is the redefinition trap, and the
+    //    copy that drifts is the one standing over the operator's certificate.
+    let mode = crate::routes::stacks::effective_tls_mode(tls_mode.as_deref(), ssl_email.as_deref());
+    if mode != "acme" {
+        // `info!` for the same reason as the arm above, and it matters more
+        // here: this is the branch that DECLINES to act on a critical finding
+        // the operator sees every week. A stack switched to `provided` leaves
+        // its old ACME certificate under /etc/dockpanel/ssl, the agent keeps
+        // raising `ssl_expiry` for it for ever, and at debug the operator's
+        // logs say nothing at all about the domain on their screen.
+        tracing::info!(
+            "Auto-fix: not renewing {domain} — the stack's TLS mode is '{mode}', not ACME. \
+             The expiring file under /etc/dockpanel/ssl is a leftover; the stack serves its \
+             registered certificate from the registry."
+        );
+        return;
+    }
+
+    // The agent's `RenewRequest.email` is a required `String`, so a blank
+    // address is a 422 rather than a renewal. `effective_tls_mode` can return
+    // "acme" with no address when the column literally says so (an operator
+    // switch, or a row whose address was cleared), so this is reachable and is
+    // NOT the same condition as the mode guard above.
+    let Some(contact) = ssl_email.as_deref().map(str::trim).filter(|e| !e.is_empty()) else {
+        tracing::warn!(
+            "Auto-fix: cannot renew {domain} — the stack is in ACME mode with no ssl_email, \
+             and the agent requires a contact address to place an order"
+        );
+        return;
+    };
+
+    // 3. Agent version gate. An agent older than 2.161.0 parses `runtime` as
+    //    required and answers 422 to the body below — on every weekly scan.
+    //    Read from /health, the route every agent has always carried, and
+    //    compared through the same key `require_agent_at_least` uses.
+    //
+    //    ⛔ A `tracing::warn!` and nothing else. An alert here would page the
+    //    operator once a week for ever about a machine that is merely behind.
+    let reported = member
+        .agent
+        .get("/health")
+        .await
+        .ok()
+        .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(str::to_string));
+    let key = crate::services::panel_update::semver_key;
+    if !(reported.is_some()
+        && key(reported.as_deref()) >= key(Some(crate::routes::tls_certificates::STACK_RENEWAL_MIN_AGENT)))
+    {
+        tracing::warn!(
+            "Auto-fix: not renewing the Compose stack certificate for {domain} — {} reports agent \
+             {}, and renewing a stack in place needs {} or later. Update that server's agent.",
+            member.name,
+            reported.as_deref().unwrap_or("no readable version"),
+            crate::routes::tls_certificates::STACK_RENEWAL_MIN_AGENT
+        );
+        return;
+    }
+
+    // 3b. THE ISSUER GUARD — what is actually on disk, not what the row claims.
+    //
+    //     The mode guard above reads a DATABASE COLUMN. The thing at risk is a
+    //     FILE, and the column knows nothing about it. The finding that brought
+    //     us here came from the agent walking /etc/dockpanel/ssl with
+    //     `openssl -checkend`, which never looks at the issuer and never
+    //     consults the database — so a stack row saying `acme` proves only what
+    //     the panel intended, never what is installed.
+    //
+    //     A purchased certificate reaches that path by more than one route: the
+    //     agent's `upload_cert` door is keyed on DOMAIN and not on a site id and
+    //     writes those exact two files; a site that previously owned the name
+    //     leaves them behind; an operator installs one by hand. And the
+    //     registry migration backfilled EVERY pre-existing stack with a
+    //     non-blank `ssl_email` to `acme`, so the mode guard waves all of them
+    //     through. Ordering then has `provision_cert` overwrite fullchain.pem
+    //     and privkey.pem in place, unattended, weekly, with no alert.
+    //
+    //     Every other renewal door in the tree asks this question first — the
+    //     site arm of THIS function, `auto_healer`, `routes/ssl` and
+    //     `routes/mail`. This one was the only door that did not, and the
+    //     contract it was built from did not ask for it.
+    //
+    //     `None` means "not proven foreign" — an unreachable agent, an
+    //     unreadable certificate — and MUST still renew, for the same reason the
+    //     site arm gives: refusing on doubt lets a genuine certificate lapse,
+    //     which is the failure this loop exists to prevent.
+    if let Some(issuer) = crate::helpers::foreign_cert_issuer(&member.agent, domain).await {
+        tracing::info!(
+            "Auto-fix: NOT renewing the Compose stack certificate for {domain} — the installed \
+             certificate was issued by {issuer}, not by DockPanel. Renewing would replace it."
+        );
+        return;
+    }
+
+    // 4. THE COOLDOWN, counting the rows step 6 writes.
+    //
+    //    ⚠ Its own action string, deliberately. Sharing `auto_heal.renew_ssl`
+    //    would let either gate satisfy the other's arm and let one loop's
+    //    attempt mute the other's.
+    let recent: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM activity_logs \
+         WHERE action = 'auto_fix.renew_stack_ssl' \
+         AND target_name = $1 \
+         AND created_at > NOW() - INTERVAL '6 hours'",
+    )
+    .bind(domain)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    if recent.map(|r| r.0).unwrap_or(0) > 0 {
+        return;
+    }
+
+    tracing::info!("Auto-fix: renewing the Compose stack certificate for {domain}");
+
+    // 5. Act. NO `runtime` key: that absence is the contract with the agent's
+    //    in-place branch, which reloads nginx rather than re-rendering a vhost
+    //    the panel cannot describe (it does not know the stack's published
+    //    port — the agent derives that from the compose YAML, and a re-render
+    //    would emit a proxy vhost with no upstream). The certificate paths do
+    //    not move: `provision_cert` overwrites fullchain.pem and privkey.pem in
+    //    place, and the stack's acme vhost already names exactly those paths.
+    //
+    //    No `profile` either — `docker_stacks` has no `ssl_profile` column.
+    //
+    //    ⛔ `post_long` with the shared budget, not `post`: a plain `post` caps
+    //    at 60s and an ACME order budgets far more in the agent alone.
+    let result = member
+        .agent
+        .post_long(
+            &format!("/ssl/{domain}/renew"),
+            Some(serde_json::json!({ "email": contact })),
+            crate::routes::ssl::DNS01_ORDER_TIMEOUT_SECS,
+        )
+        .await
+        .map_err(|e| e.to_string());
+
+    let success = result.is_ok();
+
+    // 6. Record — AND THIS ROW IS THE COOLDOWN step 4 counts.
+    //
+    //    ⚠ `auto_healer.rs` is the cautionary tale, in this exact shape: it
+    //    passed `uuid::Uuid::nil()`, `fk_activity_logs_user` rejected the
+    //    insert, the logger swallowed the error into a warn, `COUNT(*)` was
+    //    therefore permanently 0, and a certificate that could not be renewed
+    //    was re-ordered from the CA every 120 seconds, for ever. Named against
+    //    the STACK'S OWN `user_id` (a real `users` row) and stamped with the
+    //    host that raised the finding.
+    //
+    //    Written on BOTH outcomes. A failure that logged nothing would leave
+    //    the gate above counting zero and re-order weekly against a CA that
+    //    just refused — the same hammering with a longer period.
+    let details = match &result {
+        Ok(v) => v.to_string(),
+        Err(e) => e.clone(),
+    };
+    crate::services::activity::log_activity_on_server(
+        pool,
+        user_id,
+        "security-scanner",
+        "auto_fix.renew_stack_ssl",
+        Some("stack"),
+        Some(domain),
+        Some(&format!("stack_id={stack_id}, success={success}, result={details}")),
+        None,
+        Some(member.id),
+    )
+    .await;
+
+    match result {
+        Ok(_) => {
+            tracing::info!("Auto-fix: Compose stack certificate renewed for {domain}");
+            crate::services::system_log::log_event(
+                pool,
+                "info",
+                "security_scanner",
+                &format!("Auto-renewed the Compose stack SSL certificate for {domain}"),
+                None,
+            )
+            .await;
+
+            // ⛔ A SUCCESS MUST CLEAR THE FAILURE IT FOLLOWS. Without this the
+            // alert raised by a previous week's transient failure stays
+            // `firing` for ever: `check_escalations` re-pages every thirty
+            // minutes for seven days about a certificate that is already
+            // healthy, the dashboard's firing count never returns to zero, and
+            // neither retention sweep collects it (both delete only
+            // `status = 'resolved'`). Nothing else can clear it — the sibling
+            // resolver iterates a fixed key list and takes a non-optional
+            // `site_id`, and this alert has neither.
+            //
+            // Fired with `server_id = Some(member.id)`, so `resolve_alert`'s
+            // first arm matches on exactly the same four columns. The key comes
+            // from the shared function, so the two can never drift apart.
+            notifications::resolve_alert(
+                pool,
+                user_id,
+                Some(member.id),
+                None,
+                "ssl_renewal_failure",
+                &stack_renewal_state_key(domain),
+                &format!("SSL renewal recovered: {domain}"),
+                &format!(
+                    "DockPanel renewed the certificate for the Compose stack on {domain}. \
+                     The earlier renewal failure is resolved."
+                ),
+            )
+            .await;
+        }
+        Err(e) => {
+            tracing::warn!("Auto-fix: Compose stack SSL renewal failed for {domain}: {e}");
+            // 7. `site_id = None` — there is no `sites` row and inventing one
+            //    would attach this alert to somebody else's site.
+            //
+            //    ⚠ `fire_alert_deduped` dedups on (alert_type, site_id,
+            //    state_key) and does NOT consider `server_id`. Every existing
+            //    `ssl_renewal_failure` caller passes a real `site_id`, so the
+            //    key alone separates them; with `site_id` NULL a bare
+            //    `ssl_renewal_key::FAILED` would put EVERY failing stack on
+            //    EVERY host into one twelve-hour bucket and the second domain's
+            //    critical alert would never reach anybody. The subject is the
+            //    domain, so the key names it — see `stack_renewal_state_key`,
+            //    which is also what the success arm resolves on.
+            notifications::fire_alert_deduped(
+                pool,
+                user_id,
+                Some(member.id),
+                None,
+                "ssl_renewal_failure",
+                &stack_renewal_state_key(domain),
+                "critical",
+                &format!("SSL renewal failed: {domain}"),
+                &format!(
+                    "The certificate for the Compose stack on {domain} is expiring and DockPanel \
+                     could not renew it automatically: {e}. The stack will stop loading over \
+                     HTTPS when the certificate expires. Redeploying the stack reissues it."
+                ),
+                12,
+            )
+            .await;
         }
     }
 }

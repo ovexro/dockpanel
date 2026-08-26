@@ -126,12 +126,12 @@ pub async fn diagnostics_fix(
             //
             // ⚠ It must NOT claim the certificate came from outside DockPanel,
             // because very often it did not: the agent issues certificates for
-            // Docker apps, Git deploys and mail domains, and NONE of those becomes
-            // a `sites` row — a Docker app has no table at all, it exists only as a
-            // labelled container. Saying "whatever put it there is what renews it"
-            // to an operator whose own panel put it there is the same species of
-            // defect as the button this branch replaced. So the refusal names what
-            // the panel actually found, and stops there.
+            // Docker apps, Compose stacks, Git deploys and mail domains, and NONE
+            // of those becomes a `sites` row — a Docker app has no table at all, it
+            // exists only as a labelled container. Saying "whatever put it there is
+            // what renews it" to an operator whose own panel put it there is the
+            // same species of defect as the button this branch replaced. So the
+            // refusal names what the panel actually found, and stops there.
             //
             // These lookups are deliberately not server-scoped. `mail_domains.server_id`
             // was NULL on every panel-created row for five months and
@@ -143,6 +143,7 @@ pub async fn diagnostics_fix(
                 "SELECT 'mail domain' FROM mail_domains WHERE domain = $1 \
                  UNION ALL SELECT 'Git deploy' FROM git_deploys WHERE domain = $1 \
                  UNION ALL SELECT 'Docker app' FROM container_sleep_config WHERE domain = $1 \
+                 UNION ALL SELECT 'Compose stack' FROM docker_stacks WHERE lower(domain) = lower($1) \
                  LIMIT 1",
             )
             .bind(domain)
@@ -150,16 +151,52 @@ pub async fn diagnostics_fix(
             .await
             .unwrap_or(None);
 
+            // A stack is the one claimant whose answer depends on its TLS MODE.
+            // "DockPanel issued this and a redeploy reissues it" is true of an
+            // `acme` stack and FALSE of a `provided` one, whose live certificate
+            // is the operator's own, served from the registry — the expiring
+            // file this button was clicked about is then a leftover under the
+            // per-domain tree, and redeploying reissues nothing. Telling that
+            // operator to redeploy is the same species of wrong sentence this
+            // whole branch exists to stop.
+            //
+            // ⛔ Read through `effective_tls_mode`, never a CASE in the SQL
+            // above: the NULL⇒ssl_email rule has ONE spelling, and a second one
+            // here would drift exactly where it decides what to tell an
+            // operator about their own certificate. Unscoped by server for the
+            // same reason as the claimant probe above.
+            let stack_mode = if claimed_by.as_ref().map(|(k,)| k.as_str()) == Some("Compose stack") {
+                let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+                    "SELECT tls_mode, ssl_email FROM docker_stacks WHERE lower(domain) = lower($1)",
+                )
+                .bind(domain)
+                .fetch_optional(&state.db)
+                .await
+                .unwrap_or(None);
+                row.map(|(m, e)| {
+                    crate::routes::stacks::effective_tls_mode(m.as_deref(), e.as_deref())
+                })
+            } else {
+                None
+            };
+
             let tail = match claimed_by {
+                Some((_,)) if matches!(stack_mode, Some(mode) if mode != "acme") => {
+                    "A Compose stack in this panel uses that name, but it serves a registered \
+                     certificate rather than a Let's Encrypt one — so this expiring file is a \
+                     leftover from before that change, and nothing renews it because nothing \
+                     serves it. Removing it is safe; the stack is unaffected."
+                        .to_string()
+                }
                 Some((kind,)) => format!(
                     "A {kind} in this panel uses that name, and DockPanel issued this \
                      certificate for it — but only certificates attached to a SITE can be \
                      renewed from here. Redeploy that {kind} to reissue it."
                 ),
-                None => "No site, mail domain, Git deploy or Docker app in this panel claims \
-                         that name — so this is a certificate DockPanel does not manage, such \
-                         as a DNS-01 wildcard or one installed by hand, and it is renewed \
-                         wherever it was issued."
+                None => "No site, mail domain, Git deploy, Docker app or Compose stack in \
+                         this panel claims that name — so this is a certificate DockPanel \
+                         does not manage, such as a DNS-01 wildcard or one installed by \
+                         hand, and it is renewed wherever it was issued."
                     .to_string(),
             };
 
