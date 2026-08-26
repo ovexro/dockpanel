@@ -94,13 +94,57 @@ fi
 # A3: the grid must RENDER from the constant. An inline array literal at the
 # JSX site is how the two halves drifted apart the first time, and it is
 # invisible to A2 — which would go on comparing a constant nothing renders.
-GRIDBLOCK=$(sed -n '/Suppress External Notifications/,/GPU Alert Thresholds/p' "$SETTINGS_TSX")
+GRIDBLOCK=$(sed -n '/Alert Behaviour/,/GPU Alert Thresholds/p' "$SETTINGS_TSX")
+NGRID=$(grep -c . <<< "$GRIDBLOCK")
+if [ "$NGRID" -ge 20 ]; then
+  ok "A3-control the behaviour grid extracted — $NGRID lines"
+else
+  bad "A3-control the behaviour grid extracted — only $NGRID lines (the extractor broke; the heading or the card below it was renamed)"
+fi
 if grep -qE 'SUPPRESSIBLE_ALERT_TYPES\.map\(' <<< "$GRIDBLOCK" \
    && [ "$(grep -cE 'key: "[a-z_]+", label:' <<< "$GRIDBLOCK")" -eq 0 ]; then
   ok "A3 the grid renders from the shared constant, with no inline list at the JSX site"
 else
   ok_inline=$(grep -cE 'key: "[a-z_]+", label:' <<< "$GRIDBLOCK")
   bad "A3 the grid renders from the shared constant — $ok_inline inline entr(ies) found at the JSX site"
+fi
+
+# A3b: BOTH columns render, and each is bound to its own source. The grid used
+# to be a single mute checkbox per type; a regression that drops the Record
+# column leaves A3 green (the map still renders) while the seven columns go
+# back to being unreachable outside Export/Import Config, which is the exact
+# state this replaced.
+if grep -qE 'RECORD_COLUMN_BY_TYPE\[key\]' <<< "$GRIDBLOCK" \
+   && grep -qE 'checked=\{recorded\}' <<< "$GRIDBLOCK" \
+   && grep -qE 'checked=\{!mutedTypes\.includes\(key\)\}' <<< "$GRIDBLOCK"; then
+  ok "A3b both columns render — Record from the column map, Notify from the mute list"
+else
+  bad "A3b both columns render — Record from the column map, Notify from the mute list"
+fi
+
+# A3c: every record column the backend reads has a row in the frontend map.
+# This reads is_alert_enabled's OWN match arms, not the map, so the two cannot
+# agree with each other vacuously. A column the backend honours but the grid
+# never offers is a switch the operator cannot reach — the defect this shipped
+# to fix, one type at a time.
+BACKCOLS=$(awk '/pub async fn is_alert_enabled\(/{i=1} i{print} i && /^}$/{exit}' "$NOTIF" \
+           | grep -oE '=> *"alert_[a-z_]+"' | grep -oE 'alert_[a-z_]+' | sort -u)
+NBC=$(grep -c . <<< "$BACKCOLS")
+MAPCOLS=$(sed -n '/^const RECORD_COLUMN_BY_TYPE: Record<string, string> = {/,/^};/p' "$SETTINGS_TSX" \
+          | grep -oE '"alert_[a-z_]+"' | tr -d '"' | sort -u)
+NMC=$(grep -c . <<< "$MAPCOLS")
+if [ "$NBC" -ge 7 ] && [ "$NMC" -ge 7 ]; then
+  ok "A3c-control both column enumerations are sound — backend $NBC, grid map $NMC"
+else
+  bad "A3c-control both column enumerations are sound — backend $NBC, grid map $NMC (expected >= 7 each; an extractor broke)"
+fi
+UNREACHABLE=$(comm -23 <(printf '%s\n' "$BACKCOLS") <(printf '%s\n' "$MAPCOLS") | grep -c .)
+if [ "$UNREACHABLE" -eq 0 ]; then
+  ok "A3c every record column the backend honours is reachable from the grid"
+else
+  bad "A3c $UNREACHABLE record column(s) the backend honours have no control in the grid"
+  comm -23 <(printf '%s\n' "$BACKCOLS") <(printf '%s\n' "$MAPCOLS") | while read -r c; do
+    [ -n "$c" ] && printf '        unreachable: %s\n' "$c"; done
 fi
 
 # A4: THE REAL INVARIANT. Every alert type handed to the fire_alert family must
@@ -466,6 +510,135 @@ if [ "$(grep -c 'pub fn severity_color(severity: &str)' "$NOTIF")" -eq 1 ]; then
   ok "F5 severity->colour is single-sourced, not duplicated per caller"
 else
   bad "F5 severity->colour is single-sourced, not duplicated per caller"
+fi
+
+echo
+echo "== §G  switching a type off also stops ESCALATING it =="
+
+# The switch had exactly one caller — inside try_fire_alert — so it governed
+# whether a row was ever RECORDED and said nothing about a row already firing
+# when the operator flipped it. This sweep selects on status='firing' alone, so
+# the one control meaning "do not tell me about this" went on re-paging every
+# thirty minutes until the row aged out of the seven-day window.
+CHECKESC_G=$(awk '/^async fn check_escalations\(/{i=1} i{print} i && /^}$/{exit}' "$ENGINE")
+NESCG=$(grep -c . <<< "$CHECKESC_G")
+if [ "$NESCG" -ge 200 ]; then
+  ok "G1-control check_escalations body extracted — $NESCG lines"
+else
+  bad "G1-control check_escalations body extracted — only $NESCG lines (the extractor broke)"
+fi
+
+# G1: POSITIONAL, not presence. An arm that merely finds the call passes with
+# the guard moved BELOW the dispatch, where it decides nothing — and passes
+# just as well with the whole sweep replaced by an early return. Require the
+# consult to precede the page, inside this body.
+ENAB_LINE=$(grep -n 'is_alert_enabled(' <<< "$CHECKESC_G" | head -1 | cut -d: -f1)
+DISP_LINE=$(grep -n 'dispatch_escalation_step(' <<< "$CHECKESC_G" | head -1 | cut -d: -f1)
+if [ -n "$ENAB_LINE" ] && [ -n "$DISP_LINE" ] && [ "$ENAB_LINE" -lt "$DISP_LINE" ]; then
+  ok "G1 the sweep consults the per-type switch (line $ENAB_LINE) before it pages (line $DISP_LINE)"
+else
+  bad "G1 the sweep consults the per-type switch before it pages — consult=${ENAB_LINE:-none} page=${DISP_LINE:-none}"
+fi
+
+# G2: and ACTS on it. The guard's own block must skip the row; a read that
+# falls through pages the alert anyway.
+GBLOCK=$(sed -n '/if !enabled {/,/^        }$/p' <<< "$CHECKESC_G")
+NGB=$(grep -c . <<< "$GBLOCK")
+if [ "$NGB" -ge 3 ]; then
+  ok "G2-control the disabled-type guard block extracted — $NGB lines"
+else
+  bad "G2-control the disabled-type guard block extracted — only $NGB lines (the extractor broke)"
+fi
+if grep -qE '^ *continue;' <<< "$GBLOCK"; then
+  ok "G2 a switched-off type skips the row rather than being read and ignored"
+else
+  bad "G2 a switched-off type skips the row rather than being read and ignored"
+fi
+
+# G3: the skip must NOT stamp escalated_at. Stamping would rotate the row to
+# the back of the least-recently-paged ordering — which is what terminal_ids is
+# for — but escalated_at means "this row was paged at this time", and writing
+# it for a page that never went out is the stamp-claiming-the-operator-was-told
+# harm maintenance_users documents in this same file. A re-enabled type must
+# page on the NEXT tick, not thirty minutes after one.
+# Paired with a positive control: terminal_ids must still be stamped SOMEWHERE
+# in the body, or this arm cannot tell "correctly absent here" from "the
+# rotation was deleted outright".
+if [ "$(grep -cE 'terminal_ids\.push' <<< "$GBLOCK")" -eq 0 ]; then
+  ok "G3 the skip does not stamp escalated_at for a page that never went out"
+else
+  bad "G3 the skip stamps escalated_at — a stamp claiming the operator was paged"
+fi
+if [ "$(grep -cE 'terminal_ids\.push' <<< "$CHECKESC_G")" -ge 1 ]; then
+  ok "G3-control the terminal rotation still exists elsewhere in the sweep"
+else
+  bad "G3-control the terminal rotation still exists elsewhere in the sweep — G3 cannot distinguish absence from deletion"
+fi
+
+# G4: the consult is memoized per tick, like the policy/steps/runbook caches
+# beside it. Firing rows cluster on a few keys and this sweep is capped at 500,
+# so an unmemoized lookup is up to 500 extra round-trips on the shared pool
+# every sixty seconds — the self-amplifying load the bounded sweep exists to
+# prevent, reintroduced one layer up.
+if grep -qE 'enabled_cache' <<< "$CHECKESC_G" \
+   && [ "$(grep -cE 'enabled_cache\.insert' <<< "$CHECKESC_G")" -ge 1 ]; then
+  ok "G4 the per-type consult is memoized per tick, not re-queried per row"
+else
+  bad "G4 the per-type consult is memoized per tick, not re-queried per row"
+fi
+
+echo
+echo "== §H  the switch can still say YES =="
+
+# §G proves the sweep CONSULTS the switch and skips when it says no. Every one
+# of those arms is a refusal, and a guard is not proven by its refusals: with
+# is_alert_enabled returning false on every path — nothing recorded, nothing
+# escalated, every alert in the product silently gone — §A through §G were 50/0
+# GREEN. That is #805 exactly, so the positive half is pinned here.
+ENAB=$(awk '/^pub async fn is_alert_enabled\(/{i=1} i{print} i && /^}$/{exit}' "$NOTIF")
+NEN=$(grep -c . <<< "$ENAB")
+if [ "$NEN" -ge 30 ]; then
+  ok "H1-control is_alert_enabled body extracted — $NEN lines"
+else
+  bad "H1-control is_alert_enabled body extracted — only $NEN lines (the extractor broke)"
+fi
+
+# H1: POSITIONAL. The column lookup must actually be REACHED — an early
+# unconditional return above it makes every arm below decorative while leaving
+# them all green.
+MATCH_LINE=$(grep -n 'let column = match alert_type' <<< "$ENAB" | head -1 | cut -d: -f1)
+if [ -n "$MATCH_LINE" ]; then
+  PRE=$(sed -n "1,${MATCH_LINE}p" <<< "$ENAB")
+  NPRERET=$(grep -cE '^\s*return\b' <<< "$PRE")
+else
+  NPRERET=-1
+fi
+if [ "$MATCH_LINE" ] && [ "$NPRERET" -eq 0 ]; then
+  ok "H1 the column lookup is reached — nothing returns above it"
+else
+  bad "H1 the column lookup is reached — match at line ${MATCH_LINE:-none}, $NPRERET early return(s) above it"
+fi
+
+# H2: THE NARROWING BOUNDARY. A type this function has no column for must
+# answer TRUE, or §G's skip silently stops escalating the twelve types that
+# were never switchable — slow_response, security, ssl_renewal_failure,
+# container_* and the rest. That is the difference between "the operator turned
+# this off" and "we stopped paging for two thirds of the catalogue".
+if grep -qE '_ => return true,' <<< "$ENAB"; then
+  ok "H2 a type with no column answers TRUE — the twelve unswitchable types still escalate"
+else
+  bad "H2 a type with no column answers TRUE — the twelve unswitchable types still escalate"
+fi
+
+# H3: and an operator who has never opened the settings page has NO alert_rules
+# row at all. That must read as enabled; unwrap_or(false) would silence every
+# alert for every such user, which is the same product-wide silence as H1 by a
+# quieter door. Asserted on the body's LAST expression, not anywhere in it.
+TAIL=$(grep -vE '^\s*(//|$)' <<< "$ENAB" | tail -2 | head -1)
+if grep -qE 'result\.map\(\|r\| r\.0\)\.unwrap_or\(true\)' <<< "$TAIL"; then
+  ok "H3 no stored rule reads as ENABLED, and that is the body's final answer"
+else
+  bad "H3 no stored rule reads as ENABLED as the body's final answer — got: $TAIL"
 fi
 
 echo

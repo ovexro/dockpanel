@@ -187,8 +187,27 @@ fn proxy_site_config(port: u16) -> SiteConfig {
 ///      domains have been claimed against it is the expensive version.
 ///   2. Referenced by alias, never by filesystem path. A claim naming a path
 ///      breaks the first time anything moves.
-///   3. Renewal suppression made explicit for a provided certificate — already
-///      the product's stated position on three other surfaces.
+///   3. SAN validation AT CLAIM TIME — the panel checks the claimed domain
+///      actually falls under the supplied certificate's SAN, rather than
+///      trusting the operator and failing at TLS handshake time later. The
+///      reporter called this the most valuable of the three, for the reason
+///      that it shares the quiet failure mode of the trap above: operator
+///      error goes undetected until a browser complains. ⭐ DO NOT BUILD THIS
+///      — it already exists and is unit-tested: `ssl::cert_covers_domain`
+///      (`services/ssl.rs`), called from the site upload path at
+///      `routes/ssl.rs`. It handles wildcards, the CN fallback for a
+///      certificate carrying no SAN, case and trailing-dot normalisation, and
+///      refuses partial wildcards. It lives in the AGENT because this crate
+///      depends on an X.509 parser and the panel does not — which is where the
+///      reporter said the check belonged. The stack claim path REUSES it.
+///
+/// ⚠ A fourth consideration is OURS, not the reporter's, and is NOT binding:
+/// renewal suppression made explicit for a provided certificate (already the
+/// product's stated position on three other surfaces). It is worth doing; it
+/// was never put to the reporter and must not be presented as agreed. Until
+/// v2.157.0 this comment listed it as accepted point 3 and omitted SAN
+/// validation entirely — inverting which of the two a contributor would treat
+/// as settled. The thread is the record: read it before building.
 ///
 /// Prospective, not live: `PUT /api/stacks/{id}` has no caller in the shipped
 /// UI or the CLI today. It is documented public API, so "no caller" is not

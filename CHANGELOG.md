@@ -4,6 +4,70 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.158.0]
+
+### Fixed — switching an alert type off did not stop it escalating
+
+The per-type switch in Settings decides whether an alert is recorded at all.
+It had exactly one caller, inside `try_fire_alert`, so it governed the moment an
+alert was *created* and said nothing about one that already existed. The
+escalation sweep selects on `status = 'firing'` alone and is provenance-blind.
+
+So an alert that was already firing when you switched its type off carried on
+re-paging every thirty minutes — for up to the seven days the sweep can still
+see it. The one control that means *do not tell me about this* went on telling
+you, and the only way to stop it was to acknowledge or resolve the alert you had
+just said you did not want to hear about.
+
+The sweep now consults the switch before it pages, memoized per tick so a
+capped 500-row sweep cannot turn into 500 extra queries a minute. A skipped row
+is **not** stamped as escalated: that field means *this row was paged at this
+time*, and writing it for a page that never went out is the same false stamp the
+maintenance-window code documents as the reason it suppresses at each check's
+source. Switch the type back on and it pages on the next sweep.
+
+Types with no per-type column — `slow_response`, `security`,
+`ssl_renewal_failure`, the `container_*` family and six others — are unchanged
+and still escalate. The switch covers ten of the twenty alert types.
+
+### Added — Record and Notify are now two visible columns, not one grid and a hidden API
+
+Seven of those per-type columns had no control in the panel at all. The backend
+read them, the export wrote them and the importer restored them, but the
+Settings page never sent them: the only way to switch one off was to export the
+config, edit the JSON by hand and import it back. The eighth, GPU, had a
+checkbox — which is why the gap was easy to miss.
+
+**Settings** > **Notifications** > **Alert Behaviour** now shows one row per
+alert type with two checkboxes:
+
+- **Record** — off means the alert is never created. No row, no bell, no
+  status-page incident, nothing to escalate.
+- **Notify** — off means the alert is recorded as usual and only the external
+  send is suppressed: Slack, Discord, PagerDuty, webhooks.
+
+These were always two different switches; they are now two columns of one table
+instead of a checkbox grid and an unreachable set of columns. Ten types have a
+**Record** switch (the three GPU types share one, as the backend always did);
+the other ten show a dash and are always recorded.
+
+The grid this replaces read invertedly — ticked meant *suppressed*. Both columns
+now read positively: ticked means it happens.
+
+### Fixed — a design accepted with a reporter was recorded wrong in the code
+
+The `#104` breadcrumb in the agent said three points were binding and then
+listed the wrong third one. The reporter's third point was **SAN validation at
+claim time**, which they called the most valuable of the three because its
+failure is silent; the comment instead recorded renewal suppression, which was
+never put to them. Points one and two were verbatim.
+
+Corrected, with the part that matters for whoever builds it: the SAN check does
+not need writing. `cert_covers_domain` already exists, is unit-tested for
+wildcards, the Common Name fallback and partial-wildcard refusal, and is called
+from the certificate upload path — in the agent, which is exactly where the
+reporter said the check belonged.
+
 ## [2.157.0]
 
 ### Fixed — a certificate alert that never cleared, so fixing the problem stopped nothing

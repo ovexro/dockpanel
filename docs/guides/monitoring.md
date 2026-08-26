@@ -85,9 +85,18 @@ You can set rules globally (apply to all servers) or per-server to override glob
 
 After an alert fires, it will not fire again for the configured cooldown period (default: 60 minutes). This prevents notification spam during sustained incidents.
 
-### Muted Types
+### Recording and notifying are two different switches
 
-You can mute specific alert types from external notifications (Slack, Discord, etc.) while still recording them in the panel. Set a comma-separated list of types to suppress in the alert rules.
+**Settings** > **Notifications** > **Alert Behaviour** gives every alert type two checkboxes. They do different things, and the difference matters:
+
+| Column | Switched off means |
+|--------|--------------------|
+| **Record** | The alert is never created at all — no alert row, no bell, no status-page incident, and nothing for escalation to page you about. |
+| **Notify** | The alert is still recorded and visible in the panel exactly as usual. Only the external send is suppressed: Slack, Discord, PagerDuty and webhooks. |
+
+Ten of the twenty alert types have a **Record** switch: CPU, memory, disk, offline, service, backup, SSL expiry, and the three GPU types — which share a single switch between them. The other ten are always recorded and show a dash in that column; use **Notify** if you do not want to be paged for one of those.
+
+Switching **Record** off also stops alerts of that type **escalating**. Before v2.158.0 it did not: the switch was read only when an alert was first recorded, so a row that was already firing when you switched its type off carried on re-paging every thirty minutes until it aged out of the seven-day escalation window. Switching the type back on resumes paging on the next sweep, without the delay a fresh alert waits out.
 
 ## Notification Channels
 

@@ -50,6 +50,33 @@ const SUPPRESSIBLE_ALERT_TYPES: { key: string; label: string }[] = [
   { key: "slow_response", label: "Slow response" },
 ];
 
+/** Which `alert_rules` column governs whether a type is RECORDED at all.
+ *
+ * Distinct from muting, and the distinction is the whole point of the two
+ * columns in the grid below. `muted_types` suppresses the external send while
+ * the `alerts` row and the admin bell still happen; these columns are read by
+ * `is_alert_enabled` BEFORE the INSERT, so the event never exists — no row, no
+ * bell, no status-page incident. A type absent from this map has no such
+ * column and is always recorded.
+ *
+ * The three GPU types deliberately share ONE column: the backend maps
+ * gpu_utilization / gpu_temperature / gpu_vram all to `alert_gpu`, so those
+ * three checkboxes move together and the GPU Alert Thresholds card further
+ * down edits the same value.
+ */
+const RECORD_COLUMN_BY_TYPE: Record<string, string> = {
+  cpu: "alert_cpu",
+  memory: "alert_memory",
+  disk: "alert_disk",
+  offline: "alert_offline",
+  service_down: "alert_service_health",
+  backup_failure: "alert_backup_failure",
+  ssl_expiry: "alert_ssl_expiry",
+  gpu_utilization: "alert_gpu",
+  gpu_temperature: "alert_gpu",
+  gpu_vram: "alert_gpu",
+};
+
 
 /** Preview colours for the theme picker and the layout thumbnails.
  *
@@ -208,6 +235,17 @@ export default function Settings() {
   const [testingWebhook, setTestingWebhook] = useState<string | null>(null);
   const [webhookResult, setWebhookResult] = useState<{ type: string; msg: string }>({ type: "", msg: "" });
   const [mutedTypes, setMutedTypes] = useState<string[]>([]);
+  // Defaults mirror the schema, which declares every one of these NOT NULL
+  // DEFAULT TRUE — so an unsaved page shows what the backend would do.
+  const [recordTypes, setRecordTypes] = useState<Record<string, boolean>>({
+    alert_cpu: true,
+    alert_memory: true,
+    alert_disk: true,
+    alert_offline: true,
+    alert_backup_failure: true,
+    alert_ssl_expiry: true,
+    alert_service_health: true,
+  });
   // The Alerts page builds escalation policies and then tells the operator, in its own
   // words, to "attach a policy to an alert rule from the alert-rules editor". This is
   // that editor, and until now it had no such control: the attach endpoint had zero
@@ -371,7 +409,7 @@ export default function Settings() {
 
   const loadNotifyChannels = async () => {
     try {
-      const rules = await api.get<{ id?: string; escalation_policy_id?: string | null; notify_email?: boolean; notify_slack_url?: string; notify_discord_url?: string; notify_pagerduty_key?: string; muted_types?: string; alert_gpu?: boolean; gpu_util_threshold?: number; gpu_util_duration?: number; gpu_temp_threshold?: number; gpu_vram_threshold?: number }[]>("/alert-rules");
+      const rules = await api.get<{ id?: string; escalation_policy_id?: string | null; notify_email?: boolean; notify_slack_url?: string; notify_discord_url?: string; notify_pagerduty_key?: string; muted_types?: string; alert_cpu?: boolean; alert_memory?: boolean; alert_disk?: boolean; alert_offline?: boolean; alert_backup_failure?: boolean; alert_ssl_expiry?: boolean; alert_service_health?: boolean; alert_gpu?: boolean; gpu_util_threshold?: number; gpu_util_duration?: number; gpu_temp_threshold?: number; gpu_vram_threshold?: number }[]>("/alert-rules");
       if (rules.length > 0) {
         const r = rules[0];
         setAlertRuleId(r.id ?? null);
@@ -389,6 +427,19 @@ export default function Settings() {
           const known = new Set(SUPPRESSIBLE_ALERT_TYPES.map(t => t.key));
           setMutedTypes(r.muted_types.split(',').map((t: string) => t.trim()).filter((t: string) => known.has(t)));
         }
+        // `!== false` so an absent column reads as the schema default (TRUE)
+        // rather than as "switched off" — the reassuring direction here is the
+        // WRONG one: showing a box ticked for a type the operator had silenced
+        // would invite them to save it back on without noticing.
+        setRecordTypes({
+          alert_cpu: r.alert_cpu !== false,
+          alert_memory: r.alert_memory !== false,
+          alert_disk: r.alert_disk !== false,
+          alert_offline: r.alert_offline !== false,
+          alert_backup_failure: r.alert_backup_failure !== false,
+          alert_ssl_expiry: r.alert_ssl_expiry !== false,
+          alert_service_health: r.alert_service_health !== false,
+        });
         if (r.alert_gpu !== undefined) setGpuAlertEnabled(r.alert_gpu);
         if (r.gpu_util_threshold) setGpuUtilThreshold(r.gpu_util_threshold);
         if (r.gpu_util_duration) setGpuUtilDuration(r.gpu_util_duration);
@@ -2077,32 +2128,85 @@ export default function Settings() {
                     : "Unacknowledged alerts follow this chain instead of the built-in reminder cadence, then keep re-paging its last step every 30 minutes until acknowledged."}
               </p>
             </div>
-            {/* Alert Type Muting */}
+            {/* Alert Behaviour — one row per type, Record and Notify side by side.
+                These are two different switches and were previously two different
+                shapes: a checkbox grid for muting, and nothing at all for the
+                record columns, which were reachable only through Export/Import
+                Config. A single row per type is what makes the difference
+                legible — the alternative on the table was a second grid beside
+                the first, one meaning "don't page me" and the other "don't
+                record it".
+                Both columns read positively: ticked = it happens. The mute grid
+                this replaces was inverted (ticked = suppressed), which could not
+                survive sitting next to a Record column without misreading. */}
             <div className="bg-dark-800 rounded-lg border border-dark-600 p-5 space-y-3">
-              <h3 className="text-sm font-medium text-dark-100 font-mono">Suppress External Notifications</h3>
-              <p className="text-xs text-dark-400">Muted alert types still record in the panel but won't trigger Slack, Discord, PagerDuty, or webhook notifications.</p>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {SUPPRESSIBLE_ALERT_TYPES.map(({ key, label }) => (
-                  <label key={key} className="flex items-center gap-2 text-sm text-dark-200 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={mutedTypes.includes(key)}
-                      onChange={e => setMutedTypes(
-                        e.target.checked ? [...mutedTypes, key] : mutedTypes.filter(t => t !== key)
-                      )}
-                      className="rounded border-dark-500 bg-dark-900 text-rust-500 focus:ring-rust-500"
-                    />
-                    {label}
-                  </label>
-                ))}
+              <h3 className="text-sm font-medium text-dark-100 font-mono">Alert Behaviour</h3>
+              <p className="text-xs text-dark-400">
+                <span className="text-dark-200">Record</span> keeps the alert inside the panel — the alert row, the
+                bell, and any status-page incident. Switched off, the event is never created at all.{" "}
+                <span className="text-dark-200">Notify</span> governs only the external send — Slack, Discord,
+                PagerDuty, webhooks. Switched off, the alert is still recorded; you just are not paged for it.
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs font-mono uppercase tracking-widest text-dark-400">
+                      <th className="text-left font-normal py-2">Type</th>
+                      <th className="text-center font-normal py-2 w-24">Record</th>
+                      <th className="text-center font-normal py-2 w-24">Notify</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {SUPPRESSIBLE_ALERT_TYPES.map(({ key, label }) => {
+                      const column = RECORD_COLUMN_BY_TYPE[key];
+                      const recorded = column === "alert_gpu" ? gpuAlertEnabled : column ? recordTypes[column] : true;
+                      return (
+                        <tr key={key} className="border-t border-dark-700">
+                          <td className="py-2 text-dark-200">{label}</td>
+                          <td className="py-2 text-center">
+                            {column ? (
+                              <input
+                                type="checkbox"
+                                aria-label={`Record ${label} alerts`}
+                                checked={recorded}
+                                onChange={e => {
+                                  if (column === "alert_gpu") setGpuAlertEnabled(e.target.checked);
+                                  else setRecordTypes({ ...recordTypes, [column]: e.target.checked });
+                                }}
+                                className="rounded border-dark-500 bg-dark-900 text-rust-500 focus:ring-rust-500"
+                              />
+                            ) : (
+                              <span className="text-dark-500" title="Always recorded — this type has no record switch">&mdash;</span>
+                            )}
+                          </td>
+                          <td className="py-2 text-center">
+                            <input
+                              type="checkbox"
+                              aria-label={`Notify externally for ${label} alerts`}
+                              checked={!mutedTypes.includes(key)}
+                              onChange={e => setMutedTypes(
+                                e.target.checked ? mutedTypes.filter(t => t !== key) : [...mutedTypes, key]
+                              )}
+                              className="rounded border-dark-500 bg-dark-900 text-rust-500 focus:ring-rust-500"
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
+              <p className="text-xs text-dark-500">
+                &mdash; means the type is always recorded and has no switch. The three GPU rows share a single
+                switch, the same one the GPU card below uses.
+              </p>
             </div>
             {/* GPU Alert Thresholds */}
             <div className="bg-dark-800 rounded-lg border border-dark-600 p-5 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-medium text-dark-100 font-mono">GPU Alert Thresholds</h3>
-                  <p className="text-xs text-dark-400 mt-0.5">Configure when GPU alerts fire. Only applies to servers with NVIDIA GPUs.</p>
+                  <p className="text-xs text-dark-400 mt-0.5">Configure when GPU alerts fire. Only applies to servers with NVIDIA GPUs. The Enabled box is the same switch as the three GPU rows in the grid above &mdash; one value, shown in both places.</p>
                 </div>
                 <label className="flex items-center gap-2 text-sm text-dark-200 cursor-pointer">
                   <input type="checkbox" checked={gpuAlertEnabled} onChange={e => setGpuAlertEnabled(e.target.checked)}
@@ -2167,6 +2271,16 @@ export default function Settings() {
                       notify_discord_url: notifyDiscordUrl,
                       notify_pagerduty_key: notifyPagerdutyKey,
                       muted_types: mutedTypes.join(','),
+                      // Explicit booleans, never omitted: upsert_rules COALESCEs
+                      // a null onto the stored value, so a missing field would
+                      // make switching a type OFF silently impossible.
+                      alert_cpu: recordTypes.alert_cpu,
+                      alert_memory: recordTypes.alert_memory,
+                      alert_disk: recordTypes.alert_disk,
+                      alert_offline: recordTypes.alert_offline,
+                      alert_backup_failure: recordTypes.alert_backup_failure,
+                      alert_ssl_expiry: recordTypes.alert_ssl_expiry,
+                      alert_service_health: recordTypes.alert_service_health,
                       alert_gpu: gpuAlertEnabled,
                       gpu_util_threshold: gpuUtilThreshold,
                       gpu_util_duration: gpuUtilDuration,

@@ -1873,6 +1873,10 @@ async fn check_escalations(pool: &PgPool) {
         std::collections::HashMap::new();
     let mut runbook_cache: std::collections::HashMap<String, (Option<String>, Option<String>)> =
         std::collections::HashMap::new();
+    // Same shape, for the per-type disable switch. Firing rows cluster hard on a
+    // few (user, server, type) keys, so this is O(distinct keys) not O(rows).
+    let mut enabled_cache: std::collections::HashMap<(Uuid, Option<Uuid>, String), bool> =
+        std::collections::HashMap::new();
 
     // Rows the policy branch declines to page because the chain is exhausted (or
     // the policy has no steps). They can never page again, but they keep the
@@ -1884,6 +1888,47 @@ async fn check_escalations(pool: &PgPool) {
     let mut terminal_ids: Vec<Uuid> = Vec::new();
 
     for row in &rows {
+        // The operator can switch an alert type off. Until now that switch had
+        // exactly ONE caller — inside `try_fire_alert` — so it governed only
+        // whether a row was ever RECORDED, and said nothing about a row already
+        // firing when the switch was flipped. This sweep selects on
+        // `status = 'firing'` alone and is provenance-blind, so the one control
+        // meaning "do not tell me about this" left the alert re-paging every
+        // thirty minutes until it aged out of the seven-day window above.
+        //
+        // ⚠ Skipped WITHOUT stamping `escalated_at`. Stamping would rotate the
+        // row to the back of the least-recently-paged ordering — which is what
+        // `terminal_ids` exists for — but `escalated_at` means *this row was
+        // paged at this time*, and writing it for a page that was never sent is
+        // exactly the harm `maintenance_users` documents a few hundred lines
+        // above: a stamp claiming the operator was told. A re-enabled type pages
+        // on the NEXT tick, not thirty minutes after one.
+        //
+        // ⚠ Scope: `is_alert_enabled` returns true for any type it has no column
+        // for, so this narrows paging for the eight mapped types ONLY (cpu,
+        // memory, disk, offline, backup_failure, ssl_expiry, service_down and
+        // the three gpu_* sharing `alert_gpu`). Every other type escalates
+        // exactly as before.
+        let enabled_key = (row.user_id, row.server_id, row.alert_type.clone());
+        let enabled = match enabled_cache.get(&enabled_key) {
+            Some(cached) => *cached,
+            None => {
+                let e =
+                    notifications::is_alert_enabled(pool, row.user_id, row.server_id, &row.alert_type)
+                        .await;
+                enabled_cache.insert(enabled_key, e);
+                e
+            }
+        };
+        if !enabled {
+            tracing::debug!(
+                "Alert type '{}' is switched off for this owner — skipping escalation for alert {}",
+                row.alert_type,
+                row.id
+            );
+            continue;
+        }
+
         let policy_key = (row.user_id, row.server_id);
         let policy_id = match policy_cache.get(&policy_key) {
             Some(cached) => *cached,
