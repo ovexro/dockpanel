@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { formatDate } from "../utils/format";
 import { statusColors, runtimeLabelsDetailed as runtimeLabels } from "../constants";
 import { PrereqCallout, useDnsPrereq, prereqBlocks } from "../components/Prerequisite";
@@ -57,6 +57,16 @@ export default function SiteDetail() {
   const [provisioning, setProvisioning] = useState(false);
   const [sslMessage, setSslMessage] = useState("");
   const [sslMessageIsError, setSslMessageIsError] = useState(false);
+  // Set only by the agent's `foreign_certificate` refusal — never inferred
+  // from any other 4xx, so a DNS 412 or a rate limit never grows a "replace
+  // it anyway" button that has no business next to it. `retry` re-issues the
+  // exact same provision call with `force: true`, the only way this reaches
+  // the wire (mirrors the CLI's `--force`).
+  const [foreignCertRefusal, setForeignCertRefusal] = useState<{
+    message: string;
+    retry: () => Promise<void>;
+  } | null>(null);
+  const [forcingSsl, setForcingSsl] = useState(false);
   // Only run the DNS prerequisite while SSL is still unconfigured; a live cert
   // is proof enough that the domain resolves here. autoPoll covers propagation:
   // a blocking gate opens by itself once the record goes live.
@@ -412,37 +422,46 @@ export default function SiteDetail() {
     }
   };
 
-  const handleProvisionSSL = async () => {
+  const handleProvisionSSL = async (force = false) => {
     if (!site) return;
-    setProvisioning(true);
+    if (force) setForcingSsl(true); else setProvisioning(true);
     setSslMessage("");
+    setForeignCertRefusal(null);
     try {
-      await api.post(`/sites/${id}/ssl`);
+      await api.post(`/sites/${id}/ssl${force ? "?force=true" : ""}`);
       const updated = await api.get<Site>(`/sites/${id}`);
       setSite(updated);
       setSslMessage("SSL certificate provisioned successfully!");
       setSslMessageIsError(false);
     } catch (err) {
-      setSslMessage(
-        err instanceof Error ? err.message : "SSL provisioning failed"
-      );
-      setSslMessageIsError(true);
-      // The server may have refused on a prerequisite (a 412 naming the DNS
-      // problem). Refresh it so the callout beside the button reflects why.
-      recheckDns();
+      if (err instanceof ApiError && err.code === "foreign_certificate") {
+        setForeignCertRefusal({
+          message: err.message,
+          retry: () => handleProvisionSSL(true),
+        });
+      } else {
+        setSslMessage(
+          err instanceof Error ? err.message : "SSL provisioning failed"
+        );
+        setSslMessageIsError(true);
+        // The server may have refused on a prerequisite (a 412 naming the DNS
+        // problem). Refresh it so the callout beside the button reflects why.
+        recheckDns();
+      }
     } finally {
-      setProvisioning(false);
+      if (force) setForcingSsl(false); else setProvisioning(false);
     }
   };
 
   const [dns01Loading, setDns01Loading] = useState(false);
 
-  const handleProvisionDns01 = async (wildcard: boolean) => {
+  const handleProvisionDns01 = async (wildcard: boolean, force = false) => {
     if (!site) return;
-    setDns01Loading(true);
+    if (force) setForcingSsl(true); else setDns01Loading(true);
     setSslMessage("");
+    setForeignCertRefusal(null);
     try {
-      await api.post(`/sites/${id}/ssl/dns01`, { wildcard });
+      await api.post(`/sites/${id}/ssl/dns01`, { wildcard, force });
       const updated = await api.get<Site>(`/sites/${id}`);
       setSite(updated);
       setSslMessage(wildcard
@@ -451,10 +470,17 @@ export default function SiteDetail() {
       );
       setSslMessageIsError(false);
     } catch (err) {
-      setSslMessage(err instanceof Error ? err.message : "DNS-01 provisioning failed");
-      setSslMessageIsError(true);
+      if (err instanceof ApiError && err.code === "foreign_certificate") {
+        setForeignCertRefusal({
+          message: err.message,
+          retry: () => handleProvisionDns01(wildcard, true),
+        });
+      } else {
+        setSslMessage(err instanceof Error ? err.message : "DNS-01 provisioning failed");
+        setSslMessageIsError(true);
+      }
     } finally {
-      setDns01Loading(false);
+      if (force) setForcingSsl(false); else setDns01Loading(false);
     }
   };
 
@@ -998,7 +1024,7 @@ export default function SiteDetail() {
                     {site.status === "active" && (
                       <>
                         <button
-                          onClick={handleProvisionSSL}
+                          onClick={() => handleProvisionSSL()}
                           disabled={provisioning || prereqBlocks(dnsPrereq)}
                           title={prereqBlocks(dnsPrereq) ? dnsPrereq?.title : undefined}
                           className="px-3 py-1 bg-rust-500 text-white rounded-md text-xs font-medium hover:bg-rust-600 disabled:opacity-50 transition-colors"
@@ -1120,6 +1146,42 @@ export default function SiteDetail() {
                   }} className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50">
                     {uploadingSsl ? "Installing..." : "Install Certificate"}
                   </button>
+                </div>
+              )}
+
+              {/* The refusal that used to be a dead end. The agent's
+                  provision writer declines by default over a certificate
+                  this product did not issue — correct, since a purchased
+                  wildcard or an Origin CA cert is a paid asset nobody asked
+                  to have replaced — but until this control existed the only
+                  way past it was `dockpanel ssl provision --force` on the
+                  CLI, with the panel's own button offering no path forward
+                  at all. This asks the SAME confirmation the CLI's `--force`
+                  requires: read what would be lost, then say so explicitly. */}
+              {foreignCertRefusal && (
+                <div
+                  role="alert"
+                  className="mt-3 px-3 py-2 rounded text-xs bg-warn-500/10 text-warn-400 border border-warn-500/20 space-y-2"
+                >
+                  <p>{foreignCertRefusal.message}</p>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      disabled={forcingSsl}
+                      onClick={foreignCertRefusal.retry}
+                      className="px-3 py-1 bg-danger-500/20 text-danger-400 rounded-md text-xs font-medium hover:bg-danger-500/30 disabled:opacity-50 transition-colors"
+                    >
+                      {forcingSsl ? "Replacing..." : "Replace it anyway"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={forcingSsl}
+                      onClick={() => setForeignCertRefusal(null)}
+                      className="text-xs text-dark-300 hover:text-dark-100 underline decoration-dotted underline-offset-2 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               )}
 

@@ -258,6 +258,12 @@ pub struct ProvisionQuery {
     /// which itself defaults to "classic".
     #[serde(default)]
     pub profile: Option<String>,
+    /// The operator's explicit intent to replace a certificate this product
+    /// did not issue, after seeing the refusal that names its issuer. Mirrors
+    /// the CLI's `--force` and, like it, is the only way past the agent
+    /// writer's foreign-certificate refusal — never a default, never inferred.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// POST /api/sites/{id}/ssl — Provision SSL certificate for a site.
@@ -359,6 +365,9 @@ pub async fn provision(
     }
     if let Some(ref p) = profile {
         agent_body["profile"] = serde_json::json!(p);
+    }
+    if q.force {
+        agent_body["force"] = serde_json::json!(true);
     }
 
     // Call agent to provision SSL
@@ -482,6 +491,9 @@ pub async fn provision_dns01(
     }
 
     let wildcard = body.get("wildcard").and_then(|v| v.as_bool()).unwrap_or(false);
+    // The operator's explicit intent to replace a certificate this product did
+    // not issue — see `ProvisionQuery::force` on the HTTP-01 sibling above.
+    let force = body.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
 
     // Find the matching Cloudflare DNS zone for this domain.
     // Uses longest-suffix match to handle multi-part TLDs (e.g., example.co.uk).
@@ -542,6 +554,9 @@ pub async fn provision_dns01(
     });
     if let Some(ref p) = profile {
         agent_body["profile"] = serde_json::json!(p);
+    }
+    if force {
+        agent_body["force"] = serde_json::json!(true);
     }
 
     // ⛔ THE SAME BUDGET AS EVERY OTHER DNS-01 DOOR. This is the door that ISSUES
@@ -1007,6 +1022,14 @@ pub(crate) async fn renew_for_site(
     let agent =
         crate::helpers::agent_for_site_server(state, site.server_id, &site.domain).await?;
 
+    // WHICH CHALLENGE ISSUED THIS CERTIFICATE decides which door renews it, and
+    // that decision has to come BEFORE the foreign-certificate check below, not
+    // after it — see why there.
+    let days_remaining = site
+        .ssl_expiry
+        .map(|e| (e - chrono::Utc::now()).num_days());
+    let plan = crate::helpers::renewal_plan(&state.db, site, days_remaining).await;
+
     // ⛔ RENEWING IS REPLACING. `provision_cert` writes the same
     // `fullchain.pem`/`privkey.pem` an uploaded certificate occupies, so "renew"
     // aimed at a certificate this product did not issue does not refresh it — it
@@ -1022,17 +1045,32 @@ pub(crate) async fn renew_for_site(
     // which is the whole point of the exercise, since the alternative outcome for
     // exactly this case was `Operation failed. Reference: {uuid}` after a wasted
     // ACME order.
-    if let Some(issuer) = crate::helpers::foreign_cert_issuer(&agent, &site.domain).await {
-        return Err(err(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            &format!(
-                "The certificate on {} was not issued by DockPanel (issuer: {}). DockPanel \
-                 renews only the Let's Encrypt certificates it issued itself, and renewing \
-                 this one would replace it. Install a replacement under the site's SSL tab \
-                 instead, or renew it wherever it was issued.",
-                site.domain, issuer
-            ),
-        ));
+    //
+    // ⛔ THE NAME CHECKED MUST BE THE NAME THE ORDER IS ABOUT TO OVERWRITE. A
+    // DNS-01 renewal orders against `subject` — the zone apex for a wildcard,
+    // recorded at issuance, never `site.domain` — and `site.domain` typically has
+    // no certificate directory of its own in that case (the agent resolves
+    // `/ssl/status/{domain}` to a literal `/etc/dockpanel/ssl/{domain}/`), so
+    // checking `site.domain` always answered "no certificate here" regardless of
+    // what foreign certificate actually sat at the zone apex about to be
+    // overwritten. Skipped for `Refuse`, which never reaches an agent order.
+    let subject_domain: &str = match &plan {
+        crate::helpers::RenewalPlan::Dns01 { subject, .. } => subject.as_str(),
+        _ => site.domain.as_str(),
+    };
+    if !matches!(&plan, crate::helpers::RenewalPlan::Refuse { .. }) {
+        if let Some(issuer) = crate::helpers::foreign_cert_issuer(&agent, subject_domain).await {
+            return Err(err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                &format!(
+                    "The certificate on {} was not issued by DockPanel (issuer: {}). DockPanel \
+                     renews only the Let's Encrypt certificates it issued itself, and renewing \
+                     this one would replace it. Install a replacement under the site's SSL tab \
+                     instead, or renew it wherever it was issued.",
+                    subject_domain, issuer
+                ),
+            ));
+        }
     }
 
     // Agent renew now needs the same context as provision so it can rebuild
@@ -1063,15 +1101,8 @@ pub(crate) async fn renew_for_site(
         agent_body["profile"] = serde_json::json!(p);
     }
 
-    // WHICH CHALLENGE ISSUED THIS CERTIFICATE decides which door renews it.
-    // Aiming HTTP-01 at a DNS-01 certificate does not refresh it — it orders a
-    // different certificate, for a different set of names, and for a wildcard it
-    // writes that over the shared file every sibling in the zone is serving.
-    let days_remaining = site
-        .ssl_expiry
-        .map(|e| (e - chrono::Utc::now()).num_days());
-    let plan = crate::helpers::renewal_plan(&state.db, site, days_remaining).await;
-
+    // `plan` was already decided above the foreign-certificate check, since that
+    // check needs to know which name is about to be ordered.
     let result = match &plan {
         crate::helpers::RenewalPlan::Refuse { reason } => {
             // The idiom this file already uses for a precondition that is not an

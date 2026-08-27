@@ -4,6 +4,42 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.163.0]
+
+### Fixed — a DNS-01 wildcard renewal asked about the wrong certificate
+
+The manual/scheduled renewal door's foreign-certificate guard checked
+`site.domain`, but a DNS-01 renewal orders against `subject` — the Cloudflare
+zone apex for a wildcard, recorded at issuance — never `site.domain`. The
+agent resolves the status check to a literal `/etc/dockpanel/ssl/<domain>/`,
+and a wildcard child typically has no directory of its own there, so the guard
+always answered "no certificate here" regardless of what actually sat at the
+zone apex about to be overwritten. A foreign wildcard certificate installed at
+the apex — a purchased certificate, a Cloudflare Origin CA certificate — was
+invisible to the exact check built to protect it. It now asks about the name
+the order is actually about to write.
+
+### Fixed — running a manual security scan silently disabled automatic renewal for a week
+
+The scheduled weekly scanner skips a host once any `security_scans` row for it
+is `completed` within the last 7 days — it does not distinguish who triggered
+the scan. `POST /api/security/scan` (the panel's "Scan" button) marked its own
+row `completed` without ever running the auto-fix pass that renews expiring
+SSL and Compose-stack certificates, so an administrator clicking Scan bought
+that host up to a week with no automatic renewal, for nothing. The manual door
+now runs the same auto-fix pass the scheduled one does.
+
+### Added — a way past a foreign-certificate refusal, from the panel itself
+
+Provisioning over a certificate this product did not issue has refused since
+2.162.0, correctly — but the only way past it was `dockpanel ssl provision
+--force` on the CLI, with the panel's own *Provision SSL* button offering no
+path forward at all. The agent's refusal was always labelled; nothing between
+it and the browser carried the label past a sentence. It now does, end to end,
+and the panel shows the refusal with the certificate's issuer and an explicit
+**Replace it anyway** confirmation — the same deliberate step the CLI's
+`--force` requires, on both the HTTP-01 and DNS-01 provision doors.
+
 ## [2.162.0]
 
 ### Security — every ACME order now asks whose certificate it is about to replace

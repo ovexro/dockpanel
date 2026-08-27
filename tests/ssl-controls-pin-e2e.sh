@@ -453,8 +453,21 @@ eq "F4 a host with no certificate is not foreign either" \
 # door. A census whose prose counts lower than the tree is how a new door joins
 # without ever being asked — which is exactly how the stack door was written
 # without the guard in the first place.
-eq "F5 the shared manual renewal asks" \
-   "$(occ "$F_SSL" 'crate::helpers::foreign_cert_issuer(&agent,&site.domain).await')" "1"
+#
+# ⚠ s411: THE NAME CHECKED MUST BE THE NAME THE ORDER IS ABOUT TO OVERWRITE.
+# This asked `site.domain` unconditionally until s411 — correct for HTTP-01, but
+# a DNS-01 renewal orders against `subject`, the zone apex for a wildcard, and
+# `site.domain` typically has no certificate directory of its own in that case.
+# So the guard always answered "no certificate here" for exactly the shape a
+# foreign wildcard certificate at the zone apex would take — #832's shape,
+# alive in shipped code until this fix. F5 alone would still pass if a later
+# edit made `subject_domain` collapse back to `site.domain` in every case
+# (renaming a variable proves nothing about what it holds), so F5b pins the
+# derivation as well as the call site.
+eq "F5 the shared manual renewal asks about the name about to be overwritten" \
+   "$(occ "$F_SSL" 'crate::helpers::foreign_cert_issuer(&agent,subject_domain).await')" "1"
+eq "F5b and that name is the DNS-01 order's own subject, not always the site" \
+   "$(occ "$F_SSL" 'RenewalPlan::Dns01{subject,..}=>subject.as_str(),')" "1"
 eq "F6 the scanner's auto-fix asks (the loop that needs no opt-in)" \
    "$(occ "$F_SCAN" 'crate::helpers::foreign_cert_issuer(agent,domain).await')" "1"
 eq "F6b and its Compose-stack sibling asks too — the same loop, the same disk" \

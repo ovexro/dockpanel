@@ -113,6 +113,41 @@ pub async fn trigger_scan(
         tracing::error!("Failed to update scan status: {e}");
     }
 
+    // ⛔ THIS ROW IS WHAT THE WEEKLY SCANNER'S OWN GATE COUNTS. `security_scanner::run`
+    // skips a host for 7 days once ANY `security_scans` row for it is `status =
+    // 'completed'` within that window — it does not distinguish who triggered the
+    // scan. Marking this one `completed` above without also running the fix pass
+    // below would buy the host a week of no automatic SSL/stack renewal for
+    // nothing: an admin clicking Scan, satisfied, and the scheduled scan that would
+    // have renewed an expiring certificate never running. `run_scan` (the scheduled
+    // path) and this handler must stay symmetric on that point.
+    if let Some(findings) = findings {
+        let member: Option<(uuid::Uuid, String, bool)> = sqlx::query_as(
+            "SELECT user_id, name, is_local FROM servers WHERE id = $1",
+        )
+        .bind(server_id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+
+        if let Some((user_id, name, is_local)) = member {
+            let member = crate::services::agent::FleetMember {
+                id: server_id,
+                user_id,
+                name,
+                is_local,
+                agent: agent.clone(),
+            };
+            crate::services::security_scanner::auto_fix_safe_findings(
+                &state.db,
+                &member,
+                findings,
+                &state.config.jwt_secret,
+            )
+            .await;
+        }
+    }
+
     // Store file integrity baselines
     if let Some(hashes) = file_hashes {
         for h in hashes {

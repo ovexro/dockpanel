@@ -83,6 +83,16 @@ const DNS_PROVIDER_FAILED_CODE: &str = "dns_provider_failed";
 /// the honest answer today. Same severed-pair caveat, same pin.
 const RENEWAL_FAILURE_PREFIX: &str = "Renewal failed:";
 
+/// The label the agent puts on a provision/renew order it declined because a
+/// certificate this product did not issue is already installed —
+/// `panel/agent/src/routes/ssl.rs::ca_or_internal`. `pub`, unlike its three
+/// siblings above: those are consumed only inside the functions beside them,
+/// but this one is also what a provision door's `err_coded` call names, so the
+/// frontend's force-retry has exactly one string to match rather than a copy
+/// that can drift from it. Same cross-tree severed-pair caveat as its siblings
+/// — the agent crate carries the same literal and cannot share this constant.
+pub const CODE_FOREIGN_CERTIFICATE: &str = "foreign_certificate";
+
 pub fn err(status: StatusCode, msg: &str) -> ApiError {
     (status, Json(serde_json::json!({ "error": msg })))
 }
@@ -243,7 +253,19 @@ pub fn agent_error(context: &str, e: AgentError) -> ApiError {
                 StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_REQUEST);
             let msg = agent_message(body);
             tracing::warn!(agent_status = code, error = %msg, "{context}");
-            err(status, &msg)
+            // A foreign-certificate refusal is the one 4xx a caller may want to
+            // retry, deliberately, with `force: true` — every provision/renew
+            // door funnels through here (#837's choke-point shape), so fixing
+            // it here rather than per-door is what makes a door added later
+            // inherit it too. `err` alone lost this exact code before: the
+            // agent has always labelled the refusal, but nothing between it and
+            // the frontend carried the label past a human-readable sentence.
+            match agent_code(body) {
+                Some(ref c) if c == CODE_FOREIGN_CERTIFICATE => {
+                    err_coded(status, &msg, CODE_FOREIGN_CERTIFICATE)
+                }
+                _ => err(status, &msg),
+            }
         }
 
         // The agent broke internally. Log it, hand back a reference.
@@ -427,6 +449,28 @@ mod tests {
     }
 
     #[test]
+    fn a_foreign_certificate_refusal_keeps_its_code() {
+        // The agent labels this refusal so the frontend can offer a
+        // force-retry instead of just showing the sentence — see
+        // `panel/agent/src/routes/ssl.rs::ca_or_internal`. Everything else in
+        // `agent_4xx_keeps_its_status_and_says_why` holds; only this one label
+        // must additionally survive as a `code`.
+        let e = agent_error(
+            "SSL provisioning",
+            AgentError::Status(
+                422,
+                r#"{"error":"The certificate on example.com was not issued by DockPanel (issuer: DigiCert Inc).","code":"foreign_certificate"}"#.into(),
+            ),
+        );
+        assert_eq!(e.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            body_of(&e)["error"],
+            "The certificate on example.com was not issued by DockPanel (issuer: DigiCert Inc)."
+        );
+        assert_eq!(body_of(&e)["code"], CODE_FOREIGN_CERTIFICATE);
+    }
+
+    #[test]
     fn agent_412_is_preserved_not_flattened_to_502() {
         let e = agent_error(
             "WAF configure",
@@ -507,6 +551,9 @@ mod tests {
         assert_ne!(CODE_SESSION_INVALID, CODE_REAUTH_REQUIRED);
         assert_ne!(CODE_SESSION_INVALID, CODE_AGENT_UNREACHABLE);
         assert_ne!(CODE_REAUTH_REQUIRED, CODE_AGENT_UNREACHABLE);
+        assert_ne!(CODE_FOREIGN_CERTIFICATE, CODE_SESSION_INVALID);
+        assert_ne!(CODE_FOREIGN_CERTIFICATE, CODE_REAUTH_REQUIRED);
+        assert_ne!(CODE_FOREIGN_CERTIFICATE, CODE_AGENT_UNREACHABLE);
     }
 
     #[test]

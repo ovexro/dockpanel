@@ -380,7 +380,7 @@ async fn ssl_dns01_downgraded_alert(
 /// Auto-fix safe findings after a scan completes.
 /// Only fixes things that are SAFE to fix automatically (SSL renewal).
 /// Never auto-fixes malware, open ports, or config changes that could break things.
-async fn auto_fix_safe_findings(
+pub(crate) async fn auto_fix_safe_findings(
     pool: &PgPool,
     member: &FleetMember,
     findings: &[serde_json::Value],
