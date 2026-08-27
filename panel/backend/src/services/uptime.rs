@@ -26,28 +26,7 @@ struct MonitorRow {
 pub async fn run(pool: PgPool, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
     tracing::info!("Uptime monitor started");
     crate::services::status_notices::start_worker(pool.clone());
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        // Follow up to 5 redirects (http->https etc.) but NEVER to an internal address —
-        // closes the redirect-to-internal SSRF/oracle bypass that a bare Policy::limited
-        // would follow. The target host is fully resolved (literal IPs AND hostnames that
-        // resolve to an internal IP are rejected); an over-limit chain surfaces as a
-        // network error (→ "down") rather than a spurious 3xx.
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if attempt.previous().len() > 5 {
-                return attempt.error("too many redirects");
-            }
-            let host = attempt.url().host_str().unwrap_or("").to_string();
-            let port = attempt.url().port_or_known_default().unwrap_or(80);
-            if crate::helpers::host_resolves_internal_blocking(&host, port) {
-                attempt.error("redirect to internal address blocked")
-            } else {
-                attempt.follow()
-            }
-        }))
-        .danger_accept_invalid_certs(false)
-        .build()
-        .unwrap();
+    let client = http_check_client_builder().build().unwrap();
 
     let mut interval = tokio::time::interval(Duration::from_secs(60));
     let mut tick_count: u64 = 0;
@@ -188,34 +167,53 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
     // one alert rather than one per check. The varying figure lives in the
     // message, which is not part of the key.
     if new_status == "up" && response_time > 5000 {
-        if let Err(e) = sqlx::query(
-            // The casts are load-bearing, and `PREPARE` is the only thing that
-            // says so. `$3` appears both as a SELECT-list value, where an
-            // unadorned parameter resolves to `text`, and in `title = $3`,
-            // where it resolves to the column's `varchar` — "inconsistent types
-            // deduced for parameter $3", and the statement never prepares. The
-            // first rewrite of this fix had exactly that fault and looked
-            // perfectly correct on the page.
-            //
-            // Dedup keys on `state_key` (the monitor's id) rather than on the
-            // title, because the title carries the monitor's NAME: renaming a
-            // slow monitor used to raise a second firing alert for the same
-            // subject, and the rename made the first one unreachable.
-            "INSERT INTO alerts (user_id, site_id, alert_type, state_key, severity, title, message, status) \
-             SELECT $1, $2, 'slow_response', $5::text, 'warning', $3::text, $4::text, 'firing' \
-             WHERE NOT EXISTS ( \
-                 SELECT 1 FROM alerts \
-                 WHERE alert_type = 'slow_response' AND status = 'firing' \
-                   AND user_id = $1 AND state_key = $5::text)"
+        // Dedup keys on `state_key` (the monitor's id) rather than on the
+        // title, because the title carries the monitor's NAME: renaming a
+        // slow monitor used to raise a second firing alert for the same
+        // subject, and the rename made the first one unreachable.
+        //
+        // This guard-then-fire split replaced a single atomic
+        // `INSERT ... WHERE NOT EXISTS` — safe because `check_monitor` never
+        // runs twice concurrently for the same monitor (the tick's JoinSet is
+        // fully drained before the next monitor query), so there is no real
+        // TOCTOU window between the two statements below.
+        //
+        // Firing now goes through `notifications::try_fire_alert` instead of a
+        // raw INSERT: the raw form only ever wrote the `alerts` row, so a
+        // firing slow-response alert got no bell/SSE entry, no email/Slack/
+        // Discord delivery and no escalation paging — and could not honour the
+        // per-type mute either, even though "slow_response" has been listed in
+        // SUPPRESSIBLE_ALERT_TYPES as a mutable type since it was added. The
+        // recovery half below already went through `resolve_alert`; this
+        // brings the firing half to the same standard.
+        let state_key = monitor.id.to_string();
+        let already_firing: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM alerts \
+             WHERE alert_type = 'slow_response' AND status = 'firing' \
+               AND user_id = $1 AND state_key = $2)",
         )
         .bind(monitor.user_id)
-        .bind(monitor.site_id)
-        .bind(format!("Slow response: {}", monitor.name))
-        .bind(format!("Response time {}ms exceeds 5000ms threshold for {}", response_time, monitor.url))
-        .bind(monitor.id.to_string())
-        .execute(pool)
-        .await {
-            tracing::error!("Failed to record slow-response alert for {}: {e}", monitor.name);
+        .bind(&state_key)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false);
+
+        if !already_firing {
+            if let Err(e) = crate::services::notifications::try_fire_alert(
+                pool,
+                monitor.user_id,
+                None,
+                monitor.site_id,
+                "slow_response",
+                &state_key,
+                "warning",
+                &format!("Slow response: {}", monitor.name),
+                &format!("Response time {}ms exceeds 5000ms threshold for {}", response_time, monitor.url),
+            )
+            .await
+            {
+                tracing::error!("Failed to record slow-response alert for {}: {e}", monitor.name);
+            }
         }
 
         tracing::warn!("Monitor {} ({}) slow response: {}ms", monitor.name, monitor.url, response_time);
@@ -315,15 +313,21 @@ async fn check_tcp(monitor: &MonitorRow) -> (Option<i32>, Option<String>, &'stat
     // SSRF re-validation at check time (parity with check_http): a low-TTL record can
     // flip to an internal IP after write, and rows imported via /settings/import bypass
     // the create-path guard. An internal target must not be probed.
-    if let Err(e) = crate::helpers::validate_host_not_internal(host, port).await {
-        return (None, Some(format!("Host blocked: {e}")), "down", 0);
-    }
-    let addr = format!("{}:{}", host, port);
+    //
+    // Resolved and pinned to the SAME address: dialing `host:port` again below
+    // would let the OS resolve it a second time, independently of the check
+    // just run against it — a rebinding DNS server (or simply a low TTL)
+    // could then answer this second lookup with an internal address the
+    // check above never saw.
+    let addr = match crate::helpers::resolve_validated(host, port).await {
+        Ok(addr) => addr,
+        Err(e) => return (None, Some(format!("Host blocked: {e}")), "down", 0),
+    };
 
     let start = Instant::now();
     let result = tokio::time::timeout(
         Duration::from_secs(10),
-        tokio::net::TcpStream::connect(&addr),
+        tokio::net::TcpStream::connect(addr),
     ).await;
     let response_time = start.elapsed().as_millis() as i32;
 
@@ -339,15 +343,21 @@ async fn check_ping(monitor: &MonitorRow) -> (Option<i32>, Option<String>, &'sta
     let host = monitor.url.trim_start_matches("ping://");
     // SSRF re-validation at check time (parity with check_http/check_tcp): reachability
     // of an internal host is itself the disclosure a ping monitor would leak.
-    if let Err(e) = crate::helpers::validate_host_not_internal(host, 0).await {
-        return (None, Some(format!("Host blocked: {e}")), "down", 0);
-    }
+    //
+    // Pinned to the checked address, same reasoning as check_tcp: `ping` would
+    // otherwise resolve `host` itself, a second and independent lookup from
+    // the one just validated.
+    let addr = match crate::helpers::resolve_validated(host, 0).await {
+        Ok(addr) => addr,
+        Err(e) => return (None, Some(format!("Host blocked: {e}")), "down", 0),
+    };
+    let target = addr.ip().to_string();
     let start = Instant::now();
 
     let output = tokio::time::timeout(
         Duration::from_secs(10),
         safe_command("ping")
-            .args(["-c", "1", "-W", "5", host])
+            .args(["-c", "1", "-W", "5", &target])
             .output()
     ).await;
 
@@ -510,15 +520,61 @@ fn redact_monitor_target(mut msg: String, url: &str) -> String {
     msg
 }
 
+/// The `reqwest::Client` settings every HTTP monitor check shares: a 30s
+/// timeout and a redirect policy that blocks a hop into an internal address.
+/// Extracted so `check_http` can build a FRESH client per call (below) with
+/// these same settings, rather than duplicating them.
+fn http_check_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        // Follow up to 5 redirects (http->https etc.) but NEVER to an internal address —
+        // closes the redirect-to-internal SSRF/oracle bypass that a bare Policy::limited
+        // would follow. The target host is fully resolved (literal IPs AND hostnames that
+        // resolve to an internal IP are rejected); an over-limit chain surfaces as a
+        // network error (→ "down") rather than a spurious 3xx.
+        //
+        // ⚠ This hop-by-hop check still has the same check-then-reconnect gap
+        // `resolve_validated` closes for the INITIAL request below — pinning
+        // every redirect hop needs a custom `reqwest::dns::Resolve` impl
+        // rather than the builder-level `.resolve()` used for the first
+        // request, and is tracked separately as a harder follow-up.
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() > 5 {
+                return attempt.error("too many redirects");
+            }
+            let host = attempt.url().host_str().unwrap_or("").to_string();
+            let port = attempt.url().port_or_known_default().unwrap_or(80);
+            if crate::helpers::host_resolves_internal_blocking(&host, port) {
+                attempt.error("redirect to internal address blocked")
+            } else {
+                attempt.follow()
+            }
+        }))
+        .danger_accept_invalid_certs(false)
+}
+
 /// HTTP check with optional keyword verification and custom headers.
-async fn check_http(monitor: &MonitorRow, client: &reqwest::Client) -> (Option<i32>, Option<String>, &'static str, i32) {
+///
+/// `_client` is the tick's shared, pooled client — kept as a parameter since
+/// `check_monitor` still threads it through for the other check kinds, but no
+/// longer used HERE for the actual request. A shared client's resolver would
+/// re-resolve `monitor.url`'s host independently of the SSRF check just run
+/// against it; this function instead pins the request to the EXACT address
+/// that check approved, via a fresh per-call client (`pinned_client`) built
+/// with the same settings (`http_check_client_builder`).
+async fn check_http(monitor: &MonitorRow, _client: &reqwest::Client) -> (Option<i32>, Option<String>, &'static str, i32) {
+    let (host, port) = match crate::helpers::url_authority(&monitor.url) {
+        Ok(hp) => hp,
+        Err(e) => return (None, Some(format!("URL blocked: {e}")), "down", 0),
+    };
     // SSRF re-validation at check time: the URL was vetted at write time, but a low-TTL
     // DNS record can flip to an internal IP before the check runs (rebind), and monitors
     // imported via /settings/import bypass the create-path guard entirely. Done BEFORE the
     // timing window so its DNS lookup does not inflate the recorded response_time.
-    if let Err(e) = crate::helpers::validate_url_not_internal(&monitor.url).await {
-        return (None, Some(format!("URL blocked: {e}")), "down", 0);
-    }
+    let client = match crate::helpers::pinned_client(&host, port, http_check_client_builder()).await {
+        Ok(c) => c,
+        Err(e) => return (None, Some(format!("URL blocked: {e}")), "down", 0),
+    };
     let start = Instant::now();
     let mut builder = client.get(&monitor.url);
 

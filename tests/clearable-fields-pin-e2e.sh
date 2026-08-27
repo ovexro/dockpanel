@@ -121,19 +121,50 @@ pairs=$(printf '%s\n' "$nulled" \
 #        keyword@Monitors.tsx                           monitors have no edit form
 #                                                       at all — `api.put` there
 #                                                       sends only { enabled }
-#   ── deliberate on an UPDATE, and the only one:
+#   ── deliberate on an UPDATE, and the only ones:
 #        github_token@GitDeploys.tsx   the GET masks a stored token, so the box is
 #                                      blank on every ordinary edit; "" would mean
 #                                      "cleared" on a form that clears itself, and
 #                                      every save would delete the token.
+#        domain@Apps.tsx (2nd),        s414's Stack EDIT modal (PUT /stacks/{id}),
+#        ssl_email@Apps.tsx (2nd)      alongside the pre-existing CREATE occurrence
+#                                      of each. Both verified SAFE against the
+#                                      ACTUAL target column — stacks.rs, not the
+#                                      git_deploys.rs column this arm's bare
+#                                      column-name matching pairs them with:
+#                                        domain    — UpdateStackRequest.domain is
+#                                                     Option<Option<String>> via
+#                                                     explicit_option, genuinely
+#                                                     three-state at the struct
+#                                                     level (absent=keep, explicit
+#                                                     null=vacate, per the field's
+#                                                     own doc comment); stacks.rs's
+#                                                     UPDATE has no COALESCE on
+#                                                     domain at all ("no COALESCE,
+#                                                     so the statement says exactly
+#                                                     what the row will hold").
+#                                        ssl_email — UpdateStackRequest.ssl_email
+#                                                     really is "absent (or an
+#                                                     explicit null) = keep stored"
+#                                                     — but that is INTENTIONAL,
+#                                                     stated in TlsPlan's own doc
+#                                                     comment: "an edit that says
+#                                                     nothing about the address
+#                                                     keeps it, and a stack
+#                                                     switched to none and back to
+#                                                     acme finds it again." Not the
+#                                                     #117 shape (an operator who
+#                                                     WANTS to clear it silently
+#                                                     cannot): the round-trip is
+#                                                     the point.
 #
 # Each entry pins a COUNT, because file granularity alone is not enough: several
 # of these pages carry a create AND an update payload, and an allow-list entry
-# earned by the create would otherwise excuse the update regrowing one. Every
-# expected count is 1 — the create occurrence — so a second occurrence in the
-# same file fails here. `domain@GitDeploys.tsx` must never appear at all: that
-# clear is REFUSED rather than folded away (§5).
-EXPECTED_PAIRS="accent_color@Resellers.tsx=1 alert_discord_url@Monitors.tsx=1 alert_slack_url@Monitors.tsx=1 allowed_images@ContainerPolicies.tsx=1 domain@Apps.tsx=1 github_token@GitDeploys.tsx=1 keyword@Monitors.tsx=1 logo_url@Resellers.tsx=1 panel_name@Resellers.tsx=1 ssl_email@Apps.tsx=1"
+# earned by the create would otherwise excuse the update regrowing one. Most
+# expected counts are 1 — the create occurrence — so any OTHER count in the same
+# file fails here unless written above. `domain@GitDeploys.tsx` must never appear
+# at all: that clear is REFUSED rather than folded away (§5).
+EXPECTED_PAIRS="accent_color@Resellers.tsx=1 alert_discord_url@Monitors.tsx=1 alert_slack_url@Monitors.tsx=1 allowed_images@ContainerPolicies.tsx=1 domain@Apps.tsx=2 github_token@GitDeploys.tsx=1 keyword@Monitors.tsx=1 logo_url@Resellers.tsx=1 panel_name@Resellers.tsx=1 ssl_email@Apps.tsx=2"
 eq "§1 the only null-for-empty fields left on a COALESCE-guarded column are the ten with written reasons" \
    "$pairs" "$EXPECTED_PAIRS"
 

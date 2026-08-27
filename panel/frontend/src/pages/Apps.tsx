@@ -528,6 +528,21 @@ export default function Apps() {
   const [registeredCertsError, setRegisteredCertsError] = useState("");
   const [composeChecks, setComposeChecks] = useState<ComposeValidation | null>(null);
 
+  // Stack edit state. `PUT /api/stacks/{id}` (redeploy with domain/TLS
+  // replanning, rollback on failure) had zero frontend caller until s414 —
+  // the field set mirrors the create modal above (minus name, which is
+  // immutable) since GET /api/stacks/{id} already returns everything needed
+  // to prefill it.
+  const [editingStack, setEditingStack] = useState<StackInfo | null>(null);
+  const [editYaml, setEditYaml] = useState("");
+  const [editLoading, setEditLoading] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [editDomain, setEditDomain] = useState("");
+  const [editSslEmail, setEditSslEmail] = useState("");
+  const [editTlsMode, setEditTlsMode] = useState<"none" | "acme" | "provided">("none");
+  const [editTlsCertificate, setEditTlsCertificate] = useState("");
+
   // Image management state (Feature #6)
   const [showImages, setShowImages] = useState(false);
   const [images, setImages] = useState<{ repository: string; tag: string; id: string; size: string; created: string }[]>([]);
@@ -1117,6 +1132,57 @@ export default function Apps() {
     }
   };
 
+  const openEditStack = (stack: StackInfo) => {
+    setEditingStack(stack);
+    setEditError("");
+    setEditYaml("");
+    setEditDomain(stack.domain ?? "");
+    setEditSslEmail(stack.ssl_email ?? "");
+    setEditTlsMode(stack.tls_mode);
+    setEditTlsCertificate(stack.tls_certificate ?? "");
+    if (stack.tls_mode === "provided" && registeredCerts === null) {
+      setRegisteredCertsError("");
+      api.get<{ id: string; alias: string; dns_names: string[] }[]>("/tls-certificates")
+        .then((rows) => setRegisteredCerts(rows))
+        .catch((err) => {
+          setRegisteredCertsError(err instanceof Error ? err.message : "Could not load registered certificates");
+        });
+    }
+    // The list endpoint carries everything but the YAML itself, which is the
+    // one field the create modal never has to fetch (it starts blank here).
+    setEditLoading(true);
+    api.get<{ yaml: string }>(`/stacks/${stack.id}`)
+      .then((detail) => setEditYaml(detail.yaml))
+      .catch((err) => setEditError(err instanceof Error ? err.message : "Could not load the stack's YAML"))
+      .finally(() => setEditLoading(false));
+  };
+
+  const handleStackUpdate = async () => {
+    if (!editingStack) return;
+    setEditSaving(true);
+    setEditError("");
+    try {
+      await api.put(`/stacks/${editingStack.id}`, {
+        yaml: editYaml,
+        domain: editDomain.trim() || null,
+        ssl_email: editSslEmail.trim() || null,
+        tls_mode: editTlsMode,
+        ...(editTlsMode === "provided" ? { tls_certificate: editTlsCertificate } : {}),
+      });
+      setMessage({ text: `Stack "${editingStack.name}" updated`, type: "success" });
+      setEditingStack(null);
+      loadApps();
+    } catch (e) {
+      // A redeploy that fails rolls the stack back to its previous, saved YAML
+      // (the handler's own contract) — the error names why, and the dialog
+      // stays open so the operator can fix the YAML and retry rather than
+      // lose what they typed.
+      setEditError(e instanceof Error ? e.message : "Update failed");
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
   // Image management handlers (Feature #6)
   const loadImages = async () => {
     setImagesLoading(true);
@@ -1560,6 +1626,13 @@ volumes:
                         {stackActionLoading === `${stack.id}-restart` ? "..." : "Restart"}
                       </button>
                     )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openEditStack(stack); }}
+                      disabled={stackActionLoading !== null}
+                      className="px-2 py-1 text-xs bg-dark-700 text-dark-200 rounded hover:bg-dark-600 disabled:opacity-50"
+                    >
+                      Edit
+                    </button>
                     {stackRemoveArmed === stack.id ? (
                       <>
                         <button
@@ -3326,6 +3399,155 @@ volumes:
               </>
             )}
             </>)}
+          </div>
+        </div>
+      )}
+
+      {/* Edit stack — reuses the create modal's field set (minus name, which
+          PUT /api/stacks/{id} keeps immutable) since GET already returns
+          everything needed to prefill it. */}
+      {editingStack && (
+        <div
+          className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4 dp-modal-overlay"
+          role="dialog"
+          aria-labelledby="edit-stack-dialog-title"
+          onKeyDown={(e) => { if (e.key === "Escape" && !editSaving) setEditingStack(null); }}
+        >
+          <div className="bg-dark-800 rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto dp-modal">
+            <h3 id="edit-stack-dialog-title" className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest mb-4">
+              Edit Stack — {editingStack.name}
+            </h3>
+
+            {editError && (
+              <div className="mb-4 px-4 py-3 rounded-lg text-sm border bg-danger-500/10 text-danger-400 border-danger-500/20">
+                {editError}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label htmlFor="edit-stack-domain" className="block text-sm font-medium text-dark-100 mb-1">Domain <span className="text-dark-400 font-normal">(optional)</span></label>
+                <input
+                  id="edit-stack-domain"
+                  type="text"
+                  value={editDomain}
+                  onChange={(e) => {
+                    setEditDomain(e.target.value);
+                    if (!e.target.value.trim()) {
+                      setEditTlsMode("none");
+                      setEditTlsCertificate("");
+                      setEditSslEmail("");
+                    }
+                  }}
+                  placeholder="watchdog.example.com"
+                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                />
+              </div>
+              <div>
+                <label htmlFor="edit-stack-tls-mode" className="block text-sm font-medium text-dark-100 mb-1">HTTPS</label>
+                <select
+                  id="edit-stack-tls-mode"
+                  value={editTlsMode}
+                  disabled={!editDomain.trim()}
+                  onChange={(e) => {
+                    const mode = e.target.value as "none" | "acme" | "provided";
+                    setEditTlsMode(mode);
+                    if (mode !== "acme") setEditSslEmail("");
+                    if (mode !== "provided") setEditTlsCertificate("");
+                    if (mode === "provided" && registeredCerts === null) {
+                      setRegisteredCertsError("");
+                      api.get<{ id: string; alias: string; dns_names: string[] }[]>("/tls-certificates")
+                        .then((rows) => setRegisteredCerts(rows))
+                        .catch((err) => {
+                          setRegisteredCertsError(err instanceof Error ? err.message : "Could not load registered certificates");
+                        });
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-dark-800 border border-dark-500 rounded-lg text-sm text-dark-100 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 disabled:opacity-50"
+                >
+                  <option value="none">No HTTPS — plain HTTP, or TLS terminated upstream</option>
+                  <option value="acme">Let's Encrypt certificate</option>
+                  <option value="provided">Registered certificate</option>
+                </select>
+                {editTlsMode === "acme" && (
+                  <input
+                    type="email"
+                    value={editSslEmail}
+                    onChange={(e) => setEditSslEmail(e.target.value)}
+                    placeholder="admin@example.com"
+                    aria-label="SSL Email"
+                    className="mt-2 w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                  />
+                )}
+                {editTlsMode === "provided" && (
+                  <>
+                    <select
+                      value={editTlsCertificate}
+                      onChange={(e) => setEditTlsCertificate(e.target.value)}
+                      aria-label="Registered certificate"
+                      className="mt-2 w-full px-3 py-2 bg-dark-800 border border-dark-500 rounded-lg text-sm font-mono text-dark-100 focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                    >
+                      <option value="">
+                        {registeredCerts === null ? "Loading…" : "Choose a certificate"}
+                      </option>
+                      {(registeredCerts ?? []).map((c) => (
+                        <option key={c.id} value={c.alias}>
+                          {c.alias}{c.dns_names.length > 0 ? ` — ${c.dns_names.join(", ")}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {registeredCertsError && (
+                      <p className="text-xs text-danger-400 mt-1">{registeredCertsError}</p>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <label htmlFor="edit-stack-yaml" className="block text-sm font-medium text-dark-100 mb-1">docker-compose.yml</label>
+              <textarea
+                id="edit-stack-yaml"
+                value={editYaml}
+                onChange={(e) => setEditYaml(e.target.value)}
+                rows={12}
+                disabled={editLoading}
+                className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500 disabled:opacity-50"
+                spellCheck={false}
+              />
+              <p className="text-xs text-dark-300 mt-1">
+                Saving redeploys the stack with this YAML. If no service in the new definition stays running, the previous stack is redeployed and this YAML change is not kept.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setEditingStack(null)}
+                disabled={editSaving}
+                className="px-4 py-2 text-dark-300 border border-dark-600 rounded-lg text-sm font-medium hover:text-dark-100 hover:border-dark-400 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleStackUpdate}
+                disabled={
+                  editSaving ||
+                  editLoading ||
+                  !editYaml.trim() ||
+                  (editTlsMode === "acme" && !editSslEmail.trim()) ||
+                  (editTlsMode === "provided" && !editTlsCertificate)
+                }
+                className="px-4 py-2 bg-rust-600 text-white rounded-lg text-sm font-medium hover:bg-rust-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {editSaving && (
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
+                {editSaving ? "Saving..." : "Save & Redeploy"}
+              </button>
+            </div>
           </div>
         </div>
       )}

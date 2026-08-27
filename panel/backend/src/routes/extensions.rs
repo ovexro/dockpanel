@@ -427,27 +427,31 @@ pub async fn test_webhook(
         }
     };
 
-    // SSRF re-validation at send time, and the SHARED client — parity with the
-    // delivery path in `services::extensions` and with `webhook_gateway`.
+    // SSRF re-validation at send time, PINNED to the address it approves —
+    // parity with the delivery path in `services::extensions` and with
+    // `webhook_gateway`.
     //
-    // ⚠ This route had neither, and it is the worse of the two places to lack
-    // them: the response body comes back to the caller in the JSON below, so a
-    // stored `webhook_url` that 3xx-redirects to an internal address was a read
-    // oracle rather than a blind probe. The ad-hoc client set only a timeout, so
-    // reqwest's default `Policy::limited(10)` applied and the redirect was
-    // followed — and its `.unwrap_or_default()` fell back to a plain default
-    // client, which would have re-opened the hole even if a policy had been set
-    // on the builder. `webhook_url` is vetted when it is WRITTEN, which is not
-    // the same instant as when it is resolved.
-    if let Err(e) = crate::helpers::validate_url_not_internal(&webhook_url).await {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            &format!("Webhook URL failed validation: {e}"),
-        ));
-    }
+    // ⚠ This route had neither the validation nor the pin at first, and it is
+    // the worse of the two places to lack them: the response body comes back
+    // to the caller in the JSON below, so a stored `webhook_url` that
+    // 3xx-redirects to an internal address was a read oracle rather than a
+    // blind probe. The ad-hoc client set only a timeout, so reqwest's default
+    // `Policy::limited(10)` applied and the redirect was followed — and its
+    // `.unwrap_or_default()` fell back to a plain default client, which would
+    // have re-opened the hole even if a policy had been set on the builder.
+    // `webhook_url` is vetted when it is WRITTEN, which is not the same
+    // instant as when it is resolved — and a shared client's own resolver
+    // would re-resolve it a second, independent time even with the check
+    // above run moments before.
+    let (host, port) = crate::helpers::url_authority(&webhook_url).map_err(|e| {
+        err(StatusCode::BAD_REQUEST, &format!("Webhook URL failed validation: {e}"))
+    })?;
+    let client = crate::helpers::pinned_client(&host, port, crate::services::extensions::webhook_client_builder())
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Webhook URL failed validation: {e}")))?;
 
     let started = std::time::Instant::now();
-    let result = crate::services::extensions::http_client()
+    let result = client
         .post(&webhook_url)
         .header("Content-Type", "application/json")
         .header("X-DockPanel-Event", "test")

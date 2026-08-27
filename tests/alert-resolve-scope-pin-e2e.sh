@@ -280,7 +280,12 @@ if U=$(subj "$UPTIME"); then
   # Dedup keyed on the monitor's id, not on the title. The title carries the
   # monitor NAME, so a rename raised a second firing alert for the same subject
   # and made the first unreachable.
-  if grep -qE "AND state_key = \\\$5::text" <<< "$U"; then
+  #
+  # Was a single INSERT ... WHERE NOT EXISTS (state_key = $5::text); s414
+  # split firing into a guard-SELECT + notifications::try_fire_alert so the
+  # firing half honours mutes/escalation like every other alert type. The
+  # guard's own WHERE clause is what this pins now.
+  if grep -qE "AND state_key = \\\$2\\)" <<< "$U"; then
     ok "D2 the slow_response dedup guard keys on state_key, not on the title"
   else
     bad "D2 the slow_response dedup guard keys on state_key, not on the title"
@@ -370,15 +375,15 @@ if EG=$(subj "$ENGINE"); then
   # pool must both TAKE the set and USE it. Taking it and not using it is the
   # half-edit a signature-only arm cannot see (lesson #600).
   GUARDED=""; UNGUARDED=""
-  for fn in check_resource_thresholds check_server_offline check_ssl_expiry check_stack_ssl_expiry; do
+  for fn in check_resource_thresholds check_server_offline check_ssl_expiry check_stack_ssl_expiry check_registered_cert_expiry; do
     B=$(fnbody "$EG" "$fn")
     if grep -q 'maint\.contains(' <<< "$B"; then GUARDED="$GUARDED $fn"; else UNGUARDED="$UNGUARDED $fn"; fi
   done
   NTAKE=$(grep -c 'maint: &HashSet<Uuid>' <<< "$EG")
-  if [ "$NTAKE" -eq 4 ]; then
-    ok "F2 all four pool-driven checks take the open-window set"
+  if [ "$NTAKE" -eq 5 ]; then
+    ok "F2 all five pool-driven checks take the open-window set"
   else
-    bad "F2 all four pool-driven checks take the open-window set — found $NTAKE"
+    bad "F2 all five pool-driven checks take the open-window set — found $NTAKE"
   fi
   if [ -z "$UNGUARDED" ]; then
     ok "F3 each of them SKIPS on it:$GUARDED"

@@ -4,18 +4,25 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+/// The settings every webhook notification's HTTP client shares — extracted so
+/// `post_user_webhook` can build a fresh, PINNED client per call (below) with
+/// the same settings rather than duplicating them.
+fn webhook_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        // Do NOT follow redirects: the notify_*_url values are vetted by
+        // validate_url_not_internal only at write time, so a public URL that
+        // 3xx-redirects to http://127.0.0.1 / 169.254.169.254 would otherwise
+        // exfiltrate to / probe an internal address. Parity with
+        // webhook_gateway.rs::http_client.
+        .redirect(reqwest::redirect::Policy::none())
+}
+
 /// Shared HTTP client for webhook notifications (reuses connections).
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            // Do NOT follow redirects: the notify_*_url values are vetted by
-            // validate_url_not_internal only at write time, so a public URL that
-            // 3xx-redirects to http://127.0.0.1 / 169.254.169.254 would otherwise
-            // exfiltrate to / probe an internal address. Parity with
-            // webhook_gateway.rs::http_client.
-            .redirect(reqwest::redirect::Policy::none())
+        webhook_client_builder()
             .build()
             // Panic (rather than unwrap_or_default) if the builder fails: the default
             // client FOLLOWS redirects, which would silently drop the SSRF control.
@@ -26,17 +33,31 @@ fn http_client() -> &'static reqwest::Client {
 /// POST a JSON payload to a user-supplied Slack/Discord/webhook URL, re-validating
 /// it against SSRF at send time (DNS-rebinding defense — the write-time check can be
 /// defeated by a low-TTL record that flips to an internal IP before the alert fires).
-/// The shared http_client() additionally refuses redirects. Mirrors
-/// webhook_gateway.rs::forward_to_route. The re-validation is bounded by a 3s timeout so
-/// a slow/hostile resolver cannot serialize the alert path; fail-closed on error/timeout.
-async fn post_user_webhook(client: &reqwest::Client, url: &str, payload: serde_json::Value) {
-    match tokio::time::timeout(
+///
+/// `_client` is the caller's shared `http_client()` — kept as a parameter since
+/// every call site already has it to hand, but no longer used for the actual
+/// POST. A shared client's resolver would re-resolve `url`'s host
+/// independently of the validation above; instead this pins the request to
+/// the EXACT address that validation approved, via a fresh per-call client
+/// (`pinned_client`) built with the same settings (`webhook_client_builder`).
+/// Mirrors webhook_gateway.rs::forward_to_route. The re-validation is bounded
+/// by a 3s timeout so a slow/hostile resolver cannot serialize the alert
+/// path; fail-closed on error/timeout.
+async fn post_user_webhook(_client: &reqwest::Client, url: &str, payload: serde_json::Value) {
+    let (host, port) = match crate::helpers::url_authority(url) {
+        Ok(hp) => hp,
+        Err(e) => {
+            tracing::warn!("Notification webhook blocked at send time (SSRF/DNS-rebind?): {e}");
+            return;
+        }
+    };
+    let pinned = match tokio::time::timeout(
         Duration::from_secs(3),
-        crate::helpers::validate_url_not_internal(url),
+        crate::helpers::pinned_client(&host, port, webhook_client_builder()),
     )
     .await
     {
-        Ok(Ok(())) => {}
+        Ok(Ok(c)) => c,
         Ok(Err(e)) => {
             tracing::warn!("Notification webhook blocked at send time (SSRF/DNS-rebind?): {e}");
             return;
@@ -45,8 +66,8 @@ async fn post_user_webhook(client: &reqwest::Client, url: &str, payload: serde_j
             tracing::warn!("Notification webhook URL validation timed out; skipping send");
             return;
         }
-    }
-    let _ = client
+    };
+    let _ = pinned
         .post(url)
         .json(&payload)
         .timeout(Duration::from_secs(10))
@@ -771,7 +792,10 @@ pub async fn dispatch_escalation_step(
 /// the wrong half: the recovery notice DOES go through the fan-out and does
 /// honour this list, so the entry governs every external message that type
 /// actually produces. Leaving it out also rejected a stored value that had been
-/// working. The asymmetry is real and it belongs to the producer, not here.
+/// working. The asymmetry was real and belonged to the producer, not here —
+/// `uptime.rs`'s firing half now calls `try_fire_alert` too (a guard-SELECT
+/// ahead of it preserves the old dedup), so both halves of this alert type
+/// honour the list the same way every other producer does.
 pub const SUPPRESSIBLE_ALERT_TYPES: &[&str] = &[
     "cpu",
     "memory",

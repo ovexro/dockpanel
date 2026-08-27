@@ -229,7 +229,12 @@ eq "F1 both deploy requests carry the mode, defaulted for an older panel" "$(occ
 eq "F1 both deploy requests carry the alias, defaulted for an older panel" "$(occ "$FD" '#[serde(default)]tls_certificate:Option<String>,')" "2"
 FRQ=$(body "$D" from_request 20); FFRQ=$(flat "$FRQ")
 has "F2 an older panel's request keeps today's presence rule byte-for-byte" "$FFRQ" 'None=>Ok(matchssl_email{Some(email)=>TlsIntent::Acme{email},None=>TlsIntent::None,}),'
-has "F2 a provided intent needs a well-formed alias" "$FFRQ" 'Some("provided")=>matchalias{Some(alias)ifssl::is_valid_cert_alias(alias)=>Ok(TlsIntent::Provided{alias}),'
+has "F2 a provided intent needs a well-formed alias" "$FFRQ" 'Some(alias)ifssl::is_valid_cert_alias(alias)=>Ok(TlsIntent::Provided{alias}),'
+# s414: a provided intent is ALSO refused up front when the deploy is
+# Traefik-routed — Traefik's file provider has no per-route certificate form,
+# so the front door now says so before any container exists, matching every
+# other unhonourable combination this function already refuses at this point.
+has "F2 a provided intent is refused through Traefik before any container exists" "$FFRQ" 'Some(alias)ifuse_traefik=>Err(format!('
 EXP=$(body "$D" expose_domain 150); FEXP=$(flat "$EXP")
 before "F3 the provided arm runs BEFORE the HTTP-first write" "$FEXP" 'ssl::registry_paths(alias)' 'letsite_config=proxy_site_config(port);'
 eq "F4 the per-domain enabler is called once — by the ACME arm" "$(occ "$FEXP" 'enable_ssl_for_site(')" "1"

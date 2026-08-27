@@ -481,9 +481,13 @@ pub async fn test_webhook(
 
     // SSRF: the destination is user-supplied and blind-followed; block internal
     // addresses (admin-triggered, but defense-in-depth + parity with the send path).
-    if let Err(e) = crate::helpers::validate_url_not_internal(url).await {
-        return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid webhook URL: {e}")));
-    }
+    //
+    // Pinned to the address this check approves, via a fresh client built for
+    // THIS request — a shared client's own resolver would otherwise look
+    // `url`'s host up a second, independent time for the real connection,
+    // reopening the validate/connect gap the check above exists to close.
+    let (host, port) = crate::helpers::url_authority(url)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Invalid webhook URL: {e}")))?;
 
     let payload = if service == "slack" {
         serde_json::json!({ "text": "DockPanel test notification — your Slack webhook is working!" })
@@ -491,14 +495,17 @@ pub async fn test_webhook(
         serde_json::json!({ "content": "DockPanel test notification — your Discord webhook is working!" })
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        // Refuse redirects: a public destination that 3xx-redirects to an internal
-        // address would otherwise bypass the SSRF allow-check above. Panic on build
-        // failure rather than falling back to a redirect-following default client.
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("build test-webhook http client");
+    let client = crate::helpers::pinned_client(
+        &host,
+        port,
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            // Refuse redirects: a public destination that 3xx-redirects to an internal
+            // address would otherwise bypass the SSRF allow-check above.
+            .redirect(reqwest::redirect::Policy::none()),
+    )
+    .await
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Invalid webhook URL: {e}")))?;
     let resp = client.post(url).json(&payload).send().await
         .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Webhook request failed: {e}")))?;
 

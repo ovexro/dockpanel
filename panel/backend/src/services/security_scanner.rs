@@ -222,9 +222,43 @@ async fn run_scan(pool: &PgPool, member: &FleetMember, jwt_secret: &str) {
     // three stale alerts" pileup the user saw on 2026-04-15.
     // Scoped to the scanned host: a clean scan on one machine must not silently
     // close another machine's outstanding security alerts.
+    //
+    // Routed through the standard `resolve_alert` helper (mirroring how
+    // `send_scan_alerts` below fires through `fire_alert`, per admin) so a
+    // clearing security finding sends the same mute-aware "Resolved: …"
+    // recovery notice every other alert type already gets — a raw UPDATE here
+    // used to clear the row silently with nobody ever told it resolved.
+    let resolve_admins: Vec<(uuid::Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE role = 'admin'")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+    let resolved_title = format!("Security alert resolved on {}", member.name);
+    let resolved_message = format!(
+        "A later scan of {} found no matching security issue — the earlier alert no longer applies.",
+        member.name
+    );
+    for (user_id,) in &resolve_admins {
+        notifications::resolve_alert(
+            pool,
+            *user_id,
+            Some(member.id),
+            None,
+            "security",
+            "",
+            &resolved_title,
+            &resolved_message,
+        )
+        .await;
+    }
+    // `resolve_alert` only clears `status = 'firing'` — every other resolver in
+    // this codebase only ever needed that, since `check_escalations` already
+    // excludes acknowledged rows from paging. Security's own dashboard
+    // bookkeeping additionally wants an acknowledged-then-fixed row off the
+    // Alerts list; nothing notifies on that transition either way, so it stays
+    // a narrowly-scoped direct UPDATE rather than a second, silent resolve path.
     let _ = sqlx::query(
         "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
-         WHERE alert_type = 'security' AND server_id = $1 AND status IN ('firing', 'acknowledged')",
+         WHERE alert_type = 'security' AND server_id = $1 AND status = 'acknowledged'",
     )
     .bind(member.id)
     .execute(pool)
@@ -857,6 +891,30 @@ fn stack_domain_state_key(kind: &str, domain: &str) -> String {
     format!("{prefix}{keep}-{}", &digest[..16])
 }
 
+/// The `state_key` a REGISTERED certificate's SSL-expiry warning ladder fires
+/// and resolves under — `alert_engine::check_registered_cert_expiry`'s sibling
+/// of this file's own `stack_ssl_expiry_state_key`. Keyed on the certificate's
+/// `alias` rather than a domain: a registered certificate may cover several
+/// SANs and has no single domain of its own, so `alias` — already unique per
+/// `(server_id, alias)` in the `tls_certificates` schema — is the one stable
+/// identity to dedupe on. Same truncate-then-hash reasoning as
+/// `stack_domain_state_key` (`alerts.state_key` is `VARCHAR(100)`), kept as
+/// its own small function rather than a third caller of that helper because
+/// its prefix is `cert:`, not `stack:` — this ladder is not about a stack.
+pub(crate) fn registered_cert_expiry_state_key(alias: &str) -> String {
+    const MAX: usize = 100;
+    let readable = format!("cert:expiry:{alias}");
+    if readable.len() <= MAX {
+        return readable;
+    }
+    use sha2::{Digest, Sha256};
+    let digest = hex::encode(Sha256::digest(alias.as_bytes()));
+    let prefix = "cert:expiry:";
+    let budget = MAX - prefix.len() - 17;
+    let keep: String = alias.chars().take(budget).collect();
+    format!("{prefix}{keep}-{}", &digest[..16])
+}
+
 async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &str) {
     // 1. Resolve, ON THE HOST THAT RAISED THE FINDING — the same host discipline
     //    the site read above learned the hard way. A domain is unique only per
@@ -1289,5 +1347,25 @@ mod stack_state_key_tests {
             key.len()
         );
         assert!(key.starts_with("stack:expiry:"));
+    }
+
+    #[test]
+    fn registered_cert_expiry_state_key_is_distinct_from_the_stack_ladders() {
+        let alias = "example.com";
+        assert_eq!(registered_cert_expiry_state_key(alias), "cert:expiry:example.com");
+        assert_ne!(registered_cert_expiry_state_key(alias), stack_ssl_expiry_state_key(alias));
+        assert_ne!(registered_cert_expiry_state_key(alias), stack_renewal_state_key(alias));
+    }
+
+    #[test]
+    fn registered_cert_expiry_state_key_truncates_and_hashes_long_aliases() {
+        let long = "c".repeat(200);
+        let key = registered_cert_expiry_state_key(&long);
+        assert!(
+            key.len() <= 100,
+            "state_key must fit alerts.state_key VARCHAR(100), got {} chars",
+            key.len()
+        );
+        assert!(key.starts_with("cert:expiry:"));
     }
 }

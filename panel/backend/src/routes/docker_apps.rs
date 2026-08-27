@@ -34,8 +34,22 @@ pub struct DeployRequest {
     /// the handler substitutes the operator's account address. Defaults to
     /// false, so an existing caller that omits it keeps requesting a
     /// certificate exactly as before.
+    ///
+    /// A back-compat alias for `tls_mode = "none"`, kept for a caller that
+    /// still sends only this field — an explicit `tls_mode` below wins.
     #[serde(default)]
     pub external_tls: bool,
+    /// "none" | "acme" | "provided". Absent = legacy inference from
+    /// `ssl_email`/`external_tls`, same as it always was. Added s414: the
+    /// agent's own `/apps/deploy` has accepted this (and `tls_certificate`
+    /// below) since `TlsIntent` was built for stacks — the panel simply never
+    /// sent it for a template app, so `provided` mode could never be
+    /// requested here even though the agent fully supports it.
+    #[serde(default)]
+    pub tls_mode: Option<String>,
+    /// Registry alias; provided mode only.
+    #[serde(default)]
+    pub tls_certificate: Option<String>,
     pub memory_mb: Option<u64>,
     pub cpu_percent: Option<u64>,
     #[serde(default)]
@@ -364,6 +378,38 @@ pub async fn deploy(
         .map_err(|e| internal_error("docker app reverse proxy setting", e))?;
     let use_traefik = reverse_proxy.map(|(v,)| v == "traefik").unwrap_or(false);
 
+    // The mode is decided once, before any provisioning task starts — mirroring
+    // stacks::create, whose `requested_tls_mode`/`plan_tls` this reuses so a
+    // template app gets the SAME `provided`-mode validation (alias grammar,
+    // registry lookup, agent-version gate, SAN-covers check) rather than a
+    // second, drifting copy of it.
+    //
+    // No domain means nothing to secure regardless of what a stored/derived
+    // mode would otherwise say — matching this handler's own prior behaviour,
+    // where `ssl_email` was only ever forwarded `if deploy_domain.is_some()`.
+    // An explicit `tls_mode` with no domain still reaches `plan_tls` below and
+    // is refused there ("a TLS mode needs a domain"), which is new only in the
+    // sense that requesting a mode without a domain was never possible before
+    // this field existed.
+    let requested_mode = crate::routes::stacks::requested_tls_mode(body.tls_mode.as_deref())?;
+    let mode = match requested_mode {
+        Some(explicit) => explicit,
+        None if deploy_domain.is_none() => "none",
+        None if body.external_tls => "none",
+        None => crate::routes::stacks::effective_tls_mode(None, deploy_ssl_email.as_deref()),
+    };
+    let tls = crate::routes::stacks::plan_tls(
+        &state.db,
+        &agent,
+        mode,
+        deploy_domain.as_deref(),
+        deploy_ssl_email.as_deref(),
+        body.tls_certificate.as_deref(),
+        claims.sub,
+        server_id,
+    )
+    .await?;
+
     let mut agent_body = serde_json::json!({
         "template_id": body.template_id,
         "name": body.name,
@@ -375,10 +421,12 @@ pub async fn deploy(
     if let Some(ref domain) = deploy_domain {
         agent_body["domain"] = serde_json::json!(domain);
     }
-    if let Some(ref ssl_email) = deploy_ssl_email {
-        if deploy_domain.is_some() {
-            agent_body["ssl_email"] = serde_json::json!(ssl_email);
-        }
+    if let Some(email) = tls.deploy_email() {
+        agent_body["ssl_email"] = serde_json::json!(email);
+    }
+    agent_body["tls_mode"] = serde_json::json!(tls.mode);
+    if let Some(ref alias) = tls.alias {
+        agent_body["tls_certificate"] = serde_json::json!(alias);
     }
     if let Some(mem) = deploy_memory {
         agent_body["memory_mb"] = serde_json::json!(mem);

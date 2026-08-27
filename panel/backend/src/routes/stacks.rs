@@ -54,7 +54,11 @@ pub(crate) fn effective_tls_mode(tls_mode: Option<&str>, ssl_email: Option<&str>
 /// A requested mode, normalised, or a 400 for a word outside the vocabulary.
 /// `None` in means "the client did not say" — the caller decides what that
 /// means (derived from the address on create, the stored mode on update).
-fn requested_tls_mode(raw: Option<&str>) -> Result<Option<&'static str>, ApiError> {
+///
+/// `pub(crate)` since s414: reused by `routes::docker_apps::deploy` for
+/// template apps, the sibling of stacks that had no way to request `provided`
+/// mode at all.
+pub(crate) fn requested_tls_mode(raw: Option<&str>) -> Result<Option<&'static str>, ApiError> {
     let Some(raw) = raw.map(str::trim).filter(|m| !m.is_empty()) else {
         return Ok(None);
     };
@@ -73,15 +77,15 @@ fn requested_tls_mode(raw: Option<&str>) -> Result<Option<&'static str>, ApiErro
 }
 
 /// Everything the panel decides about a stack's TLS before touching the agent.
-struct TlsPlan {
-    mode: &'static str,
+pub(crate) struct TlsPlan {
+    pub(crate) mode: &'static str,
     /// The address that will be STORED, in every mode — an edit that says
     /// nothing about the address keeps it, and a stack switched to `none` and
     /// back to `acme` finds it again. What the agent is SENT is decided by
     /// `deploy_email`, which withholds it outside acme mode.
     ssl_email: Option<String>,
     /// The alias, provided mode only.
-    alias: Option<String>,
+    pub(crate) alias: Option<String>,
     /// The registry row, provided mode only — resolved AND checked for coverage.
     certificate_id: Option<Uuid>,
 }
@@ -91,7 +95,7 @@ impl TlsPlan {
     /// agent older than the stored mode still infers the mode FROM the address —
     /// so a stack whose stored mode is `none` or `provided` is sent none, or that
     /// agent would order the certificate the operator switched off.
-    fn deploy_email(&self) -> Option<&str> {
+    pub(crate) fn deploy_email(&self) -> Option<&str> {
         if self.mode == "acme" {
             self.ssl_email.as_deref()
         } else {
@@ -108,7 +112,12 @@ impl TlsPlan {
 /// (412, fail-closed), and the certificate must actually cover the domain — the
 /// agent's `cert_covers_domain` answers that, and its refusal passes through
 /// unchanged. This is binding point 3 of #104: SAN validation at claim time.
-async fn plan_tls(
+///
+/// `pub(crate)` since s414: reused by `routes::docker_apps::deploy` (template
+/// apps) so a template deploy can request `provided` mode too — the agent's
+/// own `/apps/deploy` has accepted `tls_mode`/`tls_certificate` since
+/// `TlsIntent` was built, but nothing on the panel side ever sent them.
+pub(crate) async fn plan_tls(
     db: &sqlx::PgPool,
     agent: &AgentHandle,
     mode: &'static str,

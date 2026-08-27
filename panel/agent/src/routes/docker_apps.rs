@@ -95,6 +95,7 @@ async fn deploy(
         body.tls_mode.as_deref(),
         body.ssl_email.as_deref(),
         body.tls_certificate.as_deref(),
+        body.use_traefik,
     )
     .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))))?;
 
@@ -183,10 +184,21 @@ pub(crate) enum TlsIntent<'a> {
 impl<'a> TlsIntent<'a> {
     /// Resolve the wire fields. `Err` is the sentence a handler answers 400
     /// with, and it is asked BEFORE any container runs.
+    /// `use_traefik` refuses `provided` HERE, before any container runs — the
+    /// same front-door discipline this function already applies to a bad
+    /// alias or a missing `ssl_email`. Until now the combination was refused
+    /// only INSIDE `expose_domain`'s Traefik branch, after `deploy_app` had
+    /// already created the container — exactly the outcome this function's
+    /// own doc comment (on the `deploy` handler above) says a request naming
+    /// an unhonourable mode must never produce: "a running container and a
+    /// warning" instead of nothing deployed. Traefik's file provider has no
+    /// per-route certificate form, so a registered certificate can never be
+    /// served through it regardless of which door the request came in by.
     pub(crate) fn from_request(
         tls_mode: Option<&str>,
         ssl_email: Option<&'a str>,
         alias: Option<&'a str>,
+        use_traefik: bool,
     ) -> Result<TlsIntent<'a>, String> {
         match tls_mode {
             // Legacy inference — an older panel that knows no mode. Kept
@@ -206,6 +218,11 @@ impl<'a> TlsIntent<'a> {
                 ),
             },
             Some("provided") => match alias {
+                Some(alias) if use_traefik => Err(format!(
+                    "tls_mode provided cannot be served through Traefik: its file provider has no \
+                     per-route certificate form for '{alias}'. Switch the reverse proxy to nginx, \
+                     or use tls_mode acme or none."
+                )),
                 Some(alias) if ssl::is_valid_cert_alias(alias) => Ok(TlsIntent::Provided { alias }),
                 Some(alias) => Err(format!(
                     "'{alias}' is not a certificate alias — 1 to 64 lowercase letters, digits or \
@@ -646,8 +663,19 @@ async fn unexpose_domain(domain: &str, host_port: Option<u16>, response: &mut se
     // Remove SSL certificates (panel-provisioned). A DNS-01 wildcard is
     // provisioned once under the zone apex and SHARED by every site in the
     // zone, so this directory is not necessarily this app's to delete.
+    //
+    // Also gated on `removed_vhost`, not just `cert_dir_in_use_elsewhere` — a
+    // STOPPED (parked) container reports no port in Docker's live listing, so
+    // the vhost check above cannot prove ownership and correctly leaves the
+    // vhost standing; `cert_dir_in_use_elsewhere` explicitly excludes that
+    // same still-standing vhost when it scans for other references (a solo
+    // domain's own vhost never counts as "in use elsewhere"), so without this
+    // gate the certificate files were deleted out from under a vhost that
+    // still named them — breaking `nginx -t` for the WHOLE server at the next
+    // reload for any reason. Only delete the certs when the vhost naming them
+    // was ALSO just removed this call, matching the log-removal gate below.
     let ssl_dir = format!("/etc/dockpanel/ssl/{domain}");
-    if std::path::Path::new(&ssl_dir).exists() {
+    if removed_vhost && std::path::Path::new(&ssl_dir).exists() {
         if ownership::cert_dir_in_use_elsewhere(domain) {
             tracing::warn!(
                 "SSL cleanup: LEAVING {ssl_dir} in place — another vhost still \
@@ -658,6 +686,13 @@ async fn unexpose_domain(domain: &str, host_port: Option<u16>, response: &mut se
             std::fs::remove_dir_all(&ssl_dir).ok();
             tracing::info!("SSL cleanup: removed certs for {domain}");
         }
+    } else if std::path::Path::new(&ssl_dir).exists() {
+        tracing::warn!(
+            "SSL cleanup: LEAVING {ssl_dir} in place — its vhost was not removed \
+             this call (often a stopped/parked container, whose port Docker no \
+             longer reports), so deleting the certs would orphan a vhost that \
+             still names them."
+        );
     }
 
     // Let's Encrypt is NOT the panel's namespace and this code never had any
@@ -1472,10 +1507,14 @@ async fn compose_deploy(
     // The TLS shape is decided here for the same reason the port is resolved
     // below: a request the agent cannot honour is refused BEFORE any container
     // runs, not reported as a warning beside a running one.
+    // Compose stacks have no `use_traefik` field of their own (matching the
+    // literal `false` this handler already passes to `expose_domain` below) —
+    // a stack can never be Traefik-routed, so this is always the nginx arm.
     let tls = TlsIntent::from_request(
         body.tls_mode.as_deref(),
         body.ssl_email.as_deref(),
         body.tls_certificate.as_deref(),
+        false,
     )
     .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))))?;
 
@@ -2176,32 +2215,54 @@ mod tls_intent_tests {
     fn an_older_panel_that_sends_no_mode_keeps_the_address_rule() {
         // Presence, not content: exactly what the inference did before.
         assert_eq!(
-            TlsIntent::from_request(None, Some("ops@example.com"), None),
+            TlsIntent::from_request(None, Some("ops@example.com"), None, false),
             Ok(TlsIntent::Acme { email: "ops@example.com" })
         );
-        assert_eq!(TlsIntent::from_request(None, None, None), Ok(TlsIntent::None));
+        assert_eq!(TlsIntent::from_request(None, None, None, false), Ok(TlsIntent::None));
         // An alias without a mode is ignored, as an older panel could never send one.
-        assert_eq!(TlsIntent::from_request(None, None, Some("wild")), Ok(TlsIntent::None));
+        assert_eq!(TlsIntent::from_request(None, None, Some("wild"), false), Ok(TlsIntent::None));
     }
 
     #[test]
     fn each_mode_needs_its_own_field() {
-        assert_eq!(TlsIntent::from_request(Some("none"), Some("x@y.z"), None), Ok(TlsIntent::None));
+        assert_eq!(TlsIntent::from_request(Some("none"), Some("x@y.z"), None, false), Ok(TlsIntent::None));
         assert_eq!(
-            TlsIntent::from_request(Some("acme"), Some("x@y.z"), None),
+            TlsIntent::from_request(Some("acme"), Some("x@y.z"), None, false),
             Ok(TlsIntent::Acme { email: "x@y.z" })
         );
-        assert!(TlsIntent::from_request(Some("acme"), None, None).is_err());
-        assert!(TlsIntent::from_request(Some("acme"), Some("   "), None).is_err());
+        assert!(TlsIntent::from_request(Some("acme"), None, None, false).is_err());
+        assert!(TlsIntent::from_request(Some("acme"), Some("   "), None, false).is_err());
         assert_eq!(
-            TlsIntent::from_request(Some("provided"), None, Some("wildcard-2026")),
+            TlsIntent::from_request(Some("provided"), None, Some("wildcard-2026"), false),
             Ok(TlsIntent::Provided { alias: "wildcard-2026" })
         );
-        assert!(TlsIntent::from_request(Some("provided"), None, None).is_err());
+        assert!(TlsIntent::from_request(Some("provided"), None, None, false).is_err());
         // The alias is a directory name on this box; the grammar is enforced here too.
-        assert!(TlsIntent::from_request(Some("provided"), None, Some("../ssl")).is_err());
-        assert!(TlsIntent::from_request(Some("provided"), None, Some("Upper")).is_err());
-        assert!(TlsIntent::from_request(Some("letsencrypt"), Some("x@y.z"), None).is_err());
+        assert!(TlsIntent::from_request(Some("provided"), None, Some("../ssl"), false).is_err());
+        assert!(TlsIntent::from_request(Some("provided"), None, Some("Upper"), false).is_err());
+        assert!(TlsIntent::from_request(Some("letsencrypt"), Some("x@y.z"), None, false).is_err());
+    }
+
+    /// Traefik's file provider has no per-route certificate form — refused at
+    /// the front door now, before `deploy_app` ever creates a container,
+    /// rather than discovered afterward inside `expose_domain`'s Traefik
+    /// branch (a running container plus a warning, the exact outcome this
+    /// function exists to prevent for every other bad combination).
+    #[test]
+    fn provided_mode_is_refused_through_traefik_before_any_container_exists() {
+        assert!(TlsIntent::from_request(Some("provided"), None, Some("wildcard-2026"), true).is_err());
+        // The control: the identical alias, nginx-routed, still succeeds — this
+        // is a Traefik-specific refusal, not a blanket break of "provided".
+        assert_eq!(
+            TlsIntent::from_request(Some("provided"), None, Some("wildcard-2026"), false),
+            Ok(TlsIntent::Provided { alias: "wildcard-2026" })
+        );
+        // Other modes are unaffected by use_traefik.
+        assert_eq!(TlsIntent::from_request(Some("none"), None, None, true), Ok(TlsIntent::None));
+        assert_eq!(
+            TlsIntent::from_request(Some("acme"), Some("x@y.z"), None, true),
+            Ok(TlsIntent::Acme { email: "x@y.z" })
+        );
     }
 
     #[test]

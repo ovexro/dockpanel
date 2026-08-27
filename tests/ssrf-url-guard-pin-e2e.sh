@@ -104,9 +104,18 @@ if grep -qF "fn validate_host_not_internal" <<< "$(code "$HELPERS")"; then
 else
   bad "§C helpers.rs no longer defines the bare-host guard"
 fi
-# It must be CALLED at check time in uptime.rs (rebind parity) AND at write time
-# in monitors.rs. Count call sites, not the definition.
-UPT_CALLS=$(grep -cF "validate_host_not_internal" <<< "$(code "$UPT")")
+# Write time (monitors.rs, create+update) still calls validate_host_not_internal
+# directly — nothing to connect to yet, so there is nothing to pin.
+#
+# Check time (uptime.rs, check_tcp/check_ping) was rewritten at s414 to call
+# `resolve_validated` instead: the SAME internal-address check
+# (ip_is_internal over a literal IP or every resolved address), but returning
+# the one validated SocketAddr so the connect below dials THAT address rather
+# than asking the OS to resolve the hostname a second, independent time (the
+# TOCTOU a rebinding DNS server could exploit between the old validate-then-
+# reconnect pair). Count either name at check time — both are the real guard;
+# only the identifier changed.
+UPT_CALLS=$(grep -cE "validate_host_not_internal|resolve_validated" <<< "$(code "$UPT")")
 MON_CALLS=$(grep -cF "validate_host_not_internal" <<< "$(code "$MON")")
 if [ "${UPT_CALLS:-0}" -ge 2 ]; then
   ok "§C uptime.rs re-validates the host in check_tcp and check_ping ($UPT_CALLS calls)"

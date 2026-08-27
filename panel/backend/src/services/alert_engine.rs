@@ -36,6 +36,7 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
                 check_server_offline(&pool, &maint).await;
                 check_ssl_expiry(&pool, &maint).await;
                 check_stack_ssl_expiry(&pool, &maint).await;
+                check_registered_cert_expiry(&pool, &maint).await;
 
                 // The agent-driven checks run once PER ONLINE SERVER. Until
                 // v2.58.0 all three asked the panel's own agent and labelled the
@@ -1329,6 +1330,133 @@ async fn check_stack_ssl_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
         {
             tracing::warn!(
                 "Stack SSL alert for {domain} could not be recorded; leaving the warning ladder unstamped so the next tick retries"
+            );
+            continue;
+        }
+
+        let _ = sqlx::query(
+            "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, last_notified_at, metadata) \
+             VALUES ($1, 'ssl_expiry', $2, 'firing', NOW(), $3) \
+             ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
+             DO UPDATE SET current_state = 'firing', last_notified_at = NOW(), metadata = $3",
+        )
+        .bind(server_id)
+        .bind(&state_key)
+        .bind(serde_json::json!({ "last_warned_day": warn_day }))
+        .execute(pool)
+        .await;
+    }
+}
+
+/// `check_ssl_expiry`/`check_stack_ssl_expiry`'s sibling for a REGISTERED
+/// (uploaded, non agent-managed) certificate in `tls_certificates` — the one
+/// population neither of those two functions can see: `check_ssl_expiry` only
+/// reads `sites.ssl_expiry` (ACME-issued, single-site certs) and
+/// `check_stack_ssl_expiry` deliberately SKIPS a `provided`-mode stack's
+/// `ssl_expiry` (it isn't the panel's cert to alert on — see that function's
+/// own comment). A certificate served through the registry has its real
+/// expiry in `tls_certificates.not_after`, and until now nothing ever read it
+/// on a schedule; the only visibility was an operator opening the certificate
+/// dashboard and reading `days_left` themselves.
+///
+/// Scoped to certificates a stack is ACTUALLY SERVING right now
+/// (`docker_stacks.tls_certificate_id`), not every row in the registry — the
+/// same "is this the panel's problem right now" framing `dashboard.rs` and
+/// `check_stack_ssl_expiry` already apply. An operator who uploaded a
+/// certificate ahead of assigning it to anything is not yet exposing traffic
+/// through it, so there is nothing to page about.
+async fn check_registered_cert_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
+    let certs: Vec<(Uuid, Uuid, Uuid, String, Vec<String>, chrono::DateTime<chrono::Utc>)> =
+        match sqlx::query_as(
+            "SELECT DISTINCT tc.id, tc.user_id, tc.server_id, tc.alias, tc.dns_names, tc.not_after \
+             FROM tls_certificates tc \
+             JOIN docker_stacks ds ON ds.tls_certificate_id = tc.id \
+             WHERE tc.not_after IS NOT NULL",
+        )
+        .fetch_all(pool)
+        .await
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+    let now = chrono::Utc::now();
+
+    for (_cert_id, user_id, server_id, alias, dns_names, not_after) in &certs {
+        if maint.contains(user_id) {
+            continue;
+        }
+
+        let display_name = dns_names.first().cloned().unwrap_or_else(|| alias.clone());
+
+        let remaining = *not_after - now;
+        let expired = remaining < chrono::Duration::zero();
+        let days_left = remaining.num_days();
+
+        let (_, _, _, _, _, _, ssl_days_str) =
+            notifications::get_thresholds(pool, *user_id, None).await;
+        let warning_days = parse_ssl_warning_days(&ssl_days_str);
+
+        let state_key = crate::services::security_scanner::registered_cert_expiry_state_key(alias);
+
+        let state: Option<(serde_json::Value,)> = sqlx::query_as(
+            "SELECT COALESCE(metadata, '{}') FROM alert_state \
+             WHERE server_id = $1 AND alert_type = 'ssl_expiry' AND state_key = $2",
+        )
+        .bind(server_id)
+        .bind(&state_key)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+
+        let last_warned_day = state
+            .as_ref()
+            .and_then(|s| s.0.get("last_warned_day"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(SSL_NEVER_WARNED);
+
+        let action = ssl_decision(days_left, expired, last_warned_day, &warning_days);
+
+        if matches!(action, SslAction::Resolve) {
+            let _ = sqlx::query(
+                "UPDATE alert_state SET current_state = 'ok', last_notified_at = NULL, metadata = NULL \
+                 WHERE server_id = $1 AND alert_type = 'ssl_expiry' AND state_key = $2",
+            )
+            .bind(server_id)
+            .bind(&state_key)
+            .execute(pool)
+            .await;
+
+            notifications::resolve_alert(
+                pool,
+                *user_id,
+                Some(*server_id),
+                None,
+                "ssl_expiry",
+                &state_key,
+                &format!("Registered certificate renewed for {display_name}"),
+                &format!(
+                    "The registered certificate \"{display_name}\" is valid again — {days_left} days remaining."
+                ),
+            )
+            .await;
+            continue;
+        }
+
+        let SslAction::Fire { warn_day, severity } = action else {
+            continue;
+        };
+
+        // Same unstamped-on-failure discipline as `check_stack_ssl_expiry`:
+        // only stamp the dedup key if the page actually landed.
+        if !fire_stack_ssl_alert(
+            pool, *user_id, *server_id, &state_key, &display_name, days_left, expired, severity,
+        )
+        .await
+        {
+            tracing::warn!(
+                "Registered-certificate SSL alert for {display_name} could not be recorded; leaving the warning ladder unstamped so the next tick retries"
             );
             continue;
         }

@@ -1,20 +1,19 @@
 use sqlx::PgPool;
-use std::sync::OnceLock;
 use std::time::Instant;
 
-static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
-pub(crate) fn http_client() -> &'static reqwest::Client {
-    HTTP_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            // Do NOT follow redirects: webhook_url / dest_url are vetted only at write
-            // time, so a public URL 3xx-redirecting to an internal address would exfiltrate
-            // to / probe it. Parity with notifications.rs + webhook_gateway.rs.
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("build extensions http client")
-    })
+/// The settings every extension-webhook HTTP client shares. Every send path
+/// (`emit_event`, `fire_event`'s bridge, and `routes::extensions::test_webhook`)
+/// builds a fresh, PINNED client per delivery from this
+/// (`crate::helpers::pinned_client`) rather than sharing one client whose own
+/// resolver would re-resolve the destination a second, independent time after
+/// the SSRF check above it already ran.
+pub(crate) fn webhook_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        // Do NOT follow redirects: webhook_url / dest_url are vetted only at write
+        // time, so a public URL 3xx-redirecting to an internal address would exfiltrate
+        // to / probe it. Parity with notifications.rs + webhook_gateway.rs.
+        .redirect(reqwest::redirect::Policy::none())
 }
 
 /// Maximum concurrent webhook deliveries across all extensions.
@@ -83,18 +82,36 @@ pub async fn emit_event(pool: &PgPool, event_type: &str, data: serde_json::Value
             };
 
             // SSRF re-validation at send time (DNS-rebind defense — parity with
-            // webhook_gateway::forward_to_route). The client above already refuses redirects.
-            if let Err(e) = crate::helpers::validate_url_not_internal(&webhook_url).await {
-                tracing::warn!("Extension {ext_id} webhook blocked at send time (SSRF?): {e}");
-                let _ = sqlx::query(
-                    "INSERT INTO extension_events (extension_id, event_type, payload, response_body, duration_ms) \
-                     VALUES ($1, $2, $3, 'Blocked: webhook URL failed SSRF validation', 0)"
-                ).bind(ext_id).bind(&event_type).bind(&payload_str).execute(&pool).await;
-                ACTIVE_DELIVERIES.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                return;
-            }
+            // webhook_gateway::forward_to_route), pinned to the address it
+            // approves rather than validated-then-reconnected: the shared
+            // http_client()'s resolver would otherwise look `webhook_url`'s
+            // host up a second, independent time for the real connection.
+            let (host, port) = match crate::helpers::url_authority(&webhook_url) {
+                Ok(hp) => hp,
+                Err(e) => {
+                    tracing::warn!("Extension {ext_id} webhook blocked at send time (SSRF?): {e}");
+                    let _ = sqlx::query(
+                        "INSERT INTO extension_events (extension_id, event_type, payload, response_body, duration_ms) \
+                         VALUES ($1, $2, $3, 'Blocked: webhook URL failed SSRF validation', 0)"
+                    ).bind(ext_id).bind(&event_type).bind(&payload_str).execute(&pool).await;
+                    ACTIVE_DELIVERIES.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                }
+            };
+            let pinned = match crate::helpers::pinned_client(&host, port, webhook_client_builder()).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("Extension {ext_id} webhook blocked at send time (SSRF?): {e}");
+                    let _ = sqlx::query(
+                        "INSERT INTO extension_events (extension_id, event_type, payload, response_body, duration_ms) \
+                         VALUES ($1, $2, $3, 'Blocked: webhook URL failed SSRF validation', 0)"
+                    ).bind(ext_id).bind(&event_type).bind(&payload_str).execute(&pool).await;
+                    ACTIVE_DELIVERIES.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                }
+            };
 
-            let result = http_client()
+            let result = pinned
                 .post(&webhook_url)
                 .header("Content-Type", "application/json")
                 .header("X-DockPanel-Event", &event_type)
@@ -187,10 +204,27 @@ pub fn fire_event(pool: &PgPool, event_type: &str, data: serde_json::Value) {
             tokio::spawn(async move {
                 // SSRF re-validation at send time (parity with webhook_gateway; the shared
                 // client refuses redirects). Skip the whole retry chain if it fails.
-                if let Err(e) = crate::helpers::validate_url_not_internal(&dest).await {
-                    tracing::warn!("Extension webhook route dest blocked at send time (SSRF?): {e}");
-                    return;
-                }
+                //
+                // Pinned ONCE, before the retry loop, and the SAME client
+                // reused for every attempt — not re-validated-and-reconnected
+                // per retry. A loop that re-resolved `dest`'s host on each of
+                // up to 6 attempts, spread over exponential backoff, widens
+                // the validate/connect gap to however long the whole chain
+                // runs rather than one lookup's worth of race window.
+                let (host, port) = match crate::helpers::url_authority(&dest) {
+                    Ok(hp) => hp,
+                    Err(e) => {
+                        tracing::warn!("Extension webhook route dest blocked at send time (SSRF?): {e}");
+                        return;
+                    }
+                };
+                let pinned = match crate::helpers::pinned_client(&host, port, webhook_client_builder()).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("Extension webhook route dest blocked at send time (SSRF?): {e}");
+                        return;
+                    }
+                };
                 let mut last_status = 0i32;
                 for attempt in 0..=(retry_count.max(0).min(5)) {
                     if attempt > 0 {
@@ -199,7 +233,7 @@ pub fn fire_event(pool: &PgPool, event_type: &str, data: serde_json::Value) {
                         )).await;
                     }
 
-                    let mut req = http_client()
+                    let mut req = pinned
                         .post(&dest)
                         .header("Content-Type", "application/json");
 

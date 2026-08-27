@@ -4,6 +4,100 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.166.0]
+
+### Security — a resolved-then-reconnected SSRF guard could be bypassed by DNS rebinding
+
+`validate_url_not_internal`/`validate_host_not_internal` correctly rejected a
+literal or resolved internal address, but every one of the 9 call sites then
+made the real connection by asking the HTTP client / `TcpStream` / `ping`
+binary to resolve the same hostname AGAIN, independently. A DNS server that
+answers the validation lookup and the connect lookup differently — a classic
+rebind, or simply a low TTL — sails straight through: the guard and the
+connection were never provably looking at the same address.
+
+Added `helpers::resolve_validated` (same internal-address check, but returns
+the ONE address it approved) and `helpers::pinned_client` (a `reqwest::Client`
+whose resolver is hard-overridden to that exact address via the builder's
+`.resolve()`). Every affected call site now pins the connection to the
+validated address instead of re-resolving: the uptime monitor's HTTP/TCP/ping
+checks, the notification webhook sender, both extension-webhook delivery
+paths (including the event-bridge retry loop), the webhook-gateway forwarder
+(pinned once and reused across its up-to-11 retry attempts, not re-resolved
+per attempt), and both admin "send a test webhook" endpoints.
+
+The uptime HTTP check's redirect-following policy still re-validates each hop
+independently and is not yet pinned — that needs a custom DNS resolver rather
+than the builder-level override used for the initial request, and is tracked
+separately.
+
+### Fixed — a registered (uploaded, non agent-managed) certificate nearing expiry raised no alert
+
+`check_ssl_expiry` only ever read `sites.ssl_expiry`, and `check_stack_ssl_expiry`
+(v2.165.0) deliberately skips a `provided`-mode stack's `ssl_expiry` — correctly,
+since that isn't the panel's certificate to alert on. But nothing read the
+registered certificate's OWN expiry (`tls_certificates.not_after`) either, so a
+certificate uploaded through the registry and actively serving a stack could
+run out with zero warning. A new `check_registered_cert_expiry` closes it,
+scoped to certificates a stack is currently serving, reusing the same
+30/14/7/3/1-day ladder, toggle and setting every other certificate alert uses.
+
+### Fixed — a Traefik-routed deploy could be told a registered certificate would be refused, then get one anyway
+
+`TlsIntent::from_request` validates the requested TLS shape before any
+container is created — except `provided` mode combined with Traefik routing,
+which was only caught afterward, inside `expose_domain`'s Traefik branch, by
+which point the container was already running. Traefik's file provider has no
+per-route certificate form, so the combination can never be honoured; it is
+now refused at the same front door as every other unhonourable combination
+(a bad alias, a missing `ssl_email`). Not reachable through the panel today
+(single-app deploys don't yet expose `tls_mode` in the UI), so this closes the
+gap before it becomes reachable rather than fixing a live defect.
+
+### Fixed — a parked-then-removed Compose stack could leave its nginx vhost pointing at deleted certificate files
+
+Stopping a stack empties Docker's reported port for its containers, so
+`unexpose_domain` correctly leaves the vhost in place (it cannot prove
+ownership without a port) — but the certificate-directory delete right below
+it was gated on a DIFFERENT check, one that explicitly excludes the domain's
+own still-standing vhost from counting as "in use." So a parked-then-removed
+stack ended up with its certificate deleted while the vhost that named it
+survived — breaking `nginx -t` for the whole server at the next reload for
+any unrelated reason. The certificate delete is now also gated on the vhost
+having actually been removed this same call.
+
+### Fixed — `slow_response` and `security` alerts silently skipped notifications, escalation and mutes
+
+Both alert types wrote directly to the `alerts` table instead of going
+through the standard fire/resolve helpers — so a firing `slow_response` alert
+(or a resolving `security` alert) produced a row on the Alerts page but no
+bell notification, no email/Slack/Discord delivery, no escalation paging, and
+could not honour a configured per-type mute, even though both types are
+listed as mutable in Settings. Both now route through the standard helpers
+(`slow_response`'s own dedup guard is preserved as a separate check ahead of
+the call; `security`'s acknowledged-row bookkeeping — which nothing notifies
+on either way — stays a narrow, explicitly-scoped update).
+
+### Added — template apps can request a registered certificate, the same way Compose stacks already can
+
+The agent's `/apps/deploy` has accepted `tls_mode`/`tls_certificate` since
+`TlsIntent` was built for stacks, but the panel never sent them for a template
+app — every deploy was stuck inferring TLS from `ssl_email` presence alone, so
+`provided` mode could never be requested. `POST /api/apps/deploy` now accepts
+the same fields and reuses stacks' own mode-validation (`requested_tls_mode`,
+`plan_tls`) so a template app gets the identical alias-grammar, registry
+lookup and SAN-coverage check a stack deploy already gets. `external_tls: true`
+keeps working as a back-compat alias for `tls_mode: "none"`.
+
+### Added — a Stacks edit screen
+
+`PUT /api/stacks/{id}` (redeploy with domain/TLS replanning and automatic
+rollback if no service in the new definition stays running) existed on the
+backend with no frontend caller. An Edit button on each stack now opens a
+modal — the same field set the create modal already collects, prefilled from
+`GET /api/stacks/{id}` — and surfaces the endpoint's own rollback/refusal
+messages inline.
+
 ## [2.165.0]
 
 ### Added — Docker Compose stacks now get the same SSL expiry warning ladder and dashboard visibility a site already had

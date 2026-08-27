@@ -759,40 +759,64 @@ fn route_admits(route: &WebhookRoute, body: &str) -> bool {
     parsed.pointer(path).and_then(|v| v.as_str()).unwrap_or("") == value.as_str()
 }
 
-static HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-
-fn http_client() -> &'static reqwest::Client {
-    HTTP_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            // Do NOT follow redirects: validate_url_not_internal only vets the
-            // original destination_url, so a public destination returning a
-            // 3xx to http://127.0.0.1 / 169.254.169.254 would otherwise bypass
-            // the SSRF allow-check and exfiltrate the internal response.
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap_or_default()
-    })
+/// The settings the webhook-gateway HTTP client shares — extracted so
+/// `forward_to_route` can build a fresh, PINNED client (below) with the same
+/// settings, rather than duplicating them.
+fn webhook_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        // Do NOT follow redirects: validate_url_not_internal only vets the
+        // original destination_url, so a public destination returning a
+        // 3xx to http://127.0.0.1 / 169.254.169.254 would otherwise bypass
+        // the SSRF allow-check and exfiltrate the internal response.
+        .redirect(reqwest::redirect::Policy::none())
 }
 
 async fn forward_to_route(db: &sqlx::PgPool, route: &WebhookRoute, body: &str, delivery_id: Uuid) {
     // Re-validate destination URL at forward time to prevent DNS rebinding SSRF.
     // An attacker could register a route pointing to a public IP, then change DNS
     // to resolve to an internal IP before the webhook fires.
-    if let Err(e) = crate::helpers::validate_url_not_internal(&route.destination_url).await {
-        tracing::warn!(
-            "Webhook route {} destination blocked at forward time (DNS rebinding?): {e}",
-            route.id
-        );
-        let _ = sqlx::query(
-            "UPDATE webhook_deliveries SET forwarded = TRUE, forward_status = 0, \
-             forward_response = $2 WHERE id = $1"
-        )
-        .bind(delivery_id)
-        .bind(format!("Blocked: destination URL failed validation: {e}"))
-        .execute(db).await;
-        return;
-    }
+    //
+    // Pinned ONCE here and the resulting client reused for every retry below —
+    // this loop runs up to 11 attempts (retry_count.min(10)) spread over
+    // exponential backoff that can span minutes, and a shared client whose own
+    // resolver looked `destination_url`'s host up again on each attempt would
+    // widen the validate/connect race to that whole window instead of one
+    // lookup's worth of it.
+    let (host, port) = match crate::helpers::url_authority(&route.destination_url) {
+        Ok(hp) => hp,
+        Err(e) => {
+            tracing::warn!(
+                "Webhook route {} destination blocked at forward time (DNS rebinding?): {e}",
+                route.id
+            );
+            let _ = sqlx::query(
+                "UPDATE webhook_deliveries SET forwarded = TRUE, forward_status = 0, \
+                 forward_response = $2 WHERE id = $1"
+            )
+            .bind(delivery_id)
+            .bind(format!("Blocked: destination URL failed validation: {e}"))
+            .execute(db).await;
+            return;
+        }
+    };
+    let client = match crate::helpers::pinned_client(&host, port, webhook_client_builder()).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                "Webhook route {} destination blocked at forward time (DNS rebinding?): {e}",
+                route.id
+            );
+            let _ = sqlx::query(
+                "UPDATE webhook_deliveries SET forwarded = TRUE, forward_status = 0, \
+                 forward_response = $2 WHERE id = $1"
+            )
+            .bind(delivery_id)
+            .bind(format!("Blocked: destination URL failed validation: {e}"))
+            .execute(db).await;
+            return;
+        }
+    };
 
     let mut last_status = 0i32;
     let mut last_response = String::new();
@@ -807,7 +831,7 @@ async fn forward_to_route(db: &sqlx::PgPool, route: &WebhookRoute, body: &str, d
 
         let start = std::time::Instant::now();
 
-        let mut req = http_client()
+        let mut req = client
             .post(&route.destination_url)
             .header("Content-Type", "application/json")
             .header("X-Webhook-Delivery", delivery_id.to_string())

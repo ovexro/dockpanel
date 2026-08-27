@@ -841,6 +841,68 @@ pub async fn validate_host_not_internal(host: &str, port: u16) -> Result<(), Str
     Ok(())
 }
 
+/// Resolve `host:port`, checked the same way `validate_url_not_internal`/
+/// `validate_host_not_internal` already check it, and return the ONE address
+/// that check approved — so a caller can dial THAT address instead of asking
+/// the OS to resolve `host` a second time.
+///
+/// Every caller of the two validators above used to check-then-reconnect: a
+/// hostname passed the guard by resolving to a public address, and the actual
+/// HTTP client / `TcpStream::connect` / `ping` binary then resolved the SAME
+/// hostname AGAIN, independently, to make the real connection. A DNS server
+/// that answers differently between those two lookups (a classic rebind, or
+/// simply a very low TTL) sails straight through — the guard and the
+/// connection were never provably looking at the same address. Pinning here
+/// closes that gap: whatever this function approves is what gets dialed.
+///
+/// Preserves the existing "reject if ANY resolved address is internal"
+/// semantics (split-horizon DNS) before picking one to hand back — narrowing
+/// to the first address ONLY happens after every address has been cleared.
+pub async fn resolve_validated(host: &str, port: u16) -> Result<std::net::SocketAddr, String> {
+    let bare = host.trim_matches(|c| c == '[' || c == ']');
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        if ip_is_internal(ip) {
+            return Err("points to a private/internal address".to_string());
+        }
+        return Ok(std::net::SocketAddr::new(ip, port));
+    }
+    let lower = bare.to_ascii_lowercase();
+    if lower == "localhost" || lower.ends_with(".localhost") {
+        return Err("points to a local address".to_string());
+    }
+    let addrs: Vec<std::net::SocketAddr> = match tokio::net::lookup_host((bare, port)).await {
+        Ok(iter) => iter.collect(),
+        Err(_) => return Err("hostname could not be resolved".to_string()),
+    };
+    if addrs.is_empty() {
+        return Err("hostname could not be resolved".to_string());
+    }
+    if addrs.iter().any(|a| ip_is_internal(a.ip())) {
+        return Err("resolves to a private/internal address".to_string());
+    }
+    Ok(addrs[0])
+}
+
+/// Build a `reqwest::Client` whose DNS resolution for `host` is hard-pinned to
+/// the one address [`resolve_validated`] just approved. `builder.resolve`
+/// overrides reqwest's own resolver for that exact hostname — the request
+/// still uses the original URL for the Host header, SNI and certificate
+/// validation, so this changes ONLY which address the TCP connection opens
+/// to, not what the request or the TLS handshake say. Build a fresh client
+/// per call rather than reusing a shared one: the whole point is that this
+/// client's resolver answer is fixed to an address checked moments earlier.
+pub async fn pinned_client(
+    host: &str,
+    port: u16,
+    builder: reqwest::ClientBuilder,
+) -> Result<reqwest::Client, String> {
+    let addr = resolve_validated(host, port).await?;
+    builder
+        .resolve(host, addr)
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))
+}
+
 /// Parse a URL and return the (host, port) a client would actually connect to.
 ///
 /// Pure and synchronous, so it can be pinned by equality without a resolver: for
