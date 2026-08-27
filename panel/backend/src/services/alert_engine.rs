@@ -35,6 +35,7 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
                 check_resource_thresholds(&pool, &maint).await;
                 check_server_offline(&pool, &maint).await;
                 check_ssl_expiry(&pool, &maint).await;
+                check_stack_ssl_expiry(&pool, &maint).await;
 
                 // The agent-driven checks run once PER ONLINE SERVER. Until
                 // v2.58.0 all three asked the panel's own agent and labelled the
@@ -1206,6 +1207,146 @@ async fn check_ssl_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
     }
 }
 
+/// `check_ssl_expiry`'s sibling for Docker Compose stacks. Reuses
+/// `ssl_decision` and `parse_ssl_warning_days` UNCHANGED — the ladder is a
+/// pure function of days-left / expired / last-warned-day / rungs, and
+/// neither cares what kind of row it is deciding for.
+///
+/// ACME-mode only, through `effective_tls_mode`: a `provided` stack serves its
+/// certificate from the TLS registry, and a stale `ssl_expiry` on such a row
+/// is not the panel's cert to alert on — the same rule
+/// `certificate_dashboard_for_admin` and `renew_stack_certificate` already
+/// enforce.
+///
+/// Keyed by `(server_id, "ssl_expiry", stack_ssl_expiry_state_key(domain))`.
+/// `alert_state`/`alerts` carry no `docker_stack_id` column, only `server_id`
+/// — mirroring `stack_renewal_state_key`'s own reasoning — so the domain has
+/// to be IN the key or two stacks on one server would share one dedup bucket.
+/// Reuses `alert_type = "ssl_expiry"` rather than inventing a second type, so
+/// a stack's warning inherits the SAME `alert_ssl_expiry` toggle and
+/// `ssl_warning_days` rungs a site's certificate already uses — an operator
+/// configures "how many days before I'm warned" once, not per certificate
+/// kind.
+async fn check_stack_ssl_expiry(pool: &PgPool, maint: &HashSet<Uuid>) {
+    let stacks: Vec<(
+        Uuid,
+        Uuid,
+        Uuid,
+        String,
+        chrono::DateTime<chrono::Utc>,
+        Option<String>,
+        Option<String>,
+    )> = match sqlx::query_as(
+        "SELECT id, user_id, server_id, domain, ssl_expiry, tls_mode, ssl_email \
+         FROM docker_stacks WHERE domain IS NOT NULL AND ssl_expiry IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let now = chrono::Utc::now();
+
+    for (_stack_id, user_id, server_id, domain, ssl_expiry, tls_mode, ssl_email) in &stacks {
+        if maint.contains(user_id) {
+            continue;
+        }
+
+        if crate::routes::stacks::effective_tls_mode(tls_mode.as_deref(), ssl_email.as_deref())
+            != "acme"
+        {
+            continue;
+        }
+
+        let remaining = *ssl_expiry - now;
+        let expired = remaining < chrono::Duration::zero();
+        let days_left = remaining.num_days();
+
+        let (_, _, _, _, _, _, ssl_days_str) =
+            notifications::get_thresholds(pool, *user_id, None).await;
+        let warning_days = parse_ssl_warning_days(&ssl_days_str);
+
+        let state_key = crate::services::security_scanner::stack_ssl_expiry_state_key(domain);
+
+        let state: Option<(serde_json::Value,)> = sqlx::query_as(
+            "SELECT COALESCE(metadata, '{}') FROM alert_state \
+             WHERE server_id = $1 AND alert_type = 'ssl_expiry' AND state_key = $2",
+        )
+        .bind(server_id)
+        .bind(&state_key)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+
+        let last_warned_day = state
+            .as_ref()
+            .and_then(|s| s.0.get("last_warned_day"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(SSL_NEVER_WARNED);
+
+        let action = ssl_decision(days_left, expired, last_warned_day, &warning_days);
+
+        if matches!(action, SslAction::Resolve) {
+            let _ = sqlx::query(
+                "UPDATE alert_state SET current_state = 'ok', last_notified_at = NULL, metadata = NULL \
+                 WHERE server_id = $1 AND alert_type = 'ssl_expiry' AND state_key = $2",
+            )
+            .bind(server_id)
+            .bind(&state_key)
+            .execute(pool)
+            .await;
+
+            notifications::resolve_alert(
+                pool,
+                *user_id,
+                Some(*server_id),
+                None,
+                "ssl_expiry",
+                &state_key,
+                &format!("SSL certificate renewed for {domain}"),
+                &format!(
+                    "The SSL certificate for {domain} is valid again — {days_left} days remaining."
+                ),
+            )
+            .await;
+            continue;
+        }
+
+        let SslAction::Fire { warn_day, severity } = action else {
+            continue;
+        };
+
+        // Same unstamped-on-failure discipline as `check_ssl_expiry`: only stamp
+        // the dedup key if the page actually landed, so a transient DB error
+        // retries on the next tick instead of permanently silencing the stack.
+        if !fire_stack_ssl_alert(
+            pool, *user_id, *server_id, &state_key, domain, days_left, expired, severity,
+        )
+        .await
+        {
+            tracing::warn!(
+                "Stack SSL alert for {domain} could not be recorded; leaving the warning ladder unstamped so the next tick retries"
+            );
+            continue;
+        }
+
+        let _ = sqlx::query(
+            "INSERT INTO alert_state (server_id, alert_type, state_key, current_state, last_notified_at, metadata) \
+             VALUES ($1, 'ssl_expiry', $2, 'firing', NOW(), $3) \
+             ON CONFLICT (server_id, alert_type, state_key) WHERE server_id IS NOT NULL \
+             DO UPDATE SET current_state = 'firing', last_notified_at = NOW(), metadata = $3",
+        )
+        .bind(server_id)
+        .bind(&state_key)
+        .bind(serde_json::json!({ "last_warned_day": warn_day }))
+        .execute(pool)
+        .await;
+    }
+}
+
 /// Parse `alert_rules.ssl_warning_days` into a descending, de-duplicated list of
 /// non-negative rungs. Falls back to the shipped default when the column is
 /// empty or entirely unparseable, so a bad value can't silence SSL alerting.
@@ -1223,19 +1364,15 @@ fn parse_ssl_warning_days(raw: &str) -> Vec<i64> {
     days
 }
 
-/// `expired` is passed explicitly rather than inferred from `days_left <= 0`:
-/// `days_left` is truncated toward zero, so a still-valid certificate with up to
-/// 23 hours left also reads 0 and used to be announced to the operator as
-/// already EXPIRED.
-async fn fire_ssl_alert(
-    pool: &PgPool,
-    user_id: Uuid,
-    site_id: Uuid,
-    domain: &str,
-    days_left: i64,
-    expired: bool,
-    severity: &str,
-) -> bool {
+/// Title + message text for an SSL-expiry ladder page. `expired` is passed
+/// explicitly rather than inferred from `days_left <= 0`: `days_left` is
+/// truncated toward zero, so a still-valid certificate with up to 23 hours
+/// left also reads 0 and used to be announced to the operator as already
+/// EXPIRED.
+///
+/// Shared by the site and stack ladders — the copy depends only on the domain
+/// and how much time is left, never on what kind of row is expiring.
+fn ssl_alert_copy(domain: &str, days_left: i64, expired: bool) -> (String, String) {
     let window = if days_left <= 0 {
         "less than a day".to_string()
     } else if days_left == 1 {
@@ -1260,8 +1397,42 @@ async fn fire_ssl_alert(
         )
     };
 
+    (title, message)
+}
+
+async fn fire_ssl_alert(
+    pool: &PgPool,
+    user_id: Uuid,
+    site_id: Uuid,
+    domain: &str,
+    days_left: i64,
+    expired: bool,
+    severity: &str,
+) -> bool {
+    let (title, message) = ssl_alert_copy(domain, days_left, expired);
     fire_alert_with_retry(
         pool, user_id, None, Some(site_id), "ssl_expiry", "", severity, &title, &message,
+    )
+    .await
+}
+
+/// `fire_ssl_alert`'s sibling for a Compose stack. A stack alert has no
+/// `site_id` — a `docker_stacks` row has no `sites` row to point at — so this
+/// fires with `server_id: Some` and a domain-derived `state_key` instead of
+/// the site ladder's `site_id: Some` + empty key.
+async fn fire_stack_ssl_alert(
+    pool: &PgPool,
+    user_id: Uuid,
+    server_id: Uuid,
+    state_key: &str,
+    domain: &str,
+    days_left: i64,
+    expired: bool,
+    severity: &str,
+) -> bool {
+    let (title, message) = ssl_alert_copy(domain, days_left, expired);
+    fire_alert_with_retry(
+        pool, user_id, Some(server_id), None, "ssl_expiry", state_key, severity, &title, &message,
     )
     .await
 }
@@ -2354,6 +2525,27 @@ mod tests {
             assert!(SSL_EXPIRED_WARN_DAY < d, "rung {d} must stay above the expired sentinel");
         }
         assert!(SSL_EXPIRED_WARN_DAY < SSL_NEVER_WARNED);
+    }
+
+    /// `fire_ssl_alert` used to build this text inline; extracting
+    /// `ssl_alert_copy` behind it (so the stack ladder can share it) must not
+    /// change a single character of what a site's own SSL page already reads.
+    #[test]
+    fn ssl_alert_copy_unchanged_by_the_shared_helper_refactor() {
+        let (title, message) = ssl_alert_copy("example.com", 3, false);
+        assert_eq!(title, "SSL certificate expires in 3 days for example.com");
+        assert_eq!(
+            message,
+            "The SSL certificate for example.com will expire in 3 days. Please renew it before it expires."
+        );
+
+        let (title, message) = ssl_alert_copy("example.com", 1, false);
+        assert_eq!(title, "SSL certificate expires in 1 day for example.com");
+        assert!(message.contains("will expire in 1 day."));
+
+        let (title, message) = ssl_alert_copy("example.com", 0, true);
+        assert_eq!(title, "SSL certificate EXPIRED for example.com");
+        assert!(message.contains("has expired"));
     }
 
     #[test]

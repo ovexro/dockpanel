@@ -131,6 +131,9 @@ interface SslCountdown {
   domain: string;
   days_left: number;
   severity: string;
+  // Present (non-null) when this row is a Docker Compose stack's certificate
+  // rather than a site's — same convention as the certificates page.
+  stack_id?: string | null;
 }
 
 interface TopIssue {
@@ -1290,7 +1293,15 @@ export default function Dashboard() {
                   <div className="space-y-2">
                     {intel.ssl_countdowns.map((ssl, i) => (
                       <div key={i} className="flex items-center justify-between">
-                        <span className="text-xs text-dark-100 truncate max-w-[200px]">{ssl.domain}</span>
+                        <span className="text-xs text-dark-100 truncate max-w-[200px] flex items-center gap-1.5">
+                          {ssl.domain}
+                          {/* A stack and a site can share the same domain string;
+                              this is the only cue on the tile for which one is
+                              expiring. */}
+                          {ssl.stack_id && (
+                            <span className="text-[9px] px-1 py-0.5 rounded bg-dark-700 text-dark-300 uppercase tracking-wider shrink-0">Stack</span>
+                          )}
+                        </span>
                         <span className={`text-xs ${
                           ssl.severity === "critical" ? "text-danger-400" :
                           ssl.severity === "warning" ? "text-warn-400" :

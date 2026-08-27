@@ -370,15 +370,15 @@ if EG=$(subj "$ENGINE"); then
   # pool must both TAKE the set and USE it. Taking it and not using it is the
   # half-edit a signature-only arm cannot see (lesson #600).
   GUARDED=""; UNGUARDED=""
-  for fn in check_resource_thresholds check_server_offline check_ssl_expiry; do
+  for fn in check_resource_thresholds check_server_offline check_ssl_expiry check_stack_ssl_expiry; do
     B=$(fnbody "$EG" "$fn")
     if grep -q 'maint\.contains(' <<< "$B"; then GUARDED="$GUARDED $fn"; else UNGUARDED="$UNGUARDED $fn"; fi
   done
   NTAKE=$(grep -c 'maint: &HashSet<Uuid>' <<< "$EG")
-  if [ "$NTAKE" -eq 3 ]; then
-    ok "F2 all three pool-driven checks take the open-window set"
+  if [ "$NTAKE" -eq 4 ]; then
+    ok "F2 all four pool-driven checks take the open-window set"
   else
-    bad "F2 all three pool-driven checks take the open-window set — found $NTAKE"
+    bad "F2 all four pool-driven checks take the open-window set — found $NTAKE"
   fi
   if [ -z "$UNGUARDED" ]; then
     ok "F3 each of them SKIPS on it:$GUARDED"

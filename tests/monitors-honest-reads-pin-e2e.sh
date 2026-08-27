@@ -301,15 +301,16 @@ echo "== §D  every ladder call site passes the second axis =="
 # vacuous arms hiding behind a control whose number said so.
 SITES=$(calls "$M" "expiry_status" | grep -vF 'Option<i64>')
 N_SITES=$(grep -c . <<< "$SITES")
-# ⛔ READ THIS NUMBER. Four call sites: the per-caller list, the admin list, the
-# host-scan half, and — since v2.162.0 — the OFFLINE half, which lists a stack's
-# certificate from `docker_stacks.ssl_expiry` when the agent cannot be asked at
-# all. A count that drifts means a caller was added or lost, and every arm below
-# would still be describing only the ones it can see.
-if [ "$N_SITES" -eq 4 ]; then
+# ⛔ READ THIS NUMBER. Five call sites: the per-caller list's own sites, the
+# admin list's sites, the host-scan half, the OFFLINE half (since v2.162.0,
+# lists a stack's certificate from `docker_stacks.ssl_expiry` when the agent
+# cannot be asked at all), and — since s413 — the per-caller list's own
+# Docker Compose stacks. A count that drifts means a caller was added or
+# lost, and every arm below would still be describing only the ones it can see.
+if [ "$N_SITES" -eq 5 ]; then
   ok "D-control the ladder has $N_SITES call sites"
 else
-  bad "D-control the ladder has $N_SITES call sites — expected 3"
+  bad "D-control the ladder has $N_SITES call sites — expected 5"
 fi
 
 # REFUSAL: no call site takes the clock alone. The compiler already refuses a
@@ -331,25 +332,29 @@ else
   bad "D2 both site-backed lists consult the lookup — found $N_LOOKUP"
 fi
 
-# POSITIVE: the other two — host-scan and offline, neither backed by a `sites`
-# row — used to pass a literal `false` here, unconditionally, for every stack on
-# every host: `ssl_renewal_failure` alerts for a stack carry `site_id = NULL`
-# (there is no sites row to name), the panel's per-site lookup filters
-# `site_id = ANY(...)`, and NULL can never satisfy that, so the rung was
-# unreachable for a stack no matter how long its renewal had been failing
-# (s411's register, closed s412). They now consult their own lookup —
-# `failing_stacks`, queried by server + the same `stack_renewal_state_key`
-# `security_scanner::renew_stack_certificate` fires the alert under — so this
-# arm asserts the SUBSTRING rather than `grep -cx` on the whole call: an exact
+# POSITIVE: three of the five are stack-facing — none backed by a `sites` row.
+# The host-scan and offline halves used to pass a literal `false` here,
+# unconditionally, for every stack on every host: `ssl_renewal_failure` alerts
+# for a stack carry `site_id = NULL` (there is no sites row to name), the
+# panel's per-site lookup filters `site_id = ANY(...)`, and NULL can never
+# satisfy that, so the rung was unreachable for a stack no matter how long its
+# renewal had been failing (s411's register, closed s412). They now consult
+# their own lookup — `failing_stacks`, queried by server + the same
+# `stack_renewal_state_key` `security_scanner::renew_stack_certificate` fires
+# the alert under. The per-caller list's own stacks (s413) reuse the identical
+# call shape, scoped by USER instead of server (`renewal_failing_stacks_for_user`
+# — this endpoint has no server scope of its own) — same lookup pattern, same
+# key function, so the same substring still matches all three. This arm
+# asserts the SUBSTRING rather than `grep -cx` on the whole call: an exact
 # match on a long, wrapped call is a hostage to how rustfmt happens to break
 # it, and `calls()` already normalises internal whitespace to prove that
 # fragility isn't needed to tell a real lookup from a bare `false`.
 N_STACK_LOOKUP=$(grep -c 'failing_stacks\.contains( *&crate::services::security_scanner::stack_renewal_state_key(domain)' <<< "$SITES")
 N_FALSE=$(grep -cx '(days_left, false)' <<< "$SITES")
-if [ "$N_STACK_LOOKUP" -eq 2 ] && [ "$N_FALSE" -eq 0 ]; then
-  ok "D3 both stack halves now consult a real lookup — none still hardcodes false ($N_STACK_LOOKUP sites)"
+if [ "$N_STACK_LOOKUP" -eq 3 ] && [ "$N_FALSE" -eq 0 ]; then
+  ok "D3 all three stack-facing lists consult a real lookup — none still hardcodes false ($N_STACK_LOOKUP sites)"
 else
-  bad "D3 both stack halves consult a real lookup, none hardcoded — lookup=$N_STACK_LOOKUP false=$N_FALSE"
+  bad "D3 all three stack-facing lists consult a real lookup, none hardcoded — lookup=$N_STACK_LOOKUP false=$N_FALSE"
 fi
 # The offline half's OWN arm. `stale` is the one thing that row carries and no
 # other row does, and it is the honest half of the bargain: a row assembled from
@@ -369,6 +374,19 @@ if [ "$N_CALLS" -eq 2 ]; then
   ok "D4 both lists call the lookup ($N_CALLS call sites)"
 else
   bad "D4 both lists call the lookup — found $N_CALLS"
+fi
+
+# POSITIVE, same shape as D4 for the s413 user-scoped stack sibling: one
+# declaration plus exactly one real call (`certificate_dashboard` is its only
+# caller — `certificate_dashboard_for_admin` has its own inline, server-scoped
+# lookup instead, by design, since it has a server to scope by and this
+# function does not).
+STACK_LOOKUPS=$(calls "$M" "renewal_failing_stacks_for_user" | grep -vF '&[String]')
+N_STACK_CALLS=$(grep -c . <<< "$STACK_LOOKUPS")
+if [ "$N_STACK_CALLS" -eq 1 ]; then
+  ok "D5 the user-scoped stack lookup is declared once and called once ($N_STACK_CALLS call site)"
+else
+  bad "D5 the user-scoped stack lookup is declared once and called once — found $N_STACK_CALLS"
 fi
 
 echo "== §E  the page shows the rung, and stops calling a failure an emptiness =="

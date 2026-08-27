@@ -685,6 +685,42 @@ async fn renewal_failing_sites(
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
+/// `renewal_failing_sites`'s sibling for stacks, scoped by `user_id` instead of
+/// `server_id`. `certificate_dashboard` (this function's only caller) has no
+/// server scope of its own — unlike `certificate_dashboard_for_admin`, whose
+/// own inline stack lookup is scoped to one server because `ServerScope` gives
+/// it one. `alerts.user_id` is always the stack's real owner
+/// (`renew_stack_certificate` resolves it off the `docker_stacks` row before
+/// firing), so it is the correct scope for "does THIS caller's own stack have
+/// a firing renewal failure" with no server in hand to ask.
+async fn renewal_failing_stacks_for_user(
+    pool: &sqlx::PgPool,
+    user_id: Uuid,
+    domains: &[String],
+) -> Result<std::collections::HashSet<String>, ApiError> {
+    if domains.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+
+    let keys: Vec<String> = domains
+        .iter()
+        .map(|d| crate::services::security_scanner::stack_renewal_state_key(d))
+        .collect();
+
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT state_key FROM alerts \
+         WHERE alert_type = 'ssl_renewal_failure' AND status = 'firing' \
+           AND user_id = $1 AND state_key = ANY($2)",
+    )
+    .bind(user_id)
+    .bind(&keys)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| internal_error("stack renewal failure lookup", e))?;
+
+    Ok(rows.into_iter().map(|(k,)| k).collect())
+}
+
 /// GET /api/monitors/certificates — List all SSL certificates with expiry status.
 pub async fn certificate_dashboard(
     State(state): State<AppState>,
@@ -713,13 +749,65 @@ pub async fn certificate_dashboard(
     let now = chrono::Utc::now();
     let ids: Vec<Uuid> = certs.iter().map(|(id, _, _, _)| *id).collect();
     let failing = renewal_failing_sites(&state.db, &ids).await?;
-    let items: Vec<serde_json::Value> = certs.iter().map(|(id, domain, _, expiry)| {
+    let mut items: Vec<serde_json::Value> = certs.iter().map(|(id, domain, _, expiry)| {
         let days_left = expiry.map(|e| (e - now).num_days());
-        // `stack_id` is null on every row here and still on the wire: this list is
-        // site-scoped by construction, and the page that consumes both lists must
-        // not see the field appear and disappear between them.
+        // `stack_id` is null on every site row: the field is still always on the
+        // wire, so the page that consumes this list never sees it appear and
+        // disappear between a site row and a stack row.
         serde_json::json!({ "site_id": id, "stack_id": serde_json::Value::Null, "domain": domain, "expiry": expiry, "days_left": days_left, "status": expiry_status(days_left, failing.contains(id)) })
     }).collect();
+
+    // The caller's own Docker Compose stacks. `certificate_dashboard_for_admin`
+    // has read this table since s412; this endpoint's `stack_id` field was
+    // already on the wire (as `null` on every row above) with nothing behind
+    // it, and the frontend's `Certificate` interface has documented the field
+    // since then too — this was the missing half of that wiring. ACME-mode
+    // only, through `effective_tls_mode`: the same rule the admin list and the
+    // alert ladder both enforce.
+    let stacks: Vec<(
+        uuid::Uuid,
+        String,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT id, domain, ssl_expiry, tls_mode, ssl_email FROM docker_stacks \
+         WHERE user_id = $1 AND domain IS NOT NULL",
+    )
+    .bind(claims.sub)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| internal_error("certificate list stacks", e))?;
+
+    let acme_stacks: Vec<&(uuid::Uuid, String, Option<chrono::DateTime<chrono::Utc>>, Option<String>, Option<String>)> =
+        stacks
+            .iter()
+            .filter(|(_, _, _, tls_mode, ssl_email)| {
+                crate::routes::stacks::effective_tls_mode(tls_mode.as_deref(), ssl_email.as_deref())
+                    == "acme"
+            })
+            .collect();
+
+    let stack_domains: Vec<String> = acme_stacks.iter().map(|(_, d, _, _, _)| d.clone()).collect();
+    let failing_stacks =
+        renewal_failing_stacks_for_user(&state.db, claims.sub, &stack_domains).await?;
+
+    items.extend(acme_stacks.iter().map(|(id, domain, expiry, _, _)| {
+        let days_left = expiry.map(|e| (e - now).num_days());
+        serde_json::json!({
+            "site_id": serde_json::Value::Null,
+            "stack_id": id,
+            "domain": domain,
+            "expiry": expiry,
+            "days_left": days_left,
+            "status": expiry_status(
+                days_left,
+                failing_stacks.contains(
+                    &crate::services::security_scanner::stack_renewal_state_key(domain),
+                ),
+            ),
+        })
+    }));
 
     Ok(Json(serde_json::json!({ "certificates": items })))
 }

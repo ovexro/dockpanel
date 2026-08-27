@@ -868,7 +868,22 @@ else
 fi
 
 cp "$SCAN" "$FIXDIR/x_scanner.rs"
-printf '\n    let row = sqlx::query("SELECT id FROM sites WHERE domain = ?").fetch_one(pool).await?;\n' >> "$FIXDIR/x_scanner.rs"
+# Insert BEFORE any `#[cfg(test)]` boundary rather than blindly appending at
+# literal EOF: `prod_count` blanks everything from that marker onward (see the
+# K7 comment above), so a plain `>>` would land the planted defect inside the
+# blanked region for any subject whose own test module sits at the true end of
+# the file — which security_scanner.rs does since the s413 stack-SSL work.
+SCAN_TEST_LINE=$(grep -n '^#\[cfg(test)\]' "$FIXDIR/x_scanner.rs" | head -1 | cut -d: -f1)
+if [ -n "$SCAN_TEST_LINE" ]; then
+  {
+    head -n "$((SCAN_TEST_LINE - 1))" "$FIXDIR/x_scanner.rs"
+    printf '    let row = sqlx::query("SELECT id FROM sites WHERE domain = ?").fetch_one(pool).await?;\n'
+    tail -n "+$SCAN_TEST_LINE" "$FIXDIR/x_scanner.rs"
+  } > "$FIXDIR/x_scanner.rs.new"
+  mv "$FIXDIR/x_scanner.rs.new" "$FIXDIR/x_scanner.rs"
+else
+  printf '\n    let row = sqlx::query("SELECT id FROM sites WHERE domain = ?").fetch_one(pool).await?;\n' >> "$FIXDIR/x_scanner.rs"
+fi
 if [ "$(prod_count "$FIXDIR/x_scanner.rs" -F -e 'FROM sites WHERE domain')" -gt 0 ]; then
   ok "§F's host-blind-re-read arm still fires when the query is really in code"
 else

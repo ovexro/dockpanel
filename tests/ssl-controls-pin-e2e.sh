@@ -354,15 +354,15 @@ echo "── D. 'Unknown' is not 'OK' ──────────────
 # tile and this page came to disagree in the first place.
 eq "D1 there is a single expiry ladder" \
    "$(occ "$F_MON" "fnexpiry_status(days_left:Option<i64>,renewal_failing:bool)->&'staticstr{")" "1"
-# Four call sites, two lists: the admin list classifies its site-backed rows and
-# its host-only rows separately, the per-caller list classifies its own, and the
-# OFFLINE half classifies a stack read back out of Postgres when the agent could
-# not be asked. All four must use the same ladder — a second ladder is how two
-# screens came to describe the same certificate differently.
+# Five call sites, two lists: the admin list classifies its site-backed rows,
+# its host-only rows and its stack rows separately, and the per-caller list
+# classifies its own site rows AND — since s413 — its own stack rows too. All
+# five must use the same ladder — a second ladder is how two screens came to
+# describe the same certificate differently.
 # ⚠ The trailing comma is what excludes the DECLARATION, whose parameter list
 # reads `days_left:` — matching on the name alone would count one more.
 eq "D2 both lists use it, on every row class" \
-   "$(occ "$F_MON" 'expiry_status(days_left,')" "4"
+   "$(occ "$F_MON" 'expiry_status(days_left,')" "5"
 # ⛔ AND THE FOURTH GETS ITS OWN ARM. Raising D2 from 3 to 4 leaves it satisfied
 # by the three that were already there — a count cannot tell which member is
 # missing. This one names the offline row by the field only it carries.
@@ -376,8 +376,13 @@ eq "D3 a missing expiry is unknown" \
 # NOT cover is a different sentinel, which D5 catches by construction.
 eq "D4 the 999-day placeholder is gone" \
    "$(occ "$F_MON" 'unwrap_or(999)')" "0"
+# Three now, not two: `certificate_dashboard`'s own site branch, the admin
+# list's site branch, and — since s413 — `certificate_dashboard`'s own new
+# stack branch, all computing `days_left` the identical `Option`-preserving
+# way (the admin list's host-scan and offline halves use their own shapes,
+# not this one, so they are not counted here).
 eq "D5 days_left is an Option all the way out of the handler" \
-   "$(occ "$F_MON" 'letdays_left=expiry.map(|e|(e-now).num_days());')" "2"
+   "$(occ "$F_MON" 'letdays_left=expiry.map(|e|(e-now).num_days());')" "3"
 eq "D6 the page no longer falls back to the reassuring badge" \
    "$(occ "$F_CERTS" 'STATUS_STYLES[cert.status]||STATUS_STYLES.ok')" "0"
 

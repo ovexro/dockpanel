@@ -33,7 +33,11 @@ pub async fn intelligence(
     .await
     .map_err(|e| internal_error("intelligence", e))?;
 
-    // 3. Get SSL expiry data (scoped to user's sites)
+    // 3. Get SSL expiry data — scoped to user's sites AND their Docker Compose
+    //    stacks. Both feed the SAME `ssl_countdowns` list, so making stacks
+    //    visible here is enough to make them count in the health score
+    //    (section 9) and recommendations (section 10) below too, with no
+    //    further change to either loop.
     let ssl_sites: Vec<(String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         "SELECT domain, ssl_expiry FROM sites WHERE ssl_enabled = TRUE AND ssl_expiry IS NOT NULL AND server_id = $1 AND user_id = $2 ORDER BY ssl_expiry ASC LIMIT 5",
     )
@@ -43,30 +47,89 @@ pub async fn intelligence(
     .await
     .map_err(|e| internal_error("intelligence", e))?;
 
+    // `tls_mode`/`ssl_email` come along only to apply the SAME "an ACME stack
+    // is ours" rule `certificate_dashboard_for_admin` and `check_stack_ssl_expiry`
+    // already enforce — a `provided` stack's `ssl_expiry` isn't the panel's
+    // certificate to warn about.
+    let ssl_stacks: Vec<(
+        uuid::Uuid,
+        String,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT id, domain, ssl_expiry, tls_mode, ssl_email FROM docker_stacks \
+         WHERE ssl_expiry IS NOT NULL AND domain IS NOT NULL AND server_id = $1 AND user_id = $2 \
+         ORDER BY ssl_expiry ASC LIMIT 5",
+    )
+    .bind(server_id)
+    .bind(claims.sub)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| internal_error("intelligence", e))?;
+
     let now = chrono::Utc::now();
-    let ssl_countdowns: Vec<serde_json::Value> = ssl_sites
+    let ssl_severity = |days_left: i64| -> &'static str {
+        if days_left <= 3 {
+            "critical"
+        } else if days_left <= 7 {
+            "warning"
+        } else if days_left <= 30 {
+            "info"
+        } else {
+            "ok"
+        }
+    };
+
+    // Sorted by (expiry, candidate) so the merged top-5 stays soonest-first
+    // regardless of which table a row came from, then trimmed to 5 — each
+    // source query is already capped at 5, so at most 10 candidates are ever
+    // built here.
+    let mut countdowns: Vec<(chrono::DateTime<chrono::Utc>, serde_json::Value)> = ssl_sites
         .iter()
         .map(|(domain, expiry)| {
-            let days_left = expiry
-                .map(|e| (e - now).num_days())
-                .unwrap_or(0);
-            let severity = if days_left <= 3 {
-                "critical"
-            } else if days_left <= 7 {
-                "warning"
-            } else if days_left <= 30 {
-                "info"
-            } else {
-                "ok"
-            };
-            serde_json::json!({
-                "domain": domain,
-                "days_left": days_left,
-                "severity": severity,
-                "expiry": expiry,
-            })
+            let days_left = expiry.map(|e| (e - now).num_days()).unwrap_or(0);
+            (
+                expiry.unwrap_or(now),
+                serde_json::json!({
+                    "domain": domain,
+                    "days_left": days_left,
+                    "severity": ssl_severity(days_left),
+                    "expiry": expiry,
+                    // Always on the wire, even as null — a field present on some
+                    // rows and absent on others reaches TypeScript as `undefined`,
+                    // and `undefined !== null` is true.
+                    "stack_id": serde_json::Value::Null,
+                }),
+            )
         })
         .collect();
+
+    countdowns.extend(
+        ssl_stacks
+            .iter()
+            .filter(|(_, _, _, tls_mode, ssl_email)| {
+                crate::routes::stacks::effective_tls_mode(tls_mode.as_deref(), ssl_email.as_deref())
+                    == "acme"
+            })
+            .map(|(id, domain, expiry, _, _)| {
+                let days_left = expiry.map(|e| (e - now).num_days()).unwrap_or(0);
+                (
+                    expiry.unwrap_or(now),
+                    serde_json::json!({
+                        "domain": domain,
+                        "days_left": days_left,
+                        "severity": ssl_severity(days_left),
+                        "expiry": expiry,
+                        "stack_id": id,
+                    }),
+                )
+            }),
+    );
+
+    countdowns.sort_by_key(|(expiry, _)| *expiry);
+    let ssl_countdowns: Vec<serde_json::Value> =
+        countdowns.into_iter().take(5).map(|(_, v)| v).collect();
 
     // 4. Get recent alert titles (top issues)
     let top_issues: Vec<(String, String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(

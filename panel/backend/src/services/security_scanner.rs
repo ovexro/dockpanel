@@ -806,14 +806,44 @@ pub(crate) async fn auto_fix_safe_findings(
 /// WHOLE domain is appended: truncation alone would collide two long siblings
 /// into the single bucket this key exists to prevent.
 pub(crate) fn stack_renewal_state_key(domain: &str) -> String {
+    stack_domain_state_key(notifications::ssl_renewal_key::FAILED, domain)
+}
+
+/// The `state_key` a stack's SSL-expiry warning ladder fires and resolves
+/// under — `alert_engine::check_stack_ssl_expiry`'s sibling of this file's own
+/// `stack_renewal_state_key`, same reasoning: `alert_state`/`alerts` have no
+/// `docker_stack_id` column, only `server_id`, so two stacks on one server
+/// sharing an empty key would collide into one bucket. `alert_type` already
+/// separates this from `stack_renewal_state_key`'s `ssl_renewal_failure` rows
+/// under the same `(server_id, alert_type, state_key)` index, so the `kind`
+/// word here only has to be distinct from `stack_renewal_state_key`'s for a
+/// human reading the raw column — not for correctness.
+pub(crate) fn stack_ssl_expiry_state_key(domain: &str) -> String {
+    stack_domain_state_key("expiry", domain)
+}
+
+/// Shared truncate-then-hash logic behind every stack alert `state_key`.
+///
+/// ⚠ `alerts.state_key` is `VARCHAR(100)`. A hostname may be 253 bytes, so the
+/// obvious `format!` overflows the column and the INSERT fails — the alert
+/// then silently never fires at all, which is worse than the bug it replaced.
+/// When the readable form does not fit, the domain is truncated AND a digest
+/// of the WHOLE domain is appended: truncation alone would collide two long
+/// siblings into the single bucket this key exists to prevent.
+///
+/// ⛔ ONE spelling per `kind`, computed in ONE place, called by both the fire
+/// and the resolve side of whichever ladder uses it. A fire and a resolve that
+/// spell the key separately are a severed pair: the alert fires, the resolve
+/// misses, and it pages forever about a condition that already cleared.
+fn stack_domain_state_key(kind: &str, domain: &str) -> String {
     const MAX: usize = 100;
-    let readable = format!("stack:{}:{}", notifications::ssl_renewal_key::FAILED, domain);
+    let readable = format!("stack:{kind}:{domain}");
     if readable.len() <= MAX {
         return readable;
     }
     use sha2::{Digest, Sha256};
     let digest = hex::encode(Sha256::digest(domain.as_bytes()));
-    let prefix = format!("stack:{}:", notifications::ssl_renewal_key::FAILED);
+    let prefix = format!("stack:{kind}:");
     // 16 hex characters of SHA-256 — collision-free for any realistic number of
     // domains on one panel, and it keeps enough of the name to be recognisable.
     //
@@ -1207,5 +1237,57 @@ async fn send_scan_alerts(pool: &PgPool, member: &FleetMember, critical: i32, wa
             &message,
         )
         .await;
+    }
+}
+
+#[cfg(test)]
+mod stack_state_key_tests {
+    use super::*;
+
+    /// `stack_renewal_state_key` used to build this string inline; extracting
+    /// `stack_domain_state_key` behind it must not change one character of it —
+    /// a live `alert_state`/`alerts` row for a currently-firing renewal failure
+    /// already carries exactly this key, and a silent change orphans its
+    /// dedup/resolve match (the lesson #850 shape: a refactor that compiles
+    /// clean but changes what's on disk).
+    #[test]
+    fn stack_renewal_state_key_unchanged_by_the_shared_helper_refactor() {
+        assert_eq!(stack_renewal_state_key("example.com"), "stack:failed:example.com");
+    }
+
+    #[test]
+    fn stack_renewal_state_key_truncates_and_hashes_long_domains() {
+        let long = "a".repeat(200);
+        let key = stack_renewal_state_key(&long);
+        assert!(
+            key.len() <= 100,
+            "state_key must fit alerts.state_key VARCHAR(100), got {} chars",
+            key.len()
+        );
+        assert!(key.starts_with("stack:failed:"));
+    }
+
+    /// The two ladders' keys must not collide for the SAME domain — even
+    /// though `alert_type` already separates their rows in `alert_state`, a
+    /// shared key would make the raw column ambiguous to a human reading it,
+    /// and any future caller that forgets to also filter by `alert_type`
+    /// would silently merge two unrelated conditions.
+    #[test]
+    fn stack_ssl_expiry_state_key_is_distinct_from_the_renewal_key_for_the_same_domain() {
+        let domain = "example.com";
+        assert_ne!(stack_renewal_state_key(domain), stack_ssl_expiry_state_key(domain));
+        assert_eq!(stack_ssl_expiry_state_key(domain), "stack:expiry:example.com");
+    }
+
+    #[test]
+    fn stack_ssl_expiry_state_key_truncates_and_hashes_long_domains() {
+        let long = "b".repeat(200);
+        let key = stack_ssl_expiry_state_key(&long);
+        assert!(
+            key.len() <= 100,
+            "state_key must fit alerts.state_key VARCHAR(100), got {} chars",
+            key.len()
+        );
+        assert!(key.starts_with("stack:expiry:"));
     }
 }

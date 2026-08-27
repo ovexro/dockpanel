@@ -4,6 +4,31 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.165.0]
+
+### Added — Docker Compose stacks now get the same SSL expiry warning ladder and dashboard visibility a site already had
+
+A stack's certificate (`docker_stacks.ssl_expiry`) had no approaching-expiry
+warning at all — the only stack-side SSL alert was `ssl_renewal_failure`,
+raised *after* a renewal attempt actually failed. A stack whose cert was
+simply getting close to expiry, with no failed renewal yet, raised nothing in
+the panel's own alert system. The day-count ladder that already pages a site's
+owner at 30/14/7/3/1 days out (`alert_engine::check_ssl_expiry`) now has an
+ACME-mode-only sibling for stacks, reusing the identical rung logic and the
+same `alert_ssl_expiry` toggle and `ssl_warning_days` setting a site's
+certificate already uses — no new switch to configure.
+
+The dashboard's SSL tile, health score and smart recommendations were also
+blind to stacks — all three read only the `sites` table. They now share one
+merged list with the site certificates, so a stack's expiring certificate
+shows up on the dashboard, counts against the health score and produces a
+recommendation exactly the way a site's does.
+
+The per-caller certificate list (`GET /api/monitors/certificates`) also
+gained its own Docker stacks — its `stack_id` field has carried `null` on
+every row since the admin certificate list learned to populate it, with
+nothing behind it; this was the missing half of that wiring.
+
 ## [2.164.0]
 
 ### Fixed — a Compose stack's certificate renewal failure never reached the certificate list
