@@ -323,25 +323,33 @@ else
   bad "D1 $ONE_ARG call site(s) pass the clock alone"
 fi
 
-# POSITIVE: two of the four consult the lookup; the other two pass `false`, and
-# for reasons that are NOT the same — which is why D3b exists beside D3 rather
-# than the count being quietly raised. The host-scan half has no site row to ask
-# about. The offline half has no agent to ask at all, so even a live answer is
-# out of reach; it is the panel reading back its own record.
-# ⚠ A count arm cannot tell the two apart — both spell `(days_left, false)`. If
-# one of them ever grew an answer it could have consulted, only a named arm
-# would notice.
+# POSITIVE: two of the four consult the SITE lookup (`failing`), by site id.
 N_LOOKUP=$(grep -cx '(days_left, failing.contains(id))' <<< "$SITES")
-N_FALSE=$(grep -cx '(days_left, false)' <<< "$SITES")
 if [ "$N_LOOKUP" -eq 2 ]; then
   ok "D2 both site-backed lists consult the lookup ($N_LOOKUP sites)"
 else
   bad "D2 both site-backed lists consult the lookup — found $N_LOOKUP"
 fi
-if [ "$N_FALSE" -eq 2 ]; then
-  ok "D3 the two site-less halves pass false, having no site row to ask about"
+
+# POSITIVE: the other two — host-scan and offline, neither backed by a `sites`
+# row — used to pass a literal `false` here, unconditionally, for every stack on
+# every host: `ssl_renewal_failure` alerts for a stack carry `site_id = NULL`
+# (there is no sites row to name), the panel's per-site lookup filters
+# `site_id = ANY(...)`, and NULL can never satisfy that, so the rung was
+# unreachable for a stack no matter how long its renewal had been failing
+# (s411's register, closed s412). They now consult their own lookup —
+# `failing_stacks`, queried by server + the same `stack_renewal_state_key`
+# `security_scanner::renew_stack_certificate` fires the alert under — so this
+# arm asserts the SUBSTRING rather than `grep -cx` on the whole call: an exact
+# match on a long, wrapped call is a hostage to how rustfmt happens to break
+# it, and `calls()` already normalises internal whitespace to prove that
+# fragility isn't needed to tell a real lookup from a bare `false`.
+N_STACK_LOOKUP=$(grep -c 'failing_stacks\.contains( *&crate::services::security_scanner::stack_renewal_state_key(domain)' <<< "$SITES")
+N_FALSE=$(grep -cx '(days_left, false)' <<< "$SITES")
+if [ "$N_STACK_LOOKUP" -eq 2 ] && [ "$N_FALSE" -eq 0 ]; then
+  ok "D3 both stack halves now consult a real lookup — none still hardcodes false ($N_STACK_LOOKUP sites)"
 else
-  bad "D3 the two site-less halves pass false — found $N_FALSE such site(s)"
+  bad "D3 both stack halves consult a real lookup, none hardcoded — lookup=$N_STACK_LOOKUP false=$N_FALSE"
 fi
 # The offline half's OWN arm. `stale` is the one thing that row carries and no
 # other row does, and it is the honest half of the bargain: a row assembled from

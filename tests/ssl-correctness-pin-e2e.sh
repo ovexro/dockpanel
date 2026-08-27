@@ -1042,6 +1042,33 @@ else
   else
     bad "K7 the mail-conflict dedup key is both defined and raised — def=$DEF_MHC use=$USE_MHC"
   fi
+
+  # H8 — the no-`sites`-row leg is announced too, not just the site leg. Until
+  # s411 `announce_mail_cert_conflict` took a non-optional site id and owner, so
+  # a Compose stack or Docker app domain (which can never own a `sites` row —
+  # `domain_claim::find_occupant` guarantees it) hit only a `tracing::warn!`
+  # with no alert behind it: the exact severed-pair shape K6/K7 already guard
+  # against for the site-owning leg, just on the other branch of the same `if`.
+  # Two calls in one function body is the only shape that proves both branches
+  # reach it — K6 alone is satisfied by either one.
+  ANNOUNCE_N=$(grep -c 'announce_mail_cert_conflict' <<< "$PROV_BODY")
+  if [ "$ANNOUNCE_N" -eq 2 ]; then
+    ok "K8 both the site leg and the no-site leg announce a refusal ($ANNOUNCE_N call sites)"
+  else
+    bad "K8 both the site leg and the no-site leg announce a refusal — found $ANNOUNCE_N call sites (expected 2)"
+  fi
+
+  # H9 — the signature the fix actually depends on. K8 would stay green even if
+  # `site_id` were forced back to a non-optional `Uuid` and the no-site branch
+  # invented an id to satisfy it — a shape that compiles, calls the function
+  # twice, and reintroduces exactly what H8's comment describes. Pin the type.
+  ANNOUNCE_SIG=$(prod_lines "$MAILF" \
+    | awk '/^async fn announce_mail_cert_conflict\(/ {inb=1} inb {print} inb && /^\) \{$/ {exit}')
+  if grep -qE 'site_id: Option<uuid::Uuid>' <<< "$ANNOUNCE_SIG"; then
+    ok "K9 announce_mail_cert_conflict's site id is Option — the no-site leg cannot be served by an invented id"
+  else
+    bad "K9 announce_mail_cert_conflict's site id is no longer Option — the no-site leg may be back to inventing one, or gone"
+  fi
 fi
 
 echo

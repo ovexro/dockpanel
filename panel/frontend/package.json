@@ -1,7 +1,7 @@
 {
   "name": "dockpanel-frontend",
   "private": true,
-  "version": "2.163.0",
+  "version": "2.164.0",
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {

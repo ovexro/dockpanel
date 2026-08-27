@@ -4,6 +4,62 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.164.0]
+
+### Fixed — a Compose stack's certificate renewal failure never reached the certificate list
+
+A stack's `ssl_renewal_failure` alert carries `site_id = NULL` — there is no
+`sites` row to name — and is keyed instead by server and domain. The admin
+certificate list's renewal-failure lookup filters `site_id = ANY(...)`, which
+a NULL site id can never satisfy, so a stack's certificate always read as
+critical/warning/ok on the clock alone, never `renewal_failed`, no matter how
+long its renewal had actually been failing. The list now runs a second,
+sibling lookup scoped by server and the same state key the renewal job raises
+its alert under, and both the live and offline halves of the admin
+certificate list consult it.
+
+### Fixed — a mail host with no site could be refused with nobody told
+
+Auto-provisioning a mail host's certificate already refused rather than
+replace a foreign or wildcard-covering one. When the mail domain belonged to a
+`sites` row, that refusal raised an alert; when it belonged to a Compose stack
+or Docker app instead — which can never own a `sites` row — the alerting
+function's non-optional site id and owner meant that population could only be
+logged, never alerted on. The refusal itself was always correct; only the
+notification was missing. The site id is now optional, and the admin who
+configured the mail domain's DNS stands in as the alert's owner when there is
+no site to attribute it to.
+
+### Fixed — two Compose stacks could share a name, with no signal to either operator
+
+The migration that scoped `docker_stacks.name` uniqueness to server and user
+dropped the table's original global constraint and never added the scoped
+replacement, unlike the two sibling columns fixed in the same file. A stack's
+own Docker-level isolation is keyed by its id, not its name, so this was never
+a collision risk at the container level — only a list that could show two
+identical rows with nothing but the URL to tell them apart. Existing
+duplicates, if any, are renamed by creation order on upgrade; a new duplicate
+is now refused with a clear "A stack with this name already exists".
+
+### Fixed — a doc-truth gate that never checked two of its own claims
+
+`docs-claims-pin-e2e.sh` declared "Frontend pages" and "DB migrations" as
+published nowhere but the register — but `CONTRIBUTING.md`'s own repo-structure
+diagram had quoted both the whole time, and had drifted: 48 pages against a
+real 53, 118 migrations against a real 118 (now 119). Five sibling counts on
+the same diagram, none register-tracked, had drifted further still and are
+corrected in the same commit. Both metrics are now checked against
+`CONTRIBUTING.md` like every other surface that publishes them.
+
+### Fixed — the marketing site's own template count was the one figure nothing verified
+
+`website/client/src/measurements.ts` claims every other page derives its
+count of Docker app templates from — its own docstring claims the pin suite
+would catch a disagreement. Nothing did: the suite's prose-claim scanner
+matches "148 templates" and the file spells it "templates: 148", and the
+register's surface map for that metric didn't list the file at all. It is now
+mapped like every other surface.
+
 ## [2.163.0]
 
 ### Fixed — a DNS-01 wildcard renewal asked about the wrong certificate

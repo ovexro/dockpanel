@@ -532,7 +532,13 @@ pub async fn create(
     .bind(tls.certificate_id)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| internal_error("create stacks", e))?;
+    .map_err(|e| {
+        if e.to_string().contains("duplicate key") {
+            err(StatusCode::CONFLICT, "A stack with this name already exists")
+        } else {
+            internal_error("create stacks", e)
+        }
+    })?;
 
     // Deploy with stack_id label
     let deploy_result = agent

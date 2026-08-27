@@ -808,6 +808,34 @@ pub async fn certificate_dashboard_for_admin(
         .await
         .map_err(|e| internal_error("admin certificate list stacks", e))?;
 
+    // Stack-level `ssl_renewal_failure` alerts carry `site_id = NULL` (there is
+    // no sites row to name) and are keyed instead by
+    // `stack_renewal_state_key(domain)` under this server — see that
+    // function's own doc. `renewal_failing_sites` above filters
+    // `site_id = ANY($1)`, which a NULL site_id can never satisfy, so it is the
+    // wrong lookup for these rows; this is `renewal_failing_sites`'s sibling,
+    // scoped by server + state_key instead of by site id, because a stack
+    // alert has no site id to scope by.
+    let stack_keys: Vec<String> = stacks
+        .iter()
+        .map(|(_, d, _, _, _)| crate::services::security_scanner::stack_renewal_state_key(d))
+        .collect();
+    let failing_stacks: std::collections::HashSet<String> = if stack_keys.is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT state_key FROM alerts \
+             WHERE alert_type = 'ssl_renewal_failure' AND status = 'firing' \
+               AND server_id = $1 AND state_key = ANY($2)",
+        )
+        .bind(server_id)
+        .bind(&stack_keys)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| internal_error("stack renewal failure lookup", e))?;
+        rows.into_iter().map(|(k,)| k).collect()
+    };
+
     // ⛔ Only an ACME stack is ours. A `provided` stack serves its certificate from
     //    the registry, and the file this walk finds under /etc/dockpanel/ssl is a
     //    LEFTOVER from before the switch — offering to renew it, or stamping the
@@ -875,19 +903,12 @@ pub async fn certificate_dashboard_for_admin(
                         "domain": domain,
                         "expiry": expiry,
                         "days_left": days_left,
-                        // ⚠ Still never `renewal_failed`, but the reason has
-                        // shrunk and the old one must not be left standing. It
-                        // used to say nothing could raise a renewal alert against
-                        // these and that the panel never renewed them from here;
-                        // both became false in v2.161.0/v2.162.0, which renew a
-                        // stack's certificate on a schedule AND raise
-                        // `ssl_renewal_failure` when that fails. What is still
-                        // true is narrower: that alert is keyed by server and
-                        // state_key with a NULL site_id, and the lookup feeding
-                        // this rung asks `site_id = ANY(...)`, so it cannot see
-                        // one. The rung is unreachable here — recorded, not
-                        // claimed to be inapplicable.
-                        "status": expiry_status(days_left, false),
+                        "status": expiry_status(
+                            days_left,
+                            failing_stacks.contains(
+                                &crate::services::security_scanner::stack_renewal_state_key(domain),
+                            ),
+                        ),
                         "issuer": c.get("issuer"),
                         "owner_email": serde_json::Value::Null,
                         // A certificate on disk that belongs to no site and no
@@ -928,7 +949,12 @@ pub async fn certificate_dashboard_for_admin(
                     "domain": domain,
                     "expiry": expiry,
                     "days_left": days_left,
-                    "status": expiry_status(days_left, false),
+                    "status": expiry_status(
+                        days_left,
+                        failing_stacks.contains(
+                            &crate::services::security_scanner::stack_renewal_state_key(domain),
+                        ),
+                    ),
                     "issuer": serde_json::Value::Null,
                     "owner_email": serde_json::Value::Null,
                     "managed": true,

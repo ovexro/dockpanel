@@ -576,7 +576,14 @@ declare -A SURFACES=(
   # publish it. Same shape as the s354 agent-metric gap and the s376
   # api-reference gap — the third recurrence of "the map is a hand list, and
   # what is missing from it is exactly what drifts".
-  ["App templates"]="README.md FEATURES.md docs/api-reference.md docs/cli-reference.md"
+  # s412: a FOURTH surface was missing — measurements.ts's own `templates: N`.
+  # §1's CLAIM_RE above only matches "N templates" (number BEFORE the word),
+  # so it never saw `templates: 148,` (word before number, TypeScript object
+  # syntax); §1's own trailing comment claimed "§6 covers the site instead, by
+  # way of the register" — untrue until this line, since the site was not
+  # actually listed here. Nothing anywhere checked the one file every other
+  # surface derives its own count from.
+  ["App templates"]="README.md FEATURES.md docs/api-reference.md docs/cli-reference.md website/client/src/measurements.ts"
   # s377: `API binary` and `CLI binary` had NO row at all, while README.md:245
   # publishes both on the same line as `Agent binary`, which DID have one. So
   # `a37e43c` re-measured the register from the published v2.103.0 assets, moved
@@ -599,6 +606,17 @@ declare -A SURFACES=(
   ["HTTP routes"]="README.md docs/api-reference.md"
   ["Regression-pin assertions"]="README.md docs/testing.md"
   ["Supervised background services"]="README.md"
+  # s412: both of these were declared REGISTER_ONLY below while
+  # CONTRIBUTING.md:61-70 published them the whole time, inside the ASCII repo
+  # tree under "Architecture" — "Frontend pages" as a stale 48 against a real
+  # 53, "DB migrations" as a stale 118 against a real 119 (five OTHER counts on
+  # the same tree, not register-tracked, had also drifted — fixed in the same
+  # commit but not pinned, since they are not `FEATURES.md` rows). A
+  # REGISTER_ONLY declaration is not verified against anything; it is trusted
+  # on the strength of the person who wrote it having actually checked. Neither
+  # had been.
+  ["Frontend pages"]="CONTRIBUTING.md"
+  ["DB migrations"]="CONTRIBUTING.md"
 )
 
 # Metrics the register is the ONLY publisher of. Declared rather than absent:
@@ -606,8 +624,6 @@ declare -A SURFACES=(
 # how four of the rows above went unguarded. Being register-only is a decision,
 # and this is where it is recorded.
 declare -A REGISTER_ONLY=(
-  ["Frontend pages"]="derived and published nowhere but the register"
-  ["DB migrations"]="derived and published nowhere but the register"
 )
 
 # The map must be TOTAL over the register. §6a three sections up already rejects

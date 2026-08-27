@@ -1187,6 +1187,7 @@ pub fn mail_cert_verdict(
 async fn provision_mail_host_cert(
     db: &sqlx::PgPool,
     agent: &AgentHandle,
+    user_id: uuid::Uuid,
     user_email: &str,
     domain: &str,
     server_id: uuid::Uuid,
@@ -1239,20 +1240,20 @@ async fn provision_mail_host_cert(
             ssl_challenge.as_deref(),
             foreign.as_deref(),
         ) {
-            announce_mail_cert_conflict(db, domain, site_id, site_owner, server_id, blocker).await;
+            announce_mail_cert_conflict(db, domain, Some(site_id), site_owner, server_id, blocker).await;
             return;
         }
-    } else if let Some(issuer) = foreign {
-        // A REFUSAL AND NOTHING ELSE. The alerting sibling cannot serve this
-        // branch: `announce_mail_cert_conflict` takes a non-optional site id and
-        // owner and hands them to the alert as its subject, and here there is no
-        // site to name. Recording that gap is a smaller wrong than inventing an
-        // id — the destructive outcome is stopped either way, and the operator
-        // still gets the sentence in the log.
-        tracing::warn!(
-            "Auto-SSL (mail): not ordering for {domain} — the certificate installed there was \
-             issued by {issuer}, not by DockPanel, and ordering would replace it"
-        );
+    } else if foreign.is_some() {
+        // No `sites` row exists for this domain (a Compose stack or Docker app
+        // claimed it — `domain_claim::find_occupant` guarantees a `sites` row
+        // can never coexist with one). `announce_mail_cert_conflict` used to
+        // take a non-optional site id and owner, so this branch could only log
+        // a warning and had no alert to raise. `site_id` is now `Option`, and
+        // the caller's own `user_id` (the admin who configured mail for this
+        // domain) stands in as the alert's owner — a real id from the call
+        // chain, not an invented one.
+        announce_mail_cert_conflict(db, domain, None, user_id, server_id, MailCertBlocker::Foreign)
+            .await;
         return;
     }
 
@@ -1293,7 +1294,7 @@ async fn provision_mail_host_cert(
 async fn announce_mail_cert_conflict(
     db: &sqlx::PgPool,
     domain: &str,
-    site_id: uuid::Uuid,
+    site_id: Option<uuid::Uuid>,
     site_owner: uuid::Uuid,
     server_id: uuid::Uuid,
     blocker: MailCertBlocker,
@@ -1314,11 +1315,23 @@ async fn announce_mail_cert_conflict(
 
     tracing::warn!("Auto-SSL (mail): declined to provision for {domain} — {because}");
 
+    // No `sites` row for a Compose stack or Docker app domain, so there is no
+    // SSL tab to send the operator to — that instruction is specific to the
+    // `site_id.is_some()` population.
+    let remedy = if site_id.is_some() {
+        "If the mail host needs one of its own, issue it deliberately from the site's SSL tab, \
+         where the consequences are shown before anything is replaced."
+    } else {
+        "If the mail host needs one of its own, replace the certificate deliberately at its \
+         source (the Compose stack or template that manages it) — DockPanel will not do it \
+         automatically."
+    };
+
     crate::services::notifications::fire_alert_deduped(
         db,
         site_owner,
         Some(server_id),
-        Some(site_id),
+        site_id,
         "ssl_renewal_failure",
         crate::services::notifications::ssl_renewal_key::MAIL_HOST_CONFLICT,
         "warning",
@@ -1326,8 +1339,7 @@ async fn announce_mail_cert_conflict(
         &format!(
             "DockPanel did not issue a certificate for the mail host {domain}, because \
              {because}. Mail for this domain will use the certificate already installed. \
-             If the mail host needs one of its own, issue it deliberately from the site's \
-             SSL tab, where the consequences are shown before anything is replaced."
+             {remedy}"
         ),
         12,
     )
@@ -1443,7 +1455,7 @@ async fn auto_create_mail_dns(
         }
 
         // ── Auto-SSL: provision certificate for the mail domain ───────────
-        provision_mail_host_cert(db, agent, user_email, domain, server_id).await;
+        provision_mail_host_cert(db, agent, user_id, user_email, domain, server_id).await;
     } else if provider == "powerdns" {
         // Get PowerDNS settings
         let pdns: Vec<(String, String)> = sqlx::query_as(
@@ -1504,7 +1516,7 @@ async fn auto_create_mail_dns(
         }
 
         // ── Auto-SSL for PowerDNS ────────────────────────────────────────
-        provision_mail_host_cert(db, agent, user_email, domain, server_id).await;
+        provision_mail_host_cert(db, agent, user_id, user_email, domain, server_id).await;
     }
 
     Ok(())

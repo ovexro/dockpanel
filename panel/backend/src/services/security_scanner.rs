@@ -805,7 +805,7 @@ pub(crate) async fn auto_fix_safe_findings(
 /// the readable form does not fit, the domain is truncated AND a digest of the
 /// WHOLE domain is appended: truncation alone would collide two long siblings
 /// into the single bucket this key exists to prevent.
-fn stack_renewal_state_key(domain: &str) -> String {
+pub(crate) fn stack_renewal_state_key(domain: &str) -> String {
     const MAX: usize = 100;
     let readable = format!("stack:{}:{}", notifications::ssl_renewal_key::FAILED, domain);
     if readable.len() <= MAX {

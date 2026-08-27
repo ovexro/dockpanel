@@ -58,16 +58,16 @@ The frontend dev server proxies `/api` to `127.0.0.1:3080` (see `panel/frontend/
 ```
 panel/
 ├── agent/       # Rust — host-level operations (Docker, Nginx, SSL, terminal)
-│   ├── src/routes/     # HTTP endpoint handlers (33 files)
-│   └── src/services/   # Business logic (29 files)
+│   ├── src/routes/     # HTTP endpoint handlers (39 files)
+│   └── src/services/   # Business logic (38 files)
 ├── backend/     # Rust — API server, auth, DB, multi-server dispatch
-│   ├── src/routes/     # REST endpoints (50 files)
-│   ├── src/services/   # Background tasks (20 files)
-│   └── migrations/     # SQL migrations (118 files)
+│   ├── src/routes/     # REST endpoints (62 files)
+│   ├── src/services/   # Background tasks (36 files)
+│   └── migrations/     # SQL migrations (119 files)
 ├── cli/         # Rust — CLI tool (clap-based)
 │   └── src/commands/   # Subcommand handlers (11 files)
 └── frontend/    # React 19 + TypeScript + Tailwind 4
-    └── src/pages/      # Lazy-loaded page components (48 files)
+    └── src/pages/      # Lazy-loaded page components (53 files)
 ```
 
 **Agent** handles host-level operations: Docker, Nginx config, SSL certificates, file system, terminal (PTY), backups. Runs as root. Communicates via Unix socket (local) or HTTPS (remote servers).
