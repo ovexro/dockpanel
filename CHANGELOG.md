@@ -4,6 +4,30 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.169.0]
+
+### Security — a git deploy's `repo_url` had no SSRF guard at all
+
+Every other place the panel accepts an operator-supplied URL — monitors,
+webhooks, extensions, escalation policies — validates it against
+`validate_url_not_internal` before ever connecting. `git_deploys.repo_url`
+never did: an admin could point a deploy's clone target at
+`http://169.254.169.254/...` or any other internal address, and the agent
+would `git clone` it directly.
+
+Reusing `validate_url_not_internal` unmodified wasn't possible: it refuses
+any URL carrying credentials in the authority outright, and a legitimate
+repo URL routinely carries one (`https://x-access-token:TOKEN@github.com/
+owner/repo.git`). It also only accepts `http`/`https`, while the agent's own
+clone gate (`is_valid_repo_url`) additionally allows `ssh://` and the
+scp-like `git@host:path` shorthand — neither of which an ordinary URL
+parser can read as an authority at all.
+
+Added `helpers::validate_repo_url_not_internal`: tolerant of embedded
+credentials, understands all four repo-url shapes, and reuses the same
+`validate_host_not_internal` internal-address check every other SSRF guard
+in the panel already shares. Wired into both `create` and `update`.
+
 ## [2.168.0]
 
 ### Added — Git Deploys can serve a registered certificate, not just Let's Encrypt

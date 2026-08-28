@@ -62,14 +62,24 @@ for f in "$HELPERS" "$EXT" "$MON" "$UPT"; do
   [ -f "$f" ] || { echo "  FATAL: $f missing — wrong tree?"; exit 1; }
 done
 
-# The retired shape, whitespace-free, as it would read after `tr -d`.
-OLD_SHAPE="split('/').next()"        # the tell of hand-rolled host extraction
-OLD_SHAPE2="split(':').next()"
+# The retired shape's actual fingerprint: split('/').next() to strip the path,
+# THEN — chained in the SAME statement, no ';' between — split(':').next() to
+# strip the port, in that exact order (the doc comment above names it: "strip the
+# scheme … split('/').next() … split(':').next()"). Matching the two substrings
+# ANYWHERE in the file, independent of order or statement boundary, over-fires on
+# a legitimate LATER use of the same two calls for something that isn't URL-authority
+# extraction at all — e.g. parsing the scp-like `git@host:path` git-remote shorthand
+# (s417's git-deploy repo_url SSRF guard), which is not a URI, has no userinfo
+# ambiguity to get wrong, and genuinely cannot go through `url::Url::parse`. Per the
+# s416 pin lesson (project_dockpanel_lessons_p153 #862): when a pin fires on a
+# legitimate new shape, tighten the pin to the ACTUAL invariant instead of loosening
+# the code to dodge it.
+OLD_CHAIN='split\(\x27/\x27\)\.next\(\)[^;]*split\(\x27:\x27\)\.next\(\)'
 
 echo "§A  the hand-rolled host extraction is absent in both parsers"
 for f in "$HELPERS" "$EXT"; do
   F=$(flat "$f")
-  if grep -qF "$OLD_SHAPE" <<< "$F" && grep -qF "$OLD_SHAPE2" <<< "$F"; then
+  if grep -qP "$OLD_CHAIN" <<< "$F"; then
     bad "§A $f: hand-rolled 'split('/')…split(':')' host extraction is back"
   else
     ok "§A $f: no substring host extraction"

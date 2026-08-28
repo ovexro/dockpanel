@@ -473,6 +473,10 @@ pub async fn create(
         return Err(err(StatusCode::BAD_REQUEST, "Repository URL is required"));
     }
 
+    if let Err(e) = crate::helpers::validate_repo_url_not_internal(&body.repo_url).await {
+        return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid repository URL: {e}")));
+    }
+
     // Auto-allocate host_port: find first gap in 7000-7999 (scoped to this server)
     let used_ports: Vec<(i32,)> = sqlx::query_as(
         "SELECT host_port FROM git_deploys WHERE server_id = $1 ORDER BY host_port",
@@ -842,6 +846,16 @@ pub async fn update(
         if !cmd.trim().is_empty() {
             super::is_safe_shell_command(cmd)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("post_deploy_cmd: {e}")))?;
+        }
+    }
+
+    // Validate repo_url for SSRF the same way create() does, whenever it's present —
+    // an edit can point an existing deploy at a NEW repo, not just create one.
+    if let Some(ref url) = body.repo_url {
+        if !url.trim().is_empty() {
+            if let Err(e) = crate::helpers::validate_repo_url_not_internal(url).await {
+                return Err(err(StatusCode::BAD_REQUEST, &format!("Invalid repository URL: {e}")));
+            }
         }
     }
 

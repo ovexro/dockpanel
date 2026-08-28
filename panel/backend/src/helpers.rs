@@ -582,6 +582,83 @@ mod tests {
         assert!(v("file:///etc/passwd").await.is_err());
         assert!(v("not a url").await.is_err());
     }
+
+    // ---- SSRF validator (validate_repo_url_not_internal) ----
+    //
+    // `git_deploys.repo_url` cannot reuse `validate_url_not_internal` unmodified: a
+    // legitimate repo URL routinely carries an access token as userinfo
+    // (`https://x-access-token:TOKEN@github.com/...`), which that guard refuses
+    // outright, and `is_valid_repo_url` (agent-side, the actual clone gate) also
+    // accepts `ssh://` and the scp-like `git@host:path` shorthand — neither of which
+    // `url::Url` parses as an ordinary authority. These pins exist so tolerance for
+    // credentials never quietly widens into tolerance for an internal HOST.
+
+    #[test]
+    fn repo_url_authority_host_matches_what_a_client_would_dial() {
+        assert_eq!(
+            super::repo_url_authority("https://github.com/owner/repo.git").unwrap(),
+            ("github.com".to_string(), 443),
+            "plain https behaves like url_authority"
+        );
+        assert_eq!(
+            super::repo_url_authority("https://x-access-token:ghp_abc@github.com/owner/repo.git")
+                .unwrap(),
+            ("github.com".to_string(), 443),
+            "a legitimate embedded PAT is tolerated, and the host extracted is still \
+             the one a client actually dials"
+        );
+        assert_eq!(
+            super::repo_url_authority("ssh://git@10.0.0.1:2222/owner/repo.git").unwrap(),
+            ("10.0.0.1".to_string(), 2222),
+            "ssh:// with an explicit port"
+        );
+        assert_eq!(
+            super::repo_url_authority("git@github.com:owner/repo.git").unwrap(),
+            ("github.com".to_string(), 22),
+            "scp-like shorthand has no scheme delimiter at all, and defaults to port 22"
+        );
+        assert!(
+            super::repo_url_authority("ftp://example.com/repo.git").is_err(),
+            "a scheme neither this guard nor is_valid_repo_url recognises is refused up front"
+        );
+        assert!(super::repo_url_authority("").is_err());
+    }
+
+    async fn vr(u: &str) -> Result<(), String> {
+        super::validate_repo_url_not_internal(u).await
+    }
+
+    #[tokio::test]
+    async fn repo_url_internal_targets_rejected_across_every_shape() {
+        // No DNS needed: every host below is a literal IP, one per shape this guard
+        // has to parse. If credential-tolerance were implemented as "skip the SSRF
+        // check" rather than "skip only the credential rejection", every one of these
+        // would wrongly pass.
+        for u in [
+            "https://TOKEN@10.0.0.5/owner/repo.git",    // credentialed https, RFC 1918
+            "ssh://git@169.254.169.254/owner/repo.git", // ssh, metadata address
+            "git@127.0.0.1:owner/repo.git",             // scp-like, loopback
+            "git@100.64.0.1:owner/repo.git",            // scp-like, CGNAT
+        ] {
+            assert!(vr(u).await.is_err(), "internal repo_url target must be rejected: {u}");
+        }
+    }
+
+    #[tokio::test]
+    async fn repo_url_credentials_alone_do_not_trigger_the_refusal_url_authority_would() {
+        // A TEST-NET literal stands in for a real public host, so this needs no DNS.
+        // The point: credentials alone must NOT refuse here, unlike
+        // `credentials_in_a_public_authority_are_still_refused` above — that is the
+        // entire reason this guard exists instead of reusing `validate_url_not_internal`.
+        assert!(vr("https://x-access-token:ghp_abc@198.51.100.7/owner/repo.git").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn repo_url_disallowed_scheme_is_refused_before_any_resolution() {
+        assert!(vr("ftp://example.com/repo.git").await.is_err());
+        assert!(vr("file:///etc/passwd").await.is_err());
+        assert!(vr("").await.is_err());
+    }
 }
 
 /// True if an IPv4 address is loopback / private / link-local / CGNAT / unspecified
@@ -936,6 +1013,60 @@ pub fn url_authority(url: &str) -> Result<(String, u16), String> {
         .to_string();
     let port = parsed.port_or_known_default().unwrap_or(80);
     Ok((host, port))
+}
+
+/// SSRF-guard host/port extraction for `git_deploys.repo_url`, tolerant of the two
+/// shapes `url_authority` cannot handle: the scp-like `git@host:path` shorthand (no
+/// `://` at all, so `url::Url` can't parse it) and a userinfo-bearing `https://`/
+/// `ssh://` authority carrying a legitimate access token
+/// (`https://x-access-token:TOKEN@github.com/owner/repo.git`) — `url_authority`
+/// refuses ANY credentials outright, which would refuse that exact legitimate shape.
+/// Scheme set mirrors what the agent's `is_valid_repo_url` accepts.
+fn repo_url_authority(url: &str) -> Result<(String, u16), String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("Repository URL is required".to_string());
+    }
+
+    // scp-like syntax is always `git@host:path` (never a port, and always user
+    // "git" — the one literal `is_valid_repo_url` accepts), so a colon-and-slash
+    // split gets the host without needing a URI parser at all.
+    if let Some(rest) = url.strip_prefix("git@") {
+        let host = rest.split(':').next().unwrap_or("");
+        let host = host.split('/').next().unwrap_or(host);
+        return if host.is_empty() {
+            Err("Repository URL has no hostname".to_string())
+        } else {
+            Ok((host.to_string(), 22))
+        };
+    }
+
+    let parsed = url::Url::parse(url).map_err(|_| "Repository URL is not valid".to_string())?;
+
+    if !matches!(parsed.scheme(), "http" | "https" | "ssh") {
+        return Err("Repository URL must use https, http, ssh, or git@host:path".to_string());
+    }
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "Repository URL has no hostname".to_string())?
+        .to_string();
+    // Credentials are deliberately NOT rejected here, unlike `url_authority` — that
+    // guard protects operator-supplied webhook/monitor URLs, where a userinfo
+    // authority is a pure spoofing vector with no legitimate use. A repo_url
+    // legitimately carries a PAT this way, and the host extracted above is what the
+    // agent's `git clone` dials either way, credentials or not.
+    let port = parsed.port_or_known_default().unwrap_or(22); // url crate has no ssh default
+    Ok((host, port))
+}
+
+/// SSRF guard for `git_deploys.repo_url` — see [`repo_url_authority`] for why this
+/// can't just be `validate_url_not_internal`. Reuses [`validate_host_not_internal`]
+/// for the actual internal-address check, so the two guards agree on what "internal"
+/// means.
+pub async fn validate_repo_url_not_internal(url: &str) -> Result<(), String> {
+    let (host, port) = repo_url_authority(url)?;
+    validate_host_not_internal(&host, port).await
 }
 
 /// Detect the server's public IPv4 address.

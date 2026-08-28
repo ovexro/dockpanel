@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.168.0 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.169.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
