@@ -225,11 +225,15 @@ if S=$(subj "$APPS_BE"); then
 fi
 
 if S=$(subj "$GITDEP"); then
-  W=$(win "$S" 'fn deploy_url\(domain: &str, ssl_email: Option<&str>\)' 6)
-  if derives "$W" 'if ssl_email\.is_some\(\)'; then
-    ok "git deploys resolve their URL in one place, from the ssl_email"
+  # v2.168.0: raw `ssl_email` presence stopped being the truth once
+  # `provided` mode could withhold it entirely (a certificate-registry
+  # deploy has no ACME address at all) — deploy_url now takes the EFFECTIVE
+  # mode (`stacks::effective_tls_mode`), still resolved in this one place.
+  W=$(win "$S" 'fn deploy_url\(domain: &str, tls_mode: &str\)' 6)
+  if derives "$W" 'tls_mode == "acme" \|\| tls_mode == "provided"'; then
+    ok "git deploys resolve their URL in one place, from the effective TLS mode"
   else
-    bad "deploy_url is gone or no longer branches on ssl_email"
+    bad "deploy_url is gone or no longer branches on the effective TLS mode"
   fi
   N=$(count "$S" 'format!\("https://\{?\}?"?, ?domain')
   if [ "$N" = "0" ]; then
@@ -244,9 +248,13 @@ if S=$(subj "$GITDEP"); then
   else
     bad "set_github_status takes a domain again — a caller can hardcode the scheme"
   fi
-  # Every call site must route through the resolver.
+  # Every call site must route through the resolver. Two of the seven (the
+  # success branches, which know what the agent actually served once
+  # `provided` mode can be refused and fall back to plain HTTP) pass
+  # `actual_mode` instead of the merely-requested `effective_mode` — still
+  # the SAME function, never a second hardcoded scheme.
   CALLS=$(count "$S" 'set_github_status\(')
-  RESOLVED=$(count "$S" 'deploy_url\(d, config\.ssl_email\.as_deref\(\)\)')
+  RESOLVED=$(count "$S" 'deploy_url\(d, (effective_mode|actual_mode)\)')
   # CALLS counts the definition too, so callers = CALLS - 1.
   if [ "$RESOLVED" -ge "$((CALLS - 1))" ]; then
     ok "all $((CALLS - 1)) set_github_status callers resolve through deploy_url"

@@ -209,8 +209,12 @@ check "the record goes to the immutable log, not the activity feed" \
 # log would fire on every unrelated field edit.
 check "the previous value is fetched so an unchanged flag logs nothing" \
       "$(grep -c 'deploy_protected != was_protected' "$API")" "1"
+# v2.168.0: this query grew d.server_id/d.ssl_email/d.tls_mode/c.alias (the
+# TLS-mode resolution `update()` now needs) and a LEFT JOIN, so the literal
+# text changed — the control now asserts what it always meant: deploy_protected
+# is still fetched alongside the pre-existing current values, in this one query.
 check "  [control] the flag is still selected alongside the other current values" \
-      "$(grep -c 'SELECT domain, deploy_cron, deploy_protected FROM git_deploys' "$API")" "1"
+      "$(grep -c 'SELECT d\.domain, d\.deploy_cron, d\.deploy_protected,' "$API")" "1"
 
 echo
 echo "══ $PASS passed, $FAIL failed ══"

@@ -21,9 +21,32 @@ Git Deploy lets you push code to a Git repository and have DockPanel automatical
    - **Branch**: `main`
    - **Port**: The port your app listens on (e.g., `3000`)
    - **Domain** (optional): `app.example.com` for auto reverse proxy + SSL
+   - **HTTPS**: plain HTTP, a Let's Encrypt certificate DockPanel orders for
+     you, or a certificate you already registered under Monitoring →
+     Certificates — see below
 4. Click **Create**
 
 DockPanel will clone the repository, detect the build method, build a Docker image, and start the container.
+
+### Serving a registered certificate instead of Let's Encrypt
+
+If you already hold a certificate — a wildcard from your CA, a corporate PKI
+leaf — register it once under **Monitoring → Certificates**, then choose
+**Registered certificate** for HTTPS instead of ordering a new Let's Encrypt
+one. The certificate must actually cover the domain you're deploying to; a
+mismatch is refused rather than served, and every deploy re-checks it, not
+just the first.
+
+If the certificate can't be applied at deploy time (removed since, or no
+longer covers the domain), the deploy still succeeds — the container comes
+up — but the domain is served over plain HTTP and the panel raises a
+warning naming why. It never silently downgrades a certificate that was
+already live: on a redeploy of a *running* container the existing HTTPS vhost
+is left untouched unless the domain itself changes.
+
+An agent older than v2.160.0 does not understand a registered certificate at
+all; provided mode is refused up front on a server running one, rather than
+silently falling back to plain HTTP or Let's Encrypt.
 
 > **Before you build: a Git Deploy container has no persistent storage.** Every
 > deploy replaces the container, so anything the app writes to its own

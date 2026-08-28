@@ -7,6 +7,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use tera::Tera;
+use crate::routes::docker_apps::TlsIntent;
 use crate::safe_cmd::safe_command;
 use crate::services::ownership;
 
@@ -28,6 +29,25 @@ pub struct BuildResult {
 pub struct GitDeployResult {
     pub container_id: String,
     pub blue_green: bool,
+    /// Whether THIS call touched TLS at all. `None` for a blue-green update,
+    /// which swaps only the backend port on the existing vhost file and never
+    /// re-renders it (see `blue_green_update`), so whatever certificate story
+    /// the domain already had is untouched and there is nothing new to
+    /// report. `Some` for a fresh deploy or a stop/recreate that rendered a
+    /// vhost — mirrors `docker_apps::expose_domain`'s response shape so the
+    /// panel's existing `provided_tls_refusal`-style check works unchanged.
+    pub ssl: Option<bool>,
+    pub tls_mode: Option<&'static str>,
+    pub tls_certificate: Option<String>,
+    pub tls_warning: Option<String>,
+}
+
+/// What securing a domain actually achieved, from [`apply_tls`].
+struct TlsOutcome {
+    ssl: bool,
+    tls_mode: &'static str,
+    tls_certificate: Option<String>,
+    warning: Option<String>,
 }
 
 /// Clone or pull a git repository to `/var/lib/dockpanel/git/{name}/`.
@@ -231,6 +251,243 @@ pub async fn build_image(
     Ok(BuildResult { image_tag, output })
 }
 
+/// Put a domain in front of a git deploy's local port, secured the way `tls`
+/// asks — mirrors `docker_apps::expose_domain`'s `TlsIntent` handling so a git
+/// deploy gets the same guarantee a Docker/Compose deploy already has for the
+/// SAME reason: `Provided` renders straight to HTTPS through the registered
+/// certificate and is the ONLY arm that reads it, `Acme` orders a Let's
+/// Encrypt certificate exactly as this deploy path always has, and `None` is
+/// the plain-HTTP proxy `setup_nginx_proxy` has always written.
+///
+/// Unlike `expose_domain`, a refused `Provided` certificate here falls back to
+/// plain HTTP rather than leaving the vhost untouched. `expose_domain` protects
+/// an EXISTING `:443` block from being silently downgraded (the HSTS-outage
+/// trap its own doc comment describes at length) — but both call sites this
+/// function has only reach it when there is nothing to protect: a brand new
+/// container's first vhost, or the stop/recreate path's write of a domain
+/// that just changed (a path that never held THIS domain before). Falling
+/// back leaves the deploy reachable, with the refusal surfaced in
+/// [`TlsOutcome::warning`] rather than swallowed — never a silent downgrade
+/// of a certificate that was already live, because that case never reaches
+/// this function (blue-green swaps only the backend port on the untouched
+/// existing file — see `blue_green_update`).
+async fn apply_tls(
+    templates: &Tera,
+    domain: &str,
+    host_port: u16,
+    tls: TlsIntent<'_>,
+) -> Result<TlsOutcome, String> {
+    match tls {
+        TlsIntent::Provided { alias } => {
+            let (cert_path, key_path) = crate::services::ssl::registry_paths(alias);
+            let pem = match std::fs::read_to_string(&cert_path) {
+                Ok(pem) => pem,
+                Err(e) => {
+                    tracing::warn!(
+                        "Git deploy: {domain} names registered certificate {alias}, which is not \
+                         on this server ({e}); falling back to plain HTTP"
+                    );
+                    setup_nginx_proxy(templates, domain, host_port).await?;
+                    return Ok(TlsOutcome {
+                        ssl: false,
+                        tls_mode: "provided",
+                        tls_certificate: Some(alias.to_string()),
+                        warning: Some(format!(
+                            "no certificate named {alias} is registered on this server ({e}); \
+                             served over plain HTTP instead. Register the certificate and redeploy."
+                        )),
+                    });
+                }
+            };
+            // Binding point 3 of #104, re-asked here: the panel already checked
+            // at claim time, but the pairing on disk may have been replaced
+            // since — the same defence in depth `expose_domain` applies.
+            if let Err(reason) = crate::services::ssl::cert_covers_domain(&pem, domain) {
+                tracing::warn!(
+                    "Git deploy: registered certificate {alias} does not cover {domain}: {reason}"
+                );
+                setup_nginx_proxy(templates, domain, host_port).await?;
+                return Ok(TlsOutcome {
+                    ssl: false,
+                    tls_mode: "provided",
+                    tls_certificate: Some(alias.to_string()),
+                    warning: Some(format!(
+                        "the registered certificate {alias} cannot serve {domain}: {reason} \
+                         Served over plain HTTP instead."
+                    )),
+                });
+            }
+            // Rendered through the ordinary renderer with the registry paths
+            // named outright — NOT through `enable_ssl_for_site`, which
+            // hardcodes the per-domain tree and would point the vhost at a
+            // directory this certificate is deliberately not in.
+            let site_config = crate::routes::nginx::SiteConfig {
+                runtime: "proxy".to_string(),
+                root: None,
+                proxy_port: Some(host_port),
+                php_socket: None,
+                ssl: Some(true),
+                ssl_cert: Some(cert_path),
+                ssl_key: Some(key_path),
+                rate_limit: None,
+                max_upload_mb: None,
+                php_memory_mb: None,
+                php_max_workers: None,
+                custom_nginx: None,
+                php_preset: None,
+                app_command: None,
+                fastcgi_cache: None,
+                redis_cache: None,
+                redis_db: None,
+                waf_enabled: None,
+                waf_mode: None,
+                csp_policy: None,
+                permissions_policy: None,
+                bot_protection: None,
+            };
+            let rendered =
+                crate::services::nginx::render_site_config(templates, domain, &site_config)
+                    .map_err(|e| format!("Failed to render nginx config: {e}"))?;
+            let target = crate::services::nginx::vhost_target(domain);
+            let config_path = target.path().to_string();
+            let previous = std::fs::read_to_string(&config_path).ok();
+            let tmp_path = format!("{config_path}.tmp");
+            std::fs::write(&tmp_path, &rendered)
+                .map_err(|e| format!("Failed to write nginx config: {e}"))?;
+            std::fs::rename(&tmp_path, &config_path).map_err(|e| {
+                std::fs::remove_file(&tmp_path).ok();
+                format!("Failed to activate nginx config: {e}")
+            })?;
+            if !target.is_live() {
+                tracing::info!(
+                    "Git deploy: {domain} is disabled, saved the HTTPS route (certificate \
+                     {alias}) to its parked configuration"
+                );
+                return Ok(TlsOutcome {
+                    ssl: true,
+                    tls_mode: "provided",
+                    tls_certificate: Some(alias.to_string()),
+                    warning: None,
+                });
+            }
+            match crate::services::nginx::test_config().await {
+                Ok(output) if output.success => {
+                    crate::services::nginx::reload().await.ok();
+                    tracing::info!(
+                        "Git deploy: {domain} -> port {host_port} over registered certificate {alias}"
+                    );
+                    Ok(TlsOutcome {
+                        ssl: true,
+                        tls_mode: "provided",
+                        tls_certificate: Some(alias.to_string()),
+                        warning: None,
+                    })
+                }
+                _ => {
+                    let restored =
+                        crate::services::nginx::restore_or_remove(&config_path, previous.as_deref());
+                    Err(format!(
+                        "Nginx config test failed for {domain}{}",
+                        crate::services::nginx::restore_note(restored)
+                    ))
+                }
+            }
+        }
+        TlsIntent::Acme { email } => {
+            setup_nginx_proxy(templates, domain, host_port).await?;
+            // DNS propagation wait
+            for i in 0..6u32 {
+                if i > 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+                match tokio::net::TcpStream::connect(format!("{domain}:80")).await {
+                    Ok(_) => break,
+                    Err(_) if i < 5 => continue,
+                    Err(_) => break,
+                }
+            }
+            match crate::services::ssl::load_or_create_account(email).await {
+                Ok(account) => match crate::services::ssl::provision_cert(&account, domain, None).await
+                {
+                    Ok(_) => {
+                        let ssl_config = crate::routes::nginx::SiteConfig {
+                            runtime: "proxy".to_string(),
+                            root: None,
+                            proxy_port: Some(host_port),
+                            php_socket: None,
+                            ssl: None,
+                            ssl_cert: None,
+                            ssl_key: None,
+                            rate_limit: None,
+                            max_upload_mb: None,
+                            php_memory_mb: None,
+                            php_max_workers: None,
+                            custom_nginx: None,
+                            php_preset: None,
+                            app_command: None,
+                            fastcgi_cache: None,
+                            redis_cache: None,
+                            redis_db: None,
+                            waf_enabled: None,
+                            waf_mode: None,
+                            csp_policy: None,
+                            permissions_policy: None,
+                            bot_protection: None,
+                        };
+                        if crate::services::ssl::enable_ssl_for_site(templates, domain, &ssl_config)
+                            .await
+                            .is_ok()
+                        {
+                            tracing::info!("Auto-SSL: certificate provisioned for {domain}");
+                            return Ok(TlsOutcome {
+                                ssl: true,
+                                tls_mode: "acme",
+                                tls_certificate: None,
+                                warning: None,
+                            });
+                        }
+                        Ok(TlsOutcome {
+                            ssl: false,
+                            tls_mode: "acme",
+                            tls_certificate: None,
+                            warning: Some(format!(
+                                "certificate provisioned for {domain} but enabling it on the vhost failed"
+                            )),
+                        })
+                    }
+                    Err(e) => {
+                        tracing::warn!("Auto-SSL: cert provisioning failed for {domain}: {e}");
+                        Ok(TlsOutcome {
+                            ssl: false,
+                            tls_mode: "acme",
+                            tls_certificate: None,
+                            warning: Some(format!("certificate provisioning failed: {e}")),
+                        })
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("Auto-SSL: ACME account failed for {domain}: {e}");
+                    Ok(TlsOutcome {
+                        ssl: false,
+                        tls_mode: "acme",
+                        tls_certificate: None,
+                        warning: Some(format!("ACME account setup failed: {e}")),
+                    })
+                }
+            }
+        }
+        TlsIntent::None => {
+            setup_nginx_proxy(templates, domain, host_port).await?;
+            Ok(TlsOutcome {
+                ssl: false,
+                tls_mode: "none",
+                tls_certificate: None,
+                warning: None,
+            })
+        }
+    }
+}
+
 /// Deploy or update a container from a locally-built git image.
 ///
 /// - New container: create + start. If domain is provided, set up nginx reverse proxy.
@@ -251,7 +508,7 @@ pub async fn deploy_or_update(
     templates: &Tera,
     memory_mb: Option<u64>,
     cpu_percent: Option<u64>,
-    ssl_email: Option<&str>,
+    tls: TlsIntent<'_>,
 ) -> Result<GitDeployResult, String> {
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
@@ -496,16 +753,27 @@ pub async fn deploy_or_update(
             // ownership question this function could not, and is driven from
             // the panel's update handler, which is the only caller that knows
             // both the old name and the new one.
+            let mut tls_outcome = None;
             if let Some(d) = domain {
                 let config_path = format!("/etc/nginx/sites-enabled/{d}.conf");
                 if !domain_unchanged || !std::path::Path::new(&config_path).exists() {
-                    setup_nginx_proxy(templates, d, host_port).await?;
+                    // Neither trigger can name a path that was already
+                    // serving THIS domain's HTTPS — a changed domain has
+                    // never had a vhost at its new path, and a missing config
+                    // means nothing is being served at all right now — so
+                    // `apply_tls`'s plain-HTTP fallback on a `Provided`
+                    // refusal has nothing live to downgrade here.
+                    tls_outcome = Some(apply_tls(templates, d, host_port, tls).await?);
                 }
             }
 
             Ok(GitDeployResult {
                 container_id: result,
                 blue_green: false,
+                ssl: tls_outcome.as_ref().map(|o| o.ssl),
+                tls_mode: tls_outcome.as_ref().map(|o| o.tls_mode),
+                tls_certificate: tls_outcome.as_ref().and_then(|o| o.tls_certificate.clone()),
+                tls_warning: tls_outcome.and_then(|o| o.warning),
             })
         }
         None => {
@@ -523,56 +791,22 @@ pub async fn deploy_or_update(
             )
             .await?;
 
-            // Set up nginx reverse proxy if domain is provided
-            if let Some(d) = domain {
-                setup_nginx_proxy(templates, d, host_port).await?;
-
-                // After successful nginx setup for initial deploy with domain
-                if let Some(email) = ssl_email {
-                    // DNS propagation wait
-                    for i in 0..6u32 {
-                        if i > 0 { tokio::time::sleep(std::time::Duration::from_secs(5)).await; }
-                        match tokio::net::TcpStream::connect(format!("{}:80", d)).await {
-                            Ok(_) => break,
-                            Err(_) if i < 5 => continue,
-                            Err(_) => break,
-                        }
-                    }
-                    match crate::services::ssl::load_or_create_account(email).await {
-                        Ok(account) => {
-                            match crate::services::ssl::provision_cert(&account, d, None).await {
-                                Ok(_) => {
-                                    let ssl_config = crate::routes::nginx::SiteConfig {
-                                        runtime: "proxy".to_string(), root: None,
-                                        proxy_port: Some(host_port), php_socket: None,
-                                        ssl: None, ssl_cert: None, ssl_key: None,
-                                        rate_limit: None, max_upload_mb: None,
-                                        php_memory_mb: None, php_max_workers: None,
-                                        custom_nginx: None, php_preset: None, app_command: None,
-                                        fastcgi_cache: None,
-                                        redis_cache: None,
-                                        redis_db: None,
-                                        waf_enabled: None,
-                                        waf_mode: None,
-        csp_policy: None,
-        permissions_policy: None,
-        bot_protection: None,
-                                    };
-                                    if crate::services::ssl::enable_ssl_for_site(templates, d, &ssl_config).await.is_ok() {
-                                        tracing::info!("Auto-SSL: certificate provisioned for {d}");
-                                    }
-                                }
-                                Err(e) => tracing::warn!("Auto-SSL: cert provisioning failed for {d}: {e}"),
-                            }
-                        }
-                        Err(e) => tracing::warn!("Auto-SSL: ACME account failed for {d}: {e}"),
-                    }
-                }
-            }
+            // Set up nginx reverse proxy — and secure it the way `tls` asks —
+            // if a domain is provided. A brand new container's vhost has
+            // nothing to downgrade, so `apply_tls`'s plain-HTTP fallback on a
+            // `Provided` refusal simply leaves the deploy reachable.
+            let tls_outcome = match domain {
+                Some(d) => Some(apply_tls(templates, d, host_port, tls).await?),
+                None => None,
+            };
 
             Ok(GitDeployResult {
                 container_id,
                 blue_green: false,
+                ssl: tls_outcome.as_ref().map(|o| o.ssl),
+                tls_mode: tls_outcome.as_ref().map(|o| o.tls_mode),
+                tls_certificate: tls_outcome.as_ref().and_then(|o| o.tls_certificate.clone()),
+                tls_warning: tls_outcome.and_then(|o| o.warning),
             })
         }
     }
@@ -1351,6 +1585,12 @@ async fn blue_green_update(
     Ok(GitDeployResult {
         container_id: new_container.id,
         blue_green: true,
+        // Only the backend port changed — the vhost's certificate story,
+        // whatever it is, was never touched. Nothing new to report.
+        ssl: None,
+        tls_mode: None,
+        tls_certificate: None,
+        tls_warning: None,
     })
 }
 

@@ -51,6 +51,10 @@ interface GitDeploy {
   memory_mb: number | null;
   cpu_percent: number | null;
   ssl_email: string | null;
+  // NULL on a row an older panel wrote — the effective mode is then whether
+  // ssl_email is set, exactly as the backend's `effective_tls_mode` reads it.
+  tls_mode: "none" | "acme" | "provided" | null;
+  tls_certificate: string | null;
   pre_build_cmd: string | null;
   post_deploy_cmd: string | null;
   build_args: Record<string, string>;
@@ -154,6 +158,10 @@ export default function GitDeploys() {
   const [formEnvVars, setFormEnvVars] = useState<{ key: string; value: string }[]>([]);
   const [formAutoDeploy, setFormAutoDeploy] = useState(false);
   const [formSslEmail, setFormSslEmail] = useState("");
+  const [formTlsMode, setFormTlsMode] = useState<"none" | "acme" | "provided">("none");
+  const [formTlsCertificate, setFormTlsCertificate] = useState("");
+  const [registeredCerts, setRegisteredCerts] = useState<{ id: string; alias: string; dns_names: string[] }[] | null>(null);
+  const [registeredCertsError, setRegisteredCertsError] = useState("");
   const [formPreBuild, setFormPreBuild] = useState("");
   const [formPostDeploy, setFormPostDeploy] = useState("");
   const [formBuildArgs, setFormBuildArgs] = useState<{ key: string; value: string }[]>([]);
@@ -220,6 +228,8 @@ export default function GitDeploys() {
     setFormEnvVars([]);
     setFormAutoDeploy(false);
     setFormSslEmail("");
+    setFormTlsMode("none");
+    setFormTlsCertificate("");
     setFormPreBuild("");
     setFormPostDeploy("");
     setFormBuildArgs([]);
@@ -248,6 +258,8 @@ export default function GitDeploys() {
     );
     setFormAutoDeploy(selected.auto_deploy);
     setFormSslEmail(selected.ssl_email || "");
+    setFormTlsMode(selected.tls_mode ?? (selected.ssl_email ? "acme" : "none"));
+    setFormTlsCertificate(selected.tls_certificate || "");
     setFormPreBuild(selected.pre_build_cmd || "");
     setFormPostDeploy(selected.post_deploy_cmd || "");
     setFormBuildArgs(
@@ -291,6 +303,8 @@ export default function GitDeploys() {
       env_vars: envVars,
       auto_deploy: formAutoDeploy,
       ssl_email: formSslEmail.trim(),
+      tls_mode: formTlsMode,
+      tls_certificate: formTlsMode === "provided" ? formTlsCertificate.trim() : "",
       pre_build_cmd: formPreBuild.trim(),
       post_deploy_cmd: formPostDeploy.trim(),
       build_args: buildArgs,
@@ -756,7 +770,15 @@ export default function GitDeploys() {
                   { label: "Last Commit", value: selected.last_commit ? selected.last_commit.substring(0, 8) : "\u2014" },
                   { label: "Memory Limit", value: selected.memory_mb ? `${selected.memory_mb} MB` : "None" },
                   { label: "CPU Limit", value: selected.cpu_percent ? `${selected.cpu_percent}%` : "None" },
-                  { label: "SSL Email", value: selected.ssl_email || "\u2014" },
+                  {
+                    label: "HTTPS",
+                    value:
+                      (selected.tls_mode ?? (selected.ssl_email ? "acme" : "none")) === "provided"
+                        ? `Registered certificate (${selected.tls_certificate || "\u2014"})`
+                        : (selected.tls_mode ?? (selected.ssl_email ? "acme" : "none")) === "acme"
+                        ? `Let's Encrypt (${selected.ssl_email || "\u2014"})`
+                        : "None",
+                  },
                   { label: "Pre-build Cmd", value: selected.pre_build_cmd || "\u2014" },
                   { label: "Post-deploy Cmd", value: selected.post_deploy_cmd || "\u2014" },
                   { label: "Build Method", value: selected.build_method === "nixpacks" ? "Nixpacks" : selected.build_method === "auto-detect" ? "Auto-detect" : selected.build_method === "compose" ? "Docker Compose" : "Dockerfile" },
@@ -1140,20 +1162,96 @@ export default function GitDeploys() {
                   <input
                     type="text"
                     value={formDomain}
-                    onChange={(e) => setFormDomain(e.target.value)}
+                    onChange={(e) => {
+                      setFormDomain(e.target.value);
+                      // A TLS choice is meaningless without a domain, and the
+                      // backend refuses a mode other than none for one — so
+                      // emptying the box takes the choice with it rather than
+                      // leaving a hidden "acme"/"provided" behind a disabled select.
+                      if (!e.target.value.trim()) {
+                        setFormTlsMode("none");
+                        setFormTlsCertificate("");
+                        setFormSslEmail("");
+                      }
+                    }}
                     placeholder="app.example.com"
                     className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none"
                   />
                 </div>
               </div>
 
-              {/* SSL Email */}
+              {/* HTTPS */}
               {formDomain && (
                 <div>
-                  <label className="block text-sm font-medium text-dark-100 mb-1">SSL Email (Let's Encrypt)</label>
-                  <input type="email" value={formSslEmail} onChange={(e) => setFormSslEmail(e.target.value)}
-                    placeholder="admin@example.com" className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
-                  <p className="text-xs text-dark-300 mt-1">Auto-provisions HTTPS certificate on first deploy</p>
+                  <label htmlFor="gd-tls-mode" className="block text-sm font-medium text-dark-100 mb-1">HTTPS</label>
+                  <select
+                    id="gd-tls-mode"
+                    value={formTlsMode}
+                    onChange={(e) => {
+                      const mode = e.target.value as "none" | "acme" | "provided";
+                      setFormTlsMode(mode);
+                      // The email/alias is only meaningful to its own mode.
+                      // Keeping a typed value behind a hidden input would send
+                      // it with a mode that ignores it.
+                      if (mode !== "acme") setFormSslEmail("");
+                      if (mode !== "provided") setFormTlsCertificate("");
+                      if (mode === "provided" && registeredCerts === null) {
+                        setRegisteredCertsError("");
+                        api.get<{ id: string; alias: string; dns_names: string[] }[]>("/tls-certificates")
+                          .then((rows) => setRegisteredCerts(rows))
+                          .catch((err) => {
+                            // Left at null so choosing the mode again asks
+                            // again; an empty list here would read as
+                            // "nothing registered" for the life of the page
+                            // after one failed request.
+                            setRegisteredCertsError(err instanceof Error ? err.message : "Could not load registered certificates");
+                          });
+                      }
+                    }}
+                    className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none"
+                  >
+                    <option value="none">No HTTPS — plain HTTP, or TLS terminated upstream</option>
+                    <option value="acme">Let's Encrypt certificate</option>
+                    <option value="provided">Registered certificate</option>
+                  </select>
+                  {formTlsMode === "acme" && (
+                    <>
+                      <input type="email" value={formSslEmail} onChange={(e) => setFormSslEmail(e.target.value)}
+                        placeholder="admin@example.com" aria-label="SSL Email"
+                        className="mt-2 w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none" />
+                      <p className="text-xs text-dark-300 mt-1">Auto-provisions a Let's Encrypt certificate on first deploy. Account email required.</p>
+                    </>
+                  )}
+                  {formTlsMode === "provided" && (
+                    <>
+                      <select
+                        value={formTlsCertificate}
+                        onChange={(e) => setFormTlsCertificate(e.target.value)}
+                        aria-label="Registered certificate"
+                        className="mt-2 w-full px-3 py-2 border border-dark-500 rounded-lg text-sm focus:ring-2 focus:ring-accent-500 outline-none"
+                      >
+                        <option value="">
+                          {registeredCerts === null ? "Loading…" : "Choose a certificate"}
+                        </option>
+                        {(registeredCerts ?? []).map((c) => (
+                          <option key={c.id} value={c.alias}>
+                            {c.alias}{c.dns_names.length > 0 ? ` — ${c.dns_names.join(", ")}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                      {registeredCertsError ? (
+                        <p className="text-xs text-danger-400 mt-1">{registeredCertsError}</p>
+                      ) : registeredCerts !== null && registeredCerts.length === 0 ? (
+                        <p className="text-xs text-dark-300 mt-1">
+                          No certificates are registered on this server yet. Register one under Monitoring → Certificates, then pick it here.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-dark-300 mt-1">
+                          The certificate must cover the domain above; the deploy falls back to plain HTTP with a warning otherwise. Served by nginx only.
+                        </p>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
 

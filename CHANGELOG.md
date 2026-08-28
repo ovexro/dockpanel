@@ -4,6 +4,31 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.168.0]
+
+### Added — Git Deploys can serve a registered certificate, not just Let's Encrypt
+
+Until now a git deploy's only route to HTTPS was letting the panel order a
+Let's Encrypt certificate, and the sole signal for "this deploy wants TLS at
+all" was whether an SSL email happened to be present — the same shape
+already closed for Docker Compose stacks and template apps in v2.160.0. A
+git deploy can now serve a certificate registered once under Monitoring →
+Certificates instead: pick **Registered certificate** for HTTPS in the
+create/edit form (or send `tls_mode`/`tls_certificate` to the API), and every
+deploy — first deploy, redeploy, and preview environments — resolves and
+re-validates it fresh rather than trusting a stored assumption.
+
+The certificate must actually cover the domain; a mismatch is refused rather
+than served. If it can't be applied at deploy time (removed since, or no
+longer covers the domain), the deploy still succeeds — the container comes
+up — but the domain is served over plain HTTP and a warning names why,
+never a silent downgrade. On a redeploy of an already-running container the
+existing HTTPS vhost is left untouched unless the domain itself changes
+(zero-downtime redeploys only swap the backend port, so a certificate that
+was already live is never re-rendered, let alone lost). An agent older than
+v2.160.0 does not understand a registered certificate at all; `provided`
+mode is refused up front on such a server rather than silently falling back.
+
 ## [2.167.0]
 
 ### Fixed — mail server install failed on Dovecot 2.4+ distros (e.g. Debian 13)

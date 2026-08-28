@@ -15,12 +15,32 @@ use crate::auth::{AuthUser, ServerScope};
 use crate::error::{internal_error, err, agent_error, require_admin, ApiError};
 use crate::routes::{is_valid_name, is_reserved_domain};
 use crate::routes::sites::ProvisionStep;
+use crate::routes::stacks::{effective_tls_mode, requested_tls_mode};
+use crate::routes::tls_certificates::{
+    certificate_id_for_alias, is_valid_cert_alias, require_agent_at_least, PROVIDED_TLS_MIN_AGENT,
+};
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
 use crate::services::domain_claim;
 use crate::services::expected_stops;
 use crate::services::notifications;
 use crate::AppState;
+
+/// The row plus the alias of the certificate it references, if any — mirrors
+/// `stacks::STACK_SELECT`: a LEFT JOIN because most deploys reference none,
+/// and the alias is what the API and the deploy body speak; the id never
+/// leaves the panel. `id`/`user_id`/`server_id` are ambiguous once joined
+/// against `tls_certificates` (which carries all three itself), so every
+/// caller of this constant must qualify its own WHERE clause with `d.`.
+const GIT_DEPLOY_SELECT: &str = "SELECT d.id, d.user_id, d.server_id, d.name, d.repo_url, \
+    d.branch, d.dockerfile, d.container_port, d.host_port, d.domain, d.env_vars, \
+    d.auto_deploy, d.webhook_secret, d.deploy_key_public, d.deploy_key_path, \
+    d.container_id, d.image_tag, d.status, d.memory_mb, d.cpu_percent, d.ssl_email, \
+    d.pre_build_cmd, d.post_deploy_cmd, d.build_args, d.build_context, d.last_deploy, \
+    d.last_commit, d.created_at, d.updated_at, d.github_token, d.deploy_cron, \
+    d.deploy_protected, d.build_method, d.preview_ttl_hours, d.scheduled_deploy_at, \
+    d.tls_mode, d.tls_certificate_id, c.alias AS tls_certificate \
+    FROM git_deploys d LEFT JOIN tls_certificates c ON c.id = d.tls_certificate_id";
 
 /// git_previews.container_name is stored WITH the `dockpanel-git-` prefix that
 /// the agent's `/git/cleanup` handler re-adds (agent `cleanup_container` does
@@ -177,6 +197,17 @@ pub struct GitDeploy {
     pub build_method: String,
     pub preview_ttl_hours: i32,
     pub scheduled_deploy_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// How the domain is served, as stored. NULL on a row an older binary
+    /// wrote; read through `effective_tls_mode`, never directly.
+    pub tls_mode: Option<String>,
+    /// The registered certificate a provided-mode deploy serves.
+    pub tls_certificate_id: Option<Uuid>,
+    /// That certificate's alias, joined in by `GIT_DEPLOY_SELECT`. Defaulted
+    /// so `create`/`update`'s plain `RETURNING *` (no join in a RETURNING
+    /// clause) still maps onto this struct; both handlers set it by hand
+    /// right after, from the alias they already resolved.
+    #[sqlx(default)]
+    pub tls_certificate: Option<String>,
 }
 
 #[derive(serde::Serialize, sqlx::FromRow)]
@@ -205,11 +236,35 @@ pub(crate) struct DeployBody<'a> {
     pub domain: Option<&'a str>,
     pub memory_mb: Option<i32>,
     pub cpu_percent: Option<i32>,
+    /// The address the AGENT is handed. Only sent for `acme` mode — pass
+    /// through [`deploy_tls_email`], never `config.ssl_email` directly, so a
+    /// `provided`- or `none`-mode deploy never orders a certificate the
+    /// operator switched off, mirroring `stacks::TlsPlan::deploy_email`.
     pub ssl_email: Option<&'a str>,
+    /// The effective mode (`stacks::effective_tls_mode`), sent on every
+    /// deploy so the agent's own decision no longer depends on inferring it
+    /// from `ssl_email` presence alone.
+    pub tls_mode: Option<&'a str>,
+    /// The registered-certificate alias, `provided` mode only.
+    pub tls_certificate: Option<&'a str>,
     /// Which of the agent's two name spaces this deploy addresses — `"deploy"`
     /// or `"preview"`. Not defaulted on purpose: an omitted scope is precisely
     /// how a preview came to be able to name a deployment's container.
     pub scope: &'a str,
+}
+
+/// The address the agent is handed for THIS deploy. Only an ACME order needs
+/// one, and the agent still infers the mode from `ssl_email` presence when an
+/// older panel sends no `tls_mode` at all — so a deploy whose effective mode
+/// is `none` or `provided` must never forward the stored address, or an
+/// agent that predates this feature would order a certificate the operator
+/// switched off. Mirrors `stacks::TlsPlan::deploy_email`.
+fn deploy_tls_email<'a>(mode: &str, ssl_email: Option<&'a str>) -> Option<&'a str> {
+    if mode == "acme" {
+        ssl_email
+    } else {
+        None
+    }
 }
 
 /// Build the body for the agent's `POST /git/deploy`.
@@ -293,6 +348,12 @@ pub(crate) fn build_deploy_body(b: DeployBody<'_>) -> serde_json::Value {
     if let Some(email) = b.ssl_email.filter(|e| !e.trim().is_empty()) {
         body["ssl_email"] = serde_json::json!(email);
     }
+    if let Some(mode) = b.tls_mode {
+        body["tls_mode"] = serde_json::json!(mode);
+    }
+    if let Some(alias) = b.tls_certificate {
+        body["tls_certificate"] = serde_json::json!(alias);
+    }
     body
 }
 
@@ -323,6 +384,11 @@ pub struct CreateRequest {
     pub memory_mb: Option<i32>,
     pub cpu_percent: Option<i32>,
     pub ssl_email: Option<String>,
+    /// `none` / `acme` / `provided` — absent means derive it from `ssl_email`
+    /// presence, exactly as every row before this field existed.
+    pub tls_mode: Option<String>,
+    /// The registered-certificate alias, `provided` mode only.
+    pub tls_certificate: Option<String>,
     pub pre_build_cmd: Option<String>,
     pub post_deploy_cmd: Option<String>,
     pub build_args: Option<HashMap<String, String>>,
@@ -345,6 +411,11 @@ pub struct UpdateRequest {
     pub memory_mb: Option<i32>,
     pub cpu_percent: Option<i32>,
     pub ssl_email: Option<String>,
+    /// Absent means keep the stored mode. `pub` per stacks' own `UpdateStackRequest`.
+    pub tls_mode: Option<String>,
+    /// Absent means keep the stored alias; `""` clears it (only meaningful if
+    /// the resulting mode is not `provided`, since that mode always needs one).
+    pub tls_certificate: Option<String>,
     pub pre_build_cmd: Option<String>,
     pub post_deploy_cmd: Option<String>,
     pub build_args: Option<HashMap<String, String>>,
@@ -364,7 +435,7 @@ pub async fn list(
     require_admin(&claims.role)?;
 
     let mut deploys: Vec<GitDeploy> = sqlx::query_as(
-        "SELECT * FROM git_deploys WHERE user_id = $1 AND server_id = $2 ORDER BY created_at DESC LIMIT 200",
+        &format!("{GIT_DEPLOY_SELECT} WHERE d.user_id = $1 AND d.server_id = $2 ORDER BY d.created_at DESC LIMIT 200"),
     )
     .bind(claims.sub)
     .bind(server_id)
@@ -498,9 +569,62 @@ pub async fn create(
     let github_token_enc =
         encrypt_stored_token(body.github_token.as_deref(), &state.config.jwt_secret)?;
 
+    // Resolve the TLS mode/certificate before the row is written — the
+    // DB-only half of `stacks::plan_tls` (alias shape + existence for this
+    // user and server). Unlike a stack, a git deploy's create never talks to
+    // the agent: the actual deploy is a separate, later action (manual,
+    // webhook or scheduled), so the SAN-coverage check that needs a live
+    // agent call stays where the domain is actually served — the agent's own
+    // `TlsIntent::Provided` arm re-asks it at every deploy regardless, the
+    // same "defence in depth" reasoning `expose_domain` documents for stacks:
+    // the registry can drift between save and deploy either way, so a
+    // claim-time coverage check would only narrow, never close, that window,
+    // at the cost of an agent round-trip on every create.
+    let mode = requested_tls_mode(body.tls_mode.as_deref())?
+        .unwrap_or_else(|| effective_tls_mode(None, body.ssl_email.as_deref()));
+    let (mode, tls_certificate_id, resolved_alias): (&'static str, Option<Uuid>, Option<String>) =
+        match mode {
+            "acme" => {
+                if body.ssl_email.as_deref().map(str::trim).filter(|e| !e.is_empty()).is_none() {
+                    return Err(err(
+                        StatusCode::BAD_REQUEST,
+                        "Let's Encrypt mode needs an ssl_email for the ACME account",
+                    ));
+                }
+                ("acme", None, None)
+            }
+            "provided" => {
+                if domain.is_none() {
+                    return Err(err(StatusCode::BAD_REQUEST, "a TLS mode needs a domain"));
+                }
+                let alias = body
+                    .tls_certificate
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|a| !a.is_empty())
+                    .ok_or_else(|| {
+                        err(
+                            StatusCode::BAD_REQUEST,
+                            "tls_mode provided needs tls_certificate — the alias of a registered certificate",
+                        )
+                    })?
+                    .to_ascii_lowercase();
+                if !is_valid_cert_alias(&alias) {
+                    return Err(err(
+                        StatusCode::BAD_REQUEST,
+                        "Alias must be 1-64 lowercase letters, digits or hyphens, starting and ending with a letter or digit",
+                    ));
+                }
+                let cert_id =
+                    certificate_id_for_alias(&state.db, &alias, claims.sub, server_id).await?;
+                ("provided", Some(cert_id), Some(alias))
+            }
+            _ => ("none", None, None),
+        };
+
     let mut deploy: GitDeploy = sqlx::query_as(
-        "INSERT INTO git_deploys (user_id, server_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron, deploy_protected, preview_ttl_hours) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23) \
+        "INSERT INTO git_deploys (user_id, server_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron, deploy_protected, preview_ttl_hours, tls_mode, tls_certificate_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) \
          RETURNING *",
     )
     .bind(claims.sub)
@@ -531,6 +655,8 @@ pub async fn create(
     .bind(blank_to_none(body.deploy_cron.as_deref()))
     .bind(deploy_protected)
     .bind(preview_ttl)
+    .bind(mode)
+    .bind(tls_certificate_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -540,6 +666,9 @@ pub async fn create(
             internal_error("create git_deploys", e)
         }
     })?;
+    // `RETURNING *` has no join to read the alias through — the handler
+    // already knows it, from the request it just validated.
+    deploy.tls_certificate = resolved_alias;
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "git_deploy.create",
@@ -573,7 +702,7 @@ pub async fn get_one(
     require_admin(&claims.role)?;
 
     let mut deploy: GitDeploy = sqlx::query_as(
-        "SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2",
+        &format!("{GIT_DEPLOY_SELECT} WHERE d.id = $1 AND d.user_id = $2"),
     )
     .bind(id)
     .bind(claims.sub)
@@ -611,19 +740,29 @@ pub async fn update(
     // changed it from one that merely re-sent it. The write below COALESCEs an
     // absent field onto the stored value, so "still true" and "set to true"
     // arrive here identically and only the previous value separates them.
-    let existing: Option<(Option<String>, Option<String>, bool)> = sqlx::query_as(
-        "SELECT domain, deploy_cron, deploy_protected FROM git_deploys WHERE id = $1 AND user_id = $2",
-    )
+    // `server_id`, `ssl_email`, `tls_mode` and the joined alias come along so
+    // the TLS block below can compute the deploy's CURRENT effective mode —
+    // an edit that says nothing about TLS keeps it, the same "absent means
+    // keep" contract every other field on this handler already gives.
+    let existing: Option<(Option<String>, Option<String>, bool, Uuid, Option<String>, Option<String>, Option<String>)> =
+        sqlx::query_as(
+            "SELECT d.domain, d.deploy_cron, d.deploy_protected, d.server_id, d.ssl_email, \
+             d.tls_mode, c.alias \
+             FROM git_deploys d LEFT JOIN tls_certificates c ON c.id = d.tls_certificate_id \
+             WHERE d.id = $1 AND d.user_id = $2",
+        )
     .bind(id)
     .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| internal_error("update git_deploys", e))?;
 
-    let (cur_domain, cur_cron, was_protected) = match existing {
-        Some(row) => row,
-        None => return Err(err(StatusCode::NOT_FOUND, "Git deploy not found")),
-    };
+    let (cur_domain, cur_cron, was_protected, deploy_server_id, cur_ssl_email, cur_tls_mode, cur_alias) =
+        match existing {
+            Some(row) => row,
+            None => return Err(err(StatusCode::NOT_FOUND, "Git deploy not found")),
+        };
+    let previous_mode = effective_tls_mode(cur_tls_mode.as_deref(), cur_ssl_email.as_deref());
 
     // Validate domain ONLY when it changes. This used to run `is_valid_domain` +
     // `is_reserved_domain` and stop there, under a comment claiming parity with
@@ -712,6 +851,72 @@ pub async fn update(
     let github_token_enc =
         encrypt_stored_token(body.github_token.as_deref(), &state.config.jwt_secret)?;
 
+    // Absent means KEEP, for both mode and alias — the fix `stacks::update`
+    // already made for the identical bug: an edit that says nothing about TLS
+    // used to forward whatever `ssl_email` the request happened to carry,
+    // which took the certificate off a deploy that had one. See `create`'s
+    // TLS block for why the SAN-coverage check stays at deploy time rather
+    // than running here too.
+    let requested_mode = requested_tls_mode(body.tls_mode.as_deref())?;
+    let mode = requested_mode.unwrap_or(previous_mode);
+    let effective_ssl_email = match body.ssl_email.as_deref() {
+        Some("") => None,
+        Some(v) => Some(v.to_string()),
+        None => cur_ssl_email.clone(),
+    };
+    let effective_domain_present = domain
+        .as_deref()
+        .or(cur_domain.as_deref())
+        .map(|d| !d.trim().is_empty())
+        .unwrap_or(false);
+    let (mode, tls_certificate_id, resolved_alias): (&'static str, Option<Uuid>, Option<String>) =
+        match mode {
+            "acme" => {
+                if effective_ssl_email
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|e| !e.is_empty())
+                    .is_none()
+                {
+                    return Err(err(
+                        StatusCode::BAD_REQUEST,
+                        "Let's Encrypt mode needs an ssl_email for the ACME account",
+                    ));
+                }
+                ("acme", None, None)
+            }
+            "provided" => {
+                if !effective_domain_present {
+                    return Err(err(StatusCode::BAD_REQUEST, "a TLS mode needs a domain"));
+                }
+                let alias = match body
+                    .tls_certificate
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|a| !a.is_empty())
+                {
+                    Some(a) => a.to_string(),
+                    None => cur_alias.clone().ok_or_else(|| {
+                        err(
+                            StatusCode::BAD_REQUEST,
+                            "tls_mode provided needs tls_certificate — the alias of a registered certificate",
+                        )
+                    })?,
+                };
+                let alias = alias.to_ascii_lowercase();
+                if !is_valid_cert_alias(&alias) {
+                    return Err(err(
+                        StatusCode::BAD_REQUEST,
+                        "Alias must be 1-64 lowercase letters, digits or hyphens, starting and ending with a letter or digit",
+                    ));
+                }
+                let cert_id =
+                    certificate_id_for_alias(&state.db, &alias, claims.sub, deploy_server_id).await?;
+                ("provided", Some(cert_id), Some(alias))
+            }
+            _ => ("none", None, None),
+        };
+
     // THREE states on the wire, two of which used to be one. A COALESCE self-guard
     // folds an absent field onto the stored value, which is right for a key the
     // client omitted and wrong for a box the operator emptied — both arrive as
@@ -753,8 +958,10 @@ pub async fn update(
          deploy_cron = CASE WHEN $16 = '' THEN NULL ELSE COALESCE($16, deploy_cron) END, \
          deploy_protected = COALESCE($17, deploy_protected), \
          preview_ttl_hours = COALESCE($18, preview_ttl_hours), \
+         tls_mode = $19, \
+         tls_certificate_id = $20, \
          updated_at = NOW() \
-         WHERE id = $19 AND user_id = $20 \
+         WHERE id = $21 AND user_id = $22 \
          RETURNING *",
     )
     .bind(body.repo_url.as_deref())
@@ -775,11 +982,17 @@ pub async fn update(
     .bind(body.deploy_cron.as_deref())
     .bind(body.deploy_protected)
     .bind(body.preview_ttl_hours)
+    .bind(mode)
+    .bind(tls_certificate_id)
     .bind(id)
     .bind(claims.sub)
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("update git_deploys", e))?;
+    // `RETURNING *` has no join to read the alias through — the handler
+    // already knows it, from the request (or the previous row) it just
+    // resolved.
+    deploy.tls_certificate = resolved_alias;
 
     // A RENAME walked away from a vhost that is still serving. Until now the old
     // config kept proxying to this same container with a certificate that kept
@@ -1040,7 +1253,7 @@ pub async fn deploy(
     }
 
     let config: GitDeploy = sqlx::query_as(
-        "SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2",
+        &format!("{GIT_DEPLOY_SELECT} WHERE d.id = $1 AND d.user_id = $2"),
     )
     .bind(id)
     .bind(claims.sub)
@@ -1240,7 +1453,7 @@ pub async fn rollback(
     require_admin(&claims.role)?;
 
     let config: GitDeploy = sqlx::query_as(
-        "SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2",
+        &format!("{GIT_DEPLOY_SELECT} WHERE d.id = $1 AND d.user_id = $2"),
     )
     .bind(id)
     .bind(claims.sub)
@@ -1322,6 +1535,53 @@ pub async fn rollback(
         // Skip clone+build — go straight to deploy with the historical image
         emit("deploy", "Rolling back container", "in_progress", None);
 
+        let effective_mode =
+            effective_tls_mode(config.tls_mode.as_deref(), config.ssl_email.as_deref());
+        // An agent too old to honour `tls_mode`/`tls_certificate` silently
+        // drops both (no `deny_unknown_fields` on its `DeployRequest`) and
+        // falls back to inferring the mode from `ssl_email` presence — which
+        // `deploy_tls_email` withholds outright in `provided` mode, so an old
+        // agent would roll this deploy back onto plain HTTP with no warning.
+        // Refused here, before the historical image is even redeployed.
+        if effective_mode == "provided" {
+            if let Err(e) = require_agent_at_least(
+                &agent,
+                PROVIDED_TLS_MIN_AGENT,
+                "Serving a registered certificate",
+            )
+            .await
+            {
+                let msg = api_error_message(e);
+                emit("deploy", "Rolling back container", "error", Some(msg.clone()));
+                emit("complete", "Rollback failed", "error", None);
+                if let Err(db_err) = sqlx::query(
+                    "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, image_tag, status, output, triggered_by, duration_ms) \
+                     VALUES ($1, $2, $3, 'failed', $4, 'rollback', $5)",
+                )
+                .bind(id)
+                .bind(&rollback_commit)
+                .bind(&rollback_image)
+                .bind(&msg)
+                .bind(started.elapsed().as_millis() as i32)
+                .execute(&db)
+                .await
+                {
+                    tracing::warn!("Failed to record git deploy rollback history: {db_err}");
+                }
+                if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                    .bind(id)
+                    .execute(&db)
+                    .await
+                {
+                    tracing::warn!("Failed to update git deploy status: {db_err}");
+                }
+                tracing::error!("Git deploy rollback refused: {deploy_name}: {msg}");
+                notifications::notify_panel(&db, Some(user_id), &format!("Rollback failed: {}", deploy_name), &msg, "critical", "deploy", Some("/git-deploys")).await;
+                logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
+                return;
+            }
+        }
+
         let deploy_body = build_deploy_body(DeployBody {
             name: &config.name,
             image_tag: &rollback_image,
@@ -1331,7 +1591,9 @@ pub async fn rollback(
             domain: config.domain.as_deref(),
             memory_mb: config.memory_mb,
             cpu_percent: config.cpu_percent,
-            ssl_email: config.ssl_email.as_deref(),
+            ssl_email: deploy_tls_email(effective_mode, config.ssl_email.as_deref()),
+            tls_mode: Some(effective_mode),
+            tls_certificate: config.tls_certificate.as_deref(),
             scope: "deploy",
         });
 
@@ -1512,7 +1774,7 @@ pub async fn stop(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let config: GitDeploy = sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2")
+    let config: GitDeploy = sqlx::query_as(&format!("{GIT_DEPLOY_SELECT} WHERE d.id = $1 AND d.user_id = $2"))
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
         .map_err(|e| internal_error("stop", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
@@ -1575,7 +1837,7 @@ pub async fn start(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let config: GitDeploy = sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2")
+    let config: GitDeploy = sqlx::query_as(&format!("{GIT_DEPLOY_SELECT} WHERE d.id = $1 AND d.user_id = $2"))
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
         .map_err(|e| internal_error("start", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
@@ -1608,7 +1870,7 @@ pub async fn restart(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let config: GitDeploy = sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2")
+    let config: GitDeploy = sqlx::query_as(&format!("{GIT_DEPLOY_SELECT} WHERE d.id = $1 AND d.user_id = $2"))
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
         .map_err(|e| internal_error("restart", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
@@ -1636,7 +1898,7 @@ pub async fn container_logs(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let config: GitDeploy = sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2")
+    let config: GitDeploy = sqlx::query_as(&format!("{GIT_DEPLOY_SELECT} WHERE d.id = $1 AND d.user_id = $2"))
         .bind(id).bind(claims.sub).fetch_optional(&state.db).await
         .map_err(|e| internal_error("container logs", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
@@ -1686,7 +1948,7 @@ pub async fn webhook(
 
     // Fetch the git deploy config
     let config: GitDeploy = sqlx::query_as(
-        "SELECT * FROM git_deploys WHERE id = $1",
+        &format!("{GIT_DEPLOY_SELECT} WHERE d.id = $1"),
     )
     .bind(id)
     .fetch_optional(&state.db)
@@ -1937,6 +2199,8 @@ fn spawn_deploy_task(
 
     tokio::spawn(async move {
         let started = Instant::now();
+        let effective_mode =
+            effective_tls_mode(config.tls_mode.as_deref(), config.ssl_email.as_deref());
 
         let emit = |step: &str, label: &str, status: &str, msg: Option<String>| {
             let ev = ProvisionStep {
@@ -1958,7 +2222,7 @@ fn spawn_deploy_task(
                 let target = config
                     .domain
                     .as_deref()
-                    .map(|d| deploy_url(d, config.ssl_email.as_deref()));
+                    .map(|d| deploy_url(d, effective_mode));
                 tokio::spawn(async move {
                     set_github_status(&token, &repo, "HEAD", "pending", target).await;
                 });
@@ -2280,6 +2544,37 @@ fn spawn_deploy_task(
         // Step 3: Deploy
         emit("deploy", "Deploying container", "in_progress", None);
 
+        // An agent too old to honour `tls_mode`/`tls_certificate` silently
+        // drops both and falls back to inferring the mode from `ssl_email`
+        // presence — which `deploy_tls_email` withholds outright in
+        // `provided` mode, so an old agent would deploy this domain over
+        // plain HTTP with no warning. Refused here, before the deploy call.
+        if effective_mode == "provided" {
+            if let Err(e) = require_agent_at_least(
+                &agent,
+                PROVIDED_TLS_MIN_AGENT,
+                "Serving a registered certificate",
+            )
+            .await
+            {
+                let msg = api_error_message(e);
+                emit("deploy", "Deploying container", "error", Some(msg.clone()));
+                emit("complete", "Deploy failed", "error", None);
+                record_failed_history(&db, git_deploy_id, &commit_hash, commit_message.as_deref().unwrap_or(""), &msg, &triggered).await;
+                if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                    .bind(git_deploy_id)
+                    .execute(&db)
+                    .await
+                {
+                    tracing::warn!("Failed to update git deploy status: {db_err}");
+                }
+                tracing::error!("Git deploy refused: {deploy_name}: {msg}");
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
+                return;
+            }
+        }
+
         let deploy_body = build_deploy_body(DeployBody {
             name: &config.name,
             image_tag: &image_tag,
@@ -2289,7 +2584,9 @@ fn spawn_deploy_task(
             domain: config.domain.as_deref(),
             memory_mb: config.memory_mb,
             cpu_percent: config.cpu_percent,
-            ssl_email: config.ssl_email.as_deref(),
+            ssl_email: deploy_tls_email(effective_mode, config.ssl_email.as_deref()),
+            tls_mode: Some(effective_mode),
+            tls_certificate: config.tls_certificate.as_deref(),
             scope: "deploy",
         });
 
@@ -2305,6 +2602,35 @@ fn spawn_deploy_task(
 
                 let container_id = result.get("container_id").and_then(|v| v.as_str()).unwrap_or("");
                 let duration_ms = started.elapsed().as_millis() as i32;
+
+                // A refused registered certificate is not a failed deploy — the
+                // container is running — but it IS the outage this feature
+                // exists to prevent if nobody notices: the domain would be
+                // live over plain HTTP instead of the certificate the
+                // operator asked for. Surfaced as its own warning; every
+                // https-vs-http decision below this point resolves through
+                // `deploy_url`, fed the SCHEME THE AGENT ACTUALLY SERVED
+                // (`result["ssl"]`) rather than the mode that was merely
+                // requested, so a refusal never reads as a spurious
+                // health-check 5xx or a broken GitHub deploy link — still
+                // ONE function deciding every URL in this file, never a
+                // second hardcoded `https://`.
+                let actual_mode = if result.get("tls_refused").and_then(|v| v.as_bool()) == Some(true) {
+                    let reason = result.get("proxy_warning").and_then(|v| v.as_str())
+                        .unwrap_or("the agent did not report an HTTPS vhost for the domain");
+                    tracing::warn!("Git deploy {deploy_name}: registered certificate not applied: {reason}");
+                    notifications::notify_panel(&db, Some(user_id),
+                        &format!("Deploy warning: {} certificate not applied", deploy_name),
+                        reason,
+                        "warning", "deploy", Some("/git-deploys")).await;
+                    "none"
+                } else {
+                    match result.get("ssl").and_then(|v| v.as_bool()) {
+                        Some(true) => effective_mode,
+                        Some(false) => "none",
+                        None => effective_mode,
+                    }
+                };
 
                 // Record success history
                 if let Err(db_err) = sqlx::query(
@@ -2399,7 +2725,7 @@ fn spawn_deploy_task(
                         let target = config
                             .domain
                             .as_deref()
-                            .map(|d| deploy_url(d, config.ssl_email.as_deref()));
+                            .map(|d| deploy_url(d, actual_mode));
                         tokio::spawn(async move {
                             set_github_status(&token, &repo_url, &sha, "success", target).await;
                         });
@@ -2409,7 +2735,7 @@ fn spawn_deploy_task(
                 // Post-deploy health check: verify site is responding
                 if let Some(ref domain) = config.domain {
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                    let check_url = deploy_url(domain, config.ssl_email.as_deref());
+                    let check_url = deploy_url(domain, actual_mode);
                     if let Ok(client) = reqwest::Client::builder()
                         .danger_accept_invalid_certs(true)
                         .timeout(std::time::Duration::from_secs(10))
@@ -2462,6 +2788,9 @@ fn spawn_deploy_task(
                     let monitor_config_memory = config.memory_mb;
                     let monitor_config_cpu = config.cpu_percent;
                     let monitor_config_ssl_email = config.ssl_email.clone();
+                    // `&'static str`, so a plain copy — no clone needed.
+                    let monitor_effective_mode = effective_mode;
+                    let monitor_config_tls_certificate = config.tls_certificate.clone();
 
                     tokio::spawn(async move {
                         // Check container health every 15s for 2 minutes
@@ -2501,7 +2830,9 @@ fn spawn_deploy_task(
                                             domain: monitor_config_domain.as_deref(),
                                             memory_mb: monitor_config_memory,
                                             cpu_percent: monitor_config_cpu,
-                                            ssl_email: monitor_config_ssl_email.as_deref(),
+                                            ssl_email: deploy_tls_email(monitor_effective_mode, monitor_config_ssl_email.as_deref()),
+                                            tls_mode: Some(monitor_effective_mode),
+                                            tls_certificate: monitor_config_tls_certificate.as_deref(),
                                             scope: "deploy",
                                         });
 
@@ -2611,7 +2942,7 @@ fn spawn_deploy_task(
                         let target = config
                             .domain
                             .as_deref()
-                            .map(|d| deploy_url(d, config.ssl_email.as_deref()));
+                            .map(|d| deploy_url(d, effective_mode));
                         tokio::spawn(async move {
                             set_github_status(&token, &repo_url, &sha, "failure", target).await;
                         });
@@ -2817,6 +3148,18 @@ fn blank_to_none(v: Option<&str>) -> Option<&str> {
     v.filter(|s| !s.trim().is_empty())
 }
 
+/// The human sentence out of an [`ApiError`], for use inside a fire-and-forget
+/// spawned deploy task — those return `()` and cannot propagate `?`, so
+/// `require_agent_at_least`'s `Result<(), ApiError>` has to be unpacked by hand.
+fn api_error_message(e: ApiError) -> String {
+    e.1
+        .0
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or("request refused")
+        .to_string()
+}
+
 fn encrypt_stored_token(
     submitted: Option<&str>,
     jwt_secret: &str,
@@ -2841,15 +3184,16 @@ fn mask_github_token(deploy: &mut GitDeploy) {
 
 /// The URL a git deploy's domain is actually reachable on.
 ///
-/// A deploy only gets a certificate when an SSL email is configured — that is
-/// the same condition `deploy_body` uses to ask the agent for one — so it is
-/// also the condition that decides the scheme. This used to be assumed to be
-/// https everywhere, under a comment reading "Git deploys with domain typically
-/// have SSL"; on a deploy without one, the post-deploy health check then
-/// connected to a port serving no TLS and reported a perfectly good deploy as
-/// unreachable.
-fn deploy_url(domain: &str, ssl_email: Option<&str>) -> String {
-    let scheme = if ssl_email.is_some() { "https" } else { "http" };
+/// Takes the EFFECTIVE mode (`stacks::effective_tls_mode`), not raw
+/// `ssl_email` — `provided` mode withholds `ssl_email` from the agent
+/// entirely (see `deploy_tls_email`), so a scheme decision still keyed on its
+/// presence would report a `provided`-mode deploy as plain HTTP. This used to
+/// be assumed to be https everywhere, under a comment reading "Git deploys
+/// with domain typically have SSL"; on a deploy without one, the post-deploy
+/// health check then connected to a port serving no TLS and reported a
+/// perfectly good deploy as unreachable.
+fn deploy_url(domain: &str, tls_mode: &str) -> String {
+    let scheme = if tls_mode == "acme" || tls_mode == "provided" { "https" } else { "http" };
     format!("{scheme}://{domain}")
 }
 
@@ -2942,11 +3286,12 @@ pub async fn trigger_deploy_task(
     // Fetch config FIRST — before acquiring the lock — so a config-fetch error
     // (or a row deleted between the scheduler's list and now) returns WITHOUT
     // having flipped status to 'building' and stranding it for the self-heal window.
-    let config: GitDeploy = match sqlx::query_as("SELECT * FROM git_deploys WHERE id = $1")
+    let config: GitDeploy = match sqlx::query_as(&format!("{GIT_DEPLOY_SELECT} WHERE d.id = $1"))
         .bind(git_deploy_id).fetch_optional(&db).await {
         Ok(Some(c)) => c,
         _ => return,
     };
+    let effective_mode = effective_tls_mode(config.tls_mode.as_deref(), config.ssl_email.as_deref());
 
     // Resolve the agent for the server this deployment LIVES ON, not for
     // whichever box happens to be running the panel.
@@ -3009,7 +3354,7 @@ pub async fn trigger_deploy_task(
     if let Some(ref gh_token) = config.github_token {
         if !gh_token.is_empty() {
             set_github_status(gh_token, &config.repo_url, "HEAD", "pending",
-                config.domain.as_deref().map(|d| deploy_url(d, config.ssl_email.as_deref()))).await;
+                config.domain.as_deref().map(|d| deploy_url(d, effective_mode))).await;
         }
     }
 
@@ -3185,13 +3530,32 @@ pub async fn trigger_deploy_task(
                 if let Some(ref gh_token) = config.github_token {
                     if !gh_token.is_empty() && commit_hash != "unknown" {
                         set_github_status(gh_token, &config.repo_url, &commit_hash, "failure",
-                            config.domain.as_deref().map(|d| deploy_url(d, config.ssl_email.as_deref()))).await;
+                            config.domain.as_deref().map(|d| deploy_url(d, effective_mode))).await;
                     }
                 }
                 return;
             }
         }
     };
+
+    // An agent too old to honour `tls_mode`/`tls_certificate` silently drops
+    // both and falls back to inferring the mode from `ssl_email` presence —
+    // which `deploy_tls_email` withholds outright in `provided` mode, so an
+    // old agent would deploy this domain over plain HTTP with no warning.
+    // Refused here, before the deploy call.
+    if effective_mode == "provided" {
+        if let Err(e) = require_agent_at_least(&agent, PROVIDED_TLS_MIN_AGENT, "Serving a registered certificate").await {
+            let msg = api_error_message(e);
+            record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &msg, &triggered_by).await;
+            if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                .bind(git_deploy_id).execute(&db).await
+            {
+                tracing::warn!("Failed to update git deploy status: {db_err}");
+            }
+            tracing::error!("Scheduled deploy refused ({}): {}: {msg}", triggered_by, config.name);
+            return;
+        }
+    }
 
     // Deploy
     let deploy_body = build_deploy_body(DeployBody {
@@ -3203,7 +3567,9 @@ pub async fn trigger_deploy_task(
         domain: config.domain.as_deref(),
         memory_mb: config.memory_mb,
         cpu_percent: config.cpu_percent,
-        ssl_email: config.ssl_email.as_deref(),
+        ssl_email: deploy_tls_email(effective_mode, config.ssl_email.as_deref()),
+        tls_mode: Some(effective_mode),
+        tls_certificate: config.tls_certificate.as_deref(),
         scope: "deploy",
     });
 
@@ -3211,6 +3577,28 @@ pub async fn trigger_deploy_task(
         Ok(result) => {
             let container_id = result.get("container_id").and_then(|v| v.as_str()).unwrap_or("");
             let duration_ms = started.elapsed().as_millis() as i32;
+
+            // Same reasoning as `spawn_deploy_task`: prefer what the agent
+            // actually served over what was merely requested, and surface a
+            // refused registered certificate as its own warning. Still
+            // resolves through `deploy_url` below, never a second
+            // hardcoded `https://`.
+            let actual_mode = if result.get("tls_refused").and_then(|v| v.as_bool()) == Some(true) {
+                let reason = result.get("proxy_warning").and_then(|v| v.as_str())
+                    .unwrap_or("the agent did not report an HTTPS vhost for the domain");
+                tracing::warn!("Scheduled deploy {}: registered certificate not applied: {reason}", config.name);
+                notifications::notify_panel(&db, Some(user_id),
+                    &format!("Deploy warning: {} certificate not applied", config.name),
+                    reason,
+                    "warning", "deploy", Some("/git-deploys")).await;
+                "none"
+            } else {
+                match result.get("ssl").and_then(|v| v.as_bool()) {
+                    Some(true) => effective_mode,
+                    Some(false) => "none",
+                    None => effective_mode,
+                }
+            };
 
             if let Err(db_err) = sqlx::query(
                 "INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, triggered_by, duration_ms) VALUES ($1, $2, $3, $4, 'success', $5, $6)"
@@ -3237,7 +3625,7 @@ pub async fn trigger_deploy_task(
             if let Some(ref gh_token) = config.github_token {
                 if !gh_token.is_empty() && commit_hash != "unknown" {
                     set_github_status(gh_token, &config.repo_url, &commit_hash, "success",
-                            config.domain.as_deref().map(|d| deploy_url(d, config.ssl_email.as_deref()))).await;
+                            config.domain.as_deref().map(|d| deploy_url(d, actual_mode))).await;
                 }
             }
 
@@ -3254,7 +3642,7 @@ pub async fn trigger_deploy_task(
             // Post-deploy health check: verify site is responding
             if let Some(ref domain) = config.domain {
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                let check_url = deploy_url(domain, config.ssl_email.as_deref());
+                let check_url = deploy_url(domain, actual_mode);
                 if let Ok(client) = reqwest::Client::builder()
                     .danger_accept_invalid_certs(true)
                     .timeout(std::time::Duration::from_secs(10))
@@ -3294,7 +3682,7 @@ pub async fn trigger_deploy_task(
             if let Some(ref gh_token) = config.github_token {
                 if !gh_token.is_empty() && commit_hash != "unknown" {
                     set_github_status(gh_token, &config.repo_url, &commit_hash, "failure",
-                            config.domain.as_deref().map(|d| deploy_url(d, config.ssl_email.as_deref()))).await;
+                            config.domain.as_deref().map(|d| deploy_url(d, effective_mode))).await;
                 }
             }
 
@@ -3495,6 +3883,16 @@ async fn handle_preview_deploy(
     let deploy_id = config.id;
     let key_path = config.deploy_key_path.clone();
     let ssl_email = config.ssl_email.clone();
+    // A `provided`-mode certificate names the PARENT domain, almost
+    // certainly not `{branch}.{parent}` — passed through regardless and left
+    // to the agent's own `cert_covers_domain` SAN re-check (the same
+    // defence-in-depth `TlsIntent::Provided` always runs) to decide: a
+    // wildcard or a SAN naming the preview host covers it and serves HTTPS,
+    // anything narrower is refused gracefully and the preview falls back to
+    // plain HTTP — never a hard failure over a preview's own TLS story.
+    let effective_mode =
+        effective_tls_mode(config.tls_mode.as_deref(), config.ssl_email.as_deref());
+    let tls_certificate = config.tls_certificate.clone();
     let branch = branch.to_string();
 
     tokio::spawn(async move {
@@ -3561,9 +3959,26 @@ async fn handle_preview_deploy(
             memory_mb: None,
             cpu_percent: None,
             // Pass SSL email so preview environments get HTTPS
-            ssl_email: ssl_email.as_deref(),
+            ssl_email: deploy_tls_email(effective_mode, ssl_email.as_deref()),
+            tls_mode: Some(effective_mode),
+            tls_certificate: tls_certificate.as_deref(),
             scope: "preview",
         });
+
+        // Same refusal `spawn_deploy_task`/`trigger_deploy_task` apply: an
+        // old agent silently drops `tls_mode`/`tls_certificate` and would
+        // infer plain HTTP from the withheld `ssl_email`.
+        if effective_mode == "provided" {
+            if let Err(e) = require_agent_at_least(&agent, PROVIDED_TLS_MIN_AGENT, "Serving a registered certificate").await {
+                tracing::error!("Preview deploy refused: {name}/{branch}: {}", api_error_message(e));
+                if let Err(db_err) = sqlx::query("UPDATE git_previews SET status = 'failed' WHERE git_deploy_id = $1 AND branch = $2")
+                    .bind(deploy_id).bind(&branch).execute(&db).await
+                {
+                    tracing::warn!("Failed to update git preview status: {db_err}");
+                }
+                return;
+            }
+        }
 
         match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
             Ok(result) => {
@@ -3912,7 +4327,7 @@ pub async fn approve_deploy(
     // between, this fails closed rather than deploying on the strength of a request
     // its current owner never made.
     let config: GitDeploy = sqlx::query_as(
-        "SELECT * FROM git_deploys WHERE id = $1 AND user_id = $2"
+        &format!("{GIT_DEPLOY_SELECT} WHERE d.id = $1 AND d.user_id = $2")
     )
     .bind(deploy_id)
     .bind(requested_by)
@@ -4151,6 +4566,8 @@ mod tests {
             memory_mb: None,
             cpu_percent: None,
             ssl_email: None,
+            tls_mode: None,
+            tls_certificate: None,
             scope: "deploy",
         })
     }
@@ -4170,9 +4587,64 @@ mod tests {
     #[test]
     fn optional_fields_are_omitted_not_nulled() {
         let body = body_with(serde_json::json!({}));
-        for k in ["domain", "memory_mb", "cpu_percent", "ssl_email"] {
+        for k in ["domain", "memory_mb", "cpu_percent", "ssl_email", "tls_mode", "tls_certificate"] {
             assert!(body.get(k).is_none(), "{k} should be absent, not null");
         }
+    }
+
+    #[test]
+    fn provided_mode_sends_the_alias_and_withholds_the_acme_address() {
+        // A `provided`-mode config is never sent an `ssl_email` — an agent
+        // that still infers the mode from its presence must not be told to
+        // order a certificate the operator switched off. Positive control for
+        // the mutation this guards against: delete the `deploy_tls_email`
+        // call at either `spawn_deploy_task` or `trigger_deploy_task` and this
+        // goes from `None` to `Some("ops@example.com")`.
+        let body = build_deploy_body(DeployBody {
+            name: "app",
+            image_tag: "dockpanel-git-app:abc",
+            container_port: 3000,
+            host_port: 30001,
+            env_vars: &serde_json::json!({}),
+            domain: Some("app.example.com"),
+            memory_mb: None,
+            cpu_percent: None,
+            ssl_email: super::deploy_tls_email("provided", Some("ops@example.com")),
+            tls_mode: Some("provided"),
+            tls_certificate: Some("wildcard-2026"),
+            scope: "deploy",
+        });
+        assert_eq!(body["tls_mode"], "provided");
+        assert_eq!(body["tls_certificate"], "wildcard-2026");
+        assert!(body.get("ssl_email").is_none(), "provided mode must not also send an ACME address");
+    }
+
+    #[test]
+    fn acme_mode_still_sends_the_address() {
+        let body = build_deploy_body(DeployBody {
+            name: "app",
+            image_tag: "dockpanel-git-app:abc",
+            container_port: 3000,
+            host_port: 30001,
+            env_vars: &serde_json::json!({}),
+            domain: Some("app.example.com"),
+            memory_mb: None,
+            cpu_percent: None,
+            ssl_email: super::deploy_tls_email("acme", Some("ops@example.com")),
+            tls_mode: Some("acme"),
+            tls_certificate: None,
+            scope: "deploy",
+        });
+        assert_eq!(body["tls_mode"], "acme");
+        assert_eq!(body["ssl_email"], "ops@example.com");
+        assert!(body.get("tls_certificate").is_none());
+    }
+
+    #[test]
+    fn deploy_url_reports_https_for_acme_and_provided_only() {
+        assert_eq!(super::deploy_url("app.example.com", "acme"), "https://app.example.com");
+        assert_eq!(super::deploy_url("app.example.com", "provided"), "https://app.example.com");
+        assert_eq!(super::deploy_url("app.example.com", "none"), "http://app.example.com");
     }
 
     #[test]
