@@ -4,6 +4,79 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.171.0]
+
+### Security — the public status page could serve one tenant's data to a visitor of another's
+
+`GET /api/status-page/public` (unauthenticated, what `/status` fetches) picks
+one `status_page_config` row to answer as, then read every other table it
+needs — `status_page_components`, the monitors joined into them,
+`managed_incidents`, `incident_updates`, and the legacy monitor-based
+`incidents` table — with **no tenant filter at all**. On a single-tenant box
+this is invisible: the one config row is the only data there is to leak. On
+any multi-tenant or reseller install — DockPanel's stated target market, with
+`teams`, `resellers` and `reseller_dashboard` all built for exactly that — a
+second tenant's components and incident history would be served on the
+FIRST tenant's public page the moment that second tenant configured and
+enabled a status page of their own. Found by the s418 audit's setup critic,
+who traced it to a finding already on record from s251 (2026-07-25) that
+survived an adjacent edit (v2.70.0) to the very same function without being
+closed. All five queries in `public_status_page` are now scoped to the
+config-winning row's `user_id`; when no tenant has configured a status page
+at all, the handler now answers with empty components/incidents instead of
+whatever happened to be in the tables. Regression-pinned:
+`status-page-gate-pin-e2e.sh` §G, mutation-tested both directions (reverting
+any one of the five queries to its unscoped form turns its own arm red, and
+only that one).
+
+### Security — OAuth login could be redirected into an attacker's account (login-CSRF)
+
+`/api/auth/oauth/{provider}/callback` validated its `state` parameter only
+against the server-side map `authorize` had written it into — which proves
+*some* `/authorize` call produced it, nothing about *which browser* is
+presenting it now. An attacker could start their own OAuth flow, capture the
+provider's redirect back to this panel (a real `code`+`state` pair for the
+attacker's own account) without letting their own browser follow it, and hand
+that exact callback URL to a victim: the old check would accept it and log
+the victim's browser into the **attacker's** account. `authorize` now sets a
+short-lived `HttpOnly`, `SameSite=Lax` cookie carrying the same state value;
+`callback` requires it to be present and to match `query.state` before
+anything else runs.
+
+Separately, an OAuth provider's own `email_verified: false` was never
+checked before its `email` was used to auto-link to (or auto-log into) an
+existing local account by email match alone. Google's OIDC userinfo endpoint
+(the one this panel calls) does return that field; it was read nowhere.
+Absent-field providers (GitLab's user endpoint, GitHub's profile-email path)
+are unaffected — the gate defaults to allow when the field isn't sent, and
+rejects only an explicit `false`.
+
+Both found by the s418 identity/access-control audit fan-out (finder +
+independent adversarial skeptic, both UPHELD against source). Regression-pinned
+in a new suite, `oauth-csrf-pin-e2e.sh`, mutation-tested both directions.
+
+### Changed — an advertised capability withdrawn
+
+Recorded in `FEATURES.md` § Withdrawn Claims rather than quietly deleted.
+
+**Terraform/Pulumi IaC tokens** — advertised since Tier 3 as "scoped tokens,
+resource listing" — are CRUD-only and authenticate nothing. All 6 handlers
+(token create/list/delete, `tf_list_sites`, `tf_list_databases`, and the 4
+autoscale handlers sharing this file) take only `AuthUser` (JWT);
+`iac_tokens.token_hash` is written once at creation and read back by no code
+path anywhere in the tree — confirmed live against `demo.dockpanel.dev`, a
+real token 401s identically to a garbage string. The module's own doc
+comment claimed "Authentication via IaC tokens (Bearer token) or regular
+JWT" and named `dns_records` as a resource; neither was ever true — no
+`dns_records` reader has ever existed, only `sites` and `databases` are
+real. There is no frontend for it at all: the only `Terraform`/`Pulumi`/`iac`
+hit in the whole SPA is a command-palette search keyword. `iac_tokens` has
+zero rows on this box — zero real-world adoption, ever. Same defect shape as
+the API Keys withdrawal below (write-only credential), but this one had
+never been disclosed anywhere until found by the s418 audit fan-out's
+completeness critic, checking the one file none of the session's four picked
+audit topics had covered.
+
 ## [2.170.0]
 
 ### Fixed — a parked (stopped) Compose stack's vhost and certificate could never be cleaned up

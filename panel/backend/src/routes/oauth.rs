@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::{header, StatusCode},
-    response::{IntoResponse, Redirect, Response},
+    response::{IntoResponse, Response},
 };
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -105,6 +105,7 @@ pub async fn redirect_uris(
 pub async fn authorize(
     State(state): State<AppState>,
     Path(provider_name): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
     let provider = get_provider(&provider_name)
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Unknown OAuth provider"))?;
@@ -142,7 +143,29 @@ pub async fn authorize(
         urlencoding::encode(&csrf_state),
     );
 
-    Ok(Redirect::temporary(&auth_url).into_response())
+    // Bind `state` to THIS browser via a short-lived cookie, mirroring the value
+    // already in `state.oauth_states`. Without this, a valid `state` only proves
+    // "some /authorize call happened" — not that the browser presenting it at
+    // /callback is the one that made it. Login-CSRF: an attacker starts their own
+    // OAuth flow, captures the provider's redirect back to this panel (a real
+    // code+state pair for the ATTACKER's account) without letting their own
+    // browser follow it, then hands that exact callback URL to a victim. The old
+    // code validated `state` purely against the server-side map — which the
+    // attacker's `state` legitimately is a member of — and would have logged the
+    // victim's browser into the attacker's account. `callback` below now also
+    // requires this cookie to be present and to match `query.state`.
+    let secure_flag = crate::routes::auth::cookie_secure_flag(&headers);
+    let csrf_cookie = format!(
+        "oauth_csrf={csrf_state}; HttpOnly{secure_flag}; SameSite=Lax; Path=/; Max-Age=600"
+    );
+
+    Ok(Response::builder()
+        .status(StatusCode::TEMPORARY_REDIRECT)
+        .header(header::SET_COOKIE, csrf_cookie)
+        .header(header::LOCATION, auth_url)
+        .body(axum::body::Body::empty())
+        .unwrap()
+        .into_response())
 }
 
 /// GET /api/auth/oauth/{provider}/callback — Handle OAuth callback
@@ -171,7 +194,8 @@ pub async fn callback(
     let provider = get_provider(&provider_name)
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Unknown OAuth provider"))?;
 
-    // Validate CSRF state
+    // Validate CSRF state is a member of the server-side map — proves SOME
+    // /authorize call issued it, nothing about WHO is presenting it now.
     {
         let mut states = state.oauth_states.lock().unwrap_or_else(|e| e.into_inner());
         let entry = states.remove(&query.state);
@@ -179,6 +203,23 @@ pub async fn callback(
             Some((name, created)) if name == provider_name && created.elapsed().as_secs() < 600 => {}
             _ => return Err(err(StatusCode::BAD_REQUEST, "Invalid or expired OAuth state")),
         }
+    }
+
+    // Validate the browser presenting this callback is the one `authorize` set
+    // the csrf cookie for, and that it names the SAME state — this is what turns
+    // the check above from "a valid flow happened" into "this browser's flow".
+    // Missing/mismatched cookie means either a non-browser replay of a captured
+    // callback URL, or exactly the login-CSRF handoff this cookie exists to stop.
+    let csrf_cookie = headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies
+                .split(';')
+                .find_map(|s| s.trim().strip_prefix("oauth_csrf=").map(|v| v.to_string()))
+        });
+    if csrf_cookie.as_deref() != Some(query.state.as_str()) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid or expired OAuth state"));
     }
 
     // Read client credentials
@@ -271,6 +312,19 @@ pub async fn callback(
     };
 
     let email = email.ok_or_else(|| err(StatusCode::BAD_GATEWAY, "Could not retrieve email from OAuth provider"))?;
+
+    // Reject an explicitly-unverified email before it can auto-link to (or
+    // auto-log-into) an existing account by email match alone — the linking
+    // logic below trusts `email` completely once we get this far. Absent means
+    // allow (`unwrap_or(true)`): GitLab's user endpoint and GitHub's profile-email
+    // path don't return this field at all, and treating "field missing" as a
+    // rejection would break both with no evidence either is a problem. Google's
+    // OIDC userinfo endpoint (configured above) does reliably return it.
+    let email_verified = userinfo.get("email_verified").and_then(|v| v.as_bool()).unwrap_or(true);
+    if !email_verified {
+        return Err(err(StatusCode::BAD_GATEWAY, "OAuth provider reports this email address is not verified"));
+    }
+
     let oauth_id = userinfo.get("id").map(|v| v.to_string()).unwrap_or_else(|| userinfo.get("sub").map(|v| v.to_string()).unwrap_or_default());
 
     if oauth_id.is_empty() {

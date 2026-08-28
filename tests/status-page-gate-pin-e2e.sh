@@ -349,6 +349,72 @@ if I=$(subj "$INC"); then
   fi
 fi
 
+echo "== §G  the public read is scoped to ONE tenant (s418) =="
+
+# v2.171.0. §A-§F all guarded WHETHER the page publishes and WHAT fields it
+# publishes — none of them checked WHOSE data it publishes. Every query below
+# `status_page_config`'s ORDER BY was unscoped: on any multi-tenant/reseller
+# install, one tenant's components/incidents/legacy-incidents were served to
+# every anonymous visitor of every OTHER tenant's /status page. Confirmed
+# live-reachable on this box before the fix (10 real incident rows, 1 user).
+#
+# Each arm names the ONE query it pins, not a bag of substrings, so a
+# regression says which query lost its scope.
+
+if I=$(subj "$INC"); then
+  PUBBODY=$(fnbody "$I" public_status_page)
+  if [ "${#PUBBODY}" -ge 1500 ]; then
+    if grep -qE 'SELECT user_id, title, description' <<< "$PUBBODY" \
+    && grep -qE 'let owner_id: Option<Uuid> = config\.as_ref\(\)\.map' <<< "$PUBBODY"; then
+      ok "G1 the config read carries user_id forward as owner_id"
+    else
+      bad "G1 the config read carries user_id forward as owner_id"
+    fi
+
+    if grep -qE 'FROM status_page_components WHERE user_id = \$1' <<< "$PUBBODY"; then
+      ok "G2 the components read is scoped to owner_id"
+    else
+      bad "G2 the components read is scoped to owner_id"
+    fi
+
+    if grep -qE 'WHERE cm\.component_id = \$1 AND m\.user_id = \$2 AND m\.enabled = TRUE' <<< "$PUBBODY"; then
+      ok "G3 the per-component monitor-status read is ALSO scoped (defense in depth — the component is already owner-scoped, but a monitor linked cross-tenant into it must not leak status)"
+    else
+      bad "G3 the per-component monitor-status read is ALSO scoped"
+    fi
+
+    if grep -qE 'FROM managed_incidents WHERE user_id = \$1 AND visible_on_status_page = TRUE' <<< "$PUBBODY"; then
+      ok "G4 the managed-incidents read is scoped to owner_id"
+    else
+      bad "G4 the managed-incidents read is scoped to owner_id"
+    fi
+
+    if grep -qE 'FROM incidents i JOIN monitors m ON m\.id = i\.monitor_id \\' <<< "$PUBBODY" \
+    && grep -qE 'WHERE m\.user_id = \$1 AND i\.started_at > NOW\(\)' <<< "$PUBBODY"; then
+      ok "G5 the legacy auto-detected-incidents read is scoped to owner_id"
+    else
+      bad "G5 the legacy auto-detected-incidents read is scoped to owner_id"
+    fi
+
+    # The negative control: NONE of the four data queries may be reachable
+    # with no owner_id in hand. An `if let Some(uid) = owner_id` / `match
+    # owner_id { Some(uid) => ... None => Vec::new() }` around each is what
+    # makes G2-G5 real gates rather than filters bolted on after an unscoped
+    # fetch already ran.
+    if grep -qE 'if let Some\(uid\) = owner_id' <<< "$PUBBODY" \
+    && grep -qE 'match owner_id \{' <<< "$PUBBODY"; then
+      ok "G6 the components/incidents queries are structurally UNREACHABLE without an owner_id, not merely filtered"
+    else
+      bad "G6 the components/incidents queries are structurally UNREACHABLE without an owner_id, not merely filtered"
+    fi
+  else
+    bad "G1 public_status_page subject resolved (${#PUBBODY}c) — G1-G6 would be vacuous"
+    bad "G2 components read scoped"; bad "G3 monitor-status read scoped"
+    bad "G4 managed-incidents read scoped"; bad "G5 legacy-incidents read scoped"
+    bad "G6 queries structurally gated on owner_id"
+  fi
+fi
+
 echo
 printf 'status-page-gate: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

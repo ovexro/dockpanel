@@ -833,58 +833,71 @@ pub async fn public_status_page(
     // to insert a fresh row on every PUT (see the migration that made
     // `user_id` unique), so an install can carry duplicates, and an unordered
     // LIMIT 1 would let two reads of the same table disagree.
-    let config: Option<(String, String, Option<String>, String, bool, bool, i32, bool)> = sqlx::query_as(
-        "SELECT title, description, logo_url, accent_color, show_subscribe, show_incident_history, history_days, enabled \
+    //
+    // ⚠ SECURITY (s418): every query below this point MUST be scoped to
+    // `owner_id` — the tenant whose config row won this ORDER BY. This handler
+    // is unauthenticated; on any multi-tenant/reseller install, an unscoped
+    // read here serves one tenant's components/incidents to every anonymous
+    // visitor of every OTHER tenant's status page. Confirmed live-reachable on
+    // this box before this fix.
+    let config: Option<(Uuid, String, String, Option<String>, String, bool, bool, i32, bool)> = sqlx::query_as(
+        "SELECT user_id, title, description, logo_url, accent_color, show_subscribe, show_incident_history, history_days, enabled \
          FROM status_page_config ORDER BY created_at ASC, id ASC LIMIT 1"
     )
     .fetch_optional(&state.db).await
     .map_err(|e| internal_error("public status page", e))?;
 
+    let owner_id: Option<Uuid> = config.as_ref().map(|c| c.0);
     let (title, description, logo_url, accent_color, show_subscribe, show_history, history_days, enabled) =
-        config.unwrap_or(("Service Status".into(), "Current status of our services".into(), None, "#22c55e".into(), true, true, 90, true));
+        config.map(|c| (c.1, c.2, c.3, c.4, c.5, c.6, c.7, c.8))
+            .unwrap_or(("Service Status".into(), "Current status of our services".into(), None, "#22c55e".into(), true, true, 90, true));
 
     if !enabled {
         return Err(err(StatusCode::NOT_FOUND, "Status page is disabled"));
     }
 
-    // Get components with their monitor statuses
-    let components: Vec<(Uuid, String, Option<String>, i32, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT id, name, description, sort_order, status_override, group_name \
-         FROM status_page_components ORDER BY sort_order ASC, created_at ASC"
-    )
-    .fetch_all(&state.db).await
-    .unwrap_or_default();
-
+    // Get components with their monitor statuses — scoped to the config's owner.
     let mut component_list = Vec::new();
-    for (comp_id, name, desc, _sort, status_override, group) in &components {
-        let monitor_statuses: Vec<(String,)> = sqlx::query_as(
-            "SELECT m.status FROM monitors m \
-             JOIN status_page_component_monitors cm ON cm.monitor_id = m.id \
-             WHERE cm.component_id = $1 AND m.enabled = TRUE"
+    if let Some(uid) = owner_id {
+        let components: Vec<(Uuid, String, Option<String>, i32, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT id, name, description, sort_order, status_override, group_name \
+             FROM status_page_components WHERE user_id = $1 ORDER BY sort_order ASC, created_at ASC"
         )
-        .bind(comp_id)
+        .bind(uid)
         .fetch_all(&state.db).await
         .unwrap_or_default();
 
-        let status = if let Some(override_status) = status_override {
-            override_status.clone()
-        } else if monitor_statuses.is_empty() {
-            "operational".to_string()
-        } else if monitor_statuses.iter().all(|(s,)| s == "up") {
-            "operational".to_string()
-        } else if monitor_statuses.iter().any(|(s,)| s == "down") {
-            "major_outage".to_string()
-        } else {
-            "degraded".to_string()
-        };
+        for (comp_id, name, desc, _sort, status_override, group) in &components {
+            let monitor_statuses: Vec<(String,)> = sqlx::query_as(
+                "SELECT m.status FROM monitors m \
+                 JOIN status_page_component_monitors cm ON cm.monitor_id = m.id \
+                 WHERE cm.component_id = $1 AND m.user_id = $2 AND m.enabled = TRUE"
+            )
+            .bind(comp_id)
+            .bind(uid)
+            .fetch_all(&state.db).await
+            .unwrap_or_default();
 
-        component_list.push(serde_json::json!({
-            "id": comp_id,
-            "name": name,
-            "description": desc,
-            "group": group,
-            "status": status,
-        }));
+            let status = if let Some(override_status) = status_override {
+                override_status.clone()
+            } else if monitor_statuses.is_empty() {
+                "operational".to_string()
+            } else if monitor_statuses.iter().all(|(s,)| s == "up") {
+                "operational".to_string()
+            } else if monitor_statuses.iter().any(|(s,)| s == "down") {
+                "major_outage".to_string()
+            } else {
+                "degraded".to_string()
+            };
+
+            component_list.push(serde_json::json!({
+                "id": comp_id,
+                "name": name,
+                "description": desc,
+                "group": group,
+                "status": status,
+            }));
+        }
     }
 
     // Overall status
@@ -896,63 +909,70 @@ pub async fn public_status_page(
         "degraded"
     };
 
-    // Active + recent incidents
-    let incidents: Vec<ManagedIncident> = sqlx::query_as(
-        "SELECT * FROM managed_incidents WHERE visible_on_status_page = TRUE \
-         AND (status != 'resolved' OR resolved_at > NOW() - ($1 || ' days')::interval) \
-         ORDER BY started_at DESC LIMIT 50"
-    )
-    .bind(history_days)
-    .fetch_all(&state.db).await
-    .unwrap_or_default();
-
+    // Active + recent incidents — scoped to the config's owner.
     let mut incident_list = Vec::new();
-    for inc in &incidents {
-        let updates: Vec<IncidentUpdate> = sqlx::query_as(
-            "SELECT * FROM incident_updates WHERE incident_id = $1 ORDER BY created_at ASC LIMIT 500"
+    if let Some(uid) = owner_id {
+        let incidents: Vec<ManagedIncident> = sqlx::query_as(
+            "SELECT * FROM managed_incidents WHERE user_id = $1 AND visible_on_status_page = TRUE \
+             AND (status != 'resolved' OR resolved_at > NOW() - ($2 || ' days')::interval) \
+             ORDER BY started_at DESC LIMIT 50"
         )
-        .bind(inc.id)
+        .bind(uid)
+        .bind(history_days)
         .fetch_all(&state.db).await
         .unwrap_or_default();
 
-        // Projected field by field, not serialized whole: `IncidentUpdate`
-        // carries `author_email`, and this endpoint answers with no login. The
-        // four fields below are exactly what `PublicStatusPage.tsx` declares.
-        // `#[serde(skip_serializing)]` on the field is the smaller edit and the
-        // wrong one — three authenticated handlers return the same struct and
-        // the incidents guide publishes attribution as behaviour.
-        let public_updates: Vec<serde_json::Value> = updates
-            .iter()
-            .map(|u| {
-                serde_json::json!({
-                    "id": u.id,
-                    "status": u.status,
-                    "message": u.message,
-                    "created_at": u.created_at,
-                })
-            })
-            .collect();
+        for inc in &incidents {
+            let updates: Vec<IncidentUpdate> = sqlx::query_as(
+                "SELECT * FROM incident_updates WHERE incident_id = $1 ORDER BY created_at ASC LIMIT 500"
+            )
+            .bind(inc.id)
+            .fetch_all(&state.db).await
+            .unwrap_or_default();
 
-        incident_list.push(serde_json::json!({
-            "id": inc.id,
-            "title": inc.title,
-            "status": inc.status,
-            "severity": inc.severity,
-            "started_at": inc.started_at,
-            "resolved_at": inc.resolved_at,
-            "updates": public_updates,
-        }));
+            // Projected field by field, not serialized whole: `IncidentUpdate`
+            // carries `author_email`, and this endpoint answers with no login. The
+            // four fields below are exactly what `PublicStatusPage.tsx` declares.
+            // `#[serde(skip_serializing)]` on the field is the smaller edit and the
+            // wrong one — three authenticated handlers return the same struct and
+            // the incidents guide publishes attribution as behaviour.
+            let public_updates: Vec<serde_json::Value> = updates
+                .iter()
+                .map(|u| {
+                    serde_json::json!({
+                        "id": u.id,
+                        "status": u.status,
+                        "message": u.message,
+                        "created_at": u.created_at,
+                    })
+                })
+                .collect();
+
+            incident_list.push(serde_json::json!({
+                "id": inc.id,
+                "title": inc.title,
+                "status": inc.status,
+                "severity": inc.severity,
+                "started_at": inc.started_at,
+                "resolved_at": inc.resolved_at,
+                "updates": public_updates,
+            }));
+        }
     }
 
-    // Also include legacy monitor-based incidents (auto-detected downtime)
-    let auto_incidents: Vec<(Uuid, String, chrono::DateTime<chrono::Utc>, Option<chrono::DateTime<chrono::Utc>>, Option<String>)> = sqlx::query_as(
-        "SELECT i.id, m.name, i.started_at, i.resolved_at, i.cause \
-         FROM incidents i JOIN monitors m ON m.id = i.monitor_id \
-         WHERE i.started_at > NOW() - INTERVAL '7 days' \
-         ORDER BY i.started_at DESC LIMIT 20"
-    )
-    .fetch_all(&state.db).await
-    .unwrap_or_default();
+    // Also include legacy monitor-based incidents (auto-detected downtime) — scoped to the config's owner.
+    let auto_incidents: Vec<(Uuid, String, chrono::DateTime<chrono::Utc>, Option<chrono::DateTime<chrono::Utc>>, Option<String>)> = match owner_id {
+        Some(uid) => sqlx::query_as(
+            "SELECT i.id, m.name, i.started_at, i.resolved_at, i.cause \
+             FROM incidents i JOIN monitors m ON m.id = i.monitor_id \
+             WHERE m.user_id = $1 AND i.started_at > NOW() - INTERVAL '7 days' \
+             ORDER BY i.started_at DESC LIMIT 20"
+        )
+        .bind(uid)
+        .fetch_all(&state.db).await
+        .unwrap_or_default(),
+        None => Vec::new(),
+    };
 
     Ok(Json(serde_json::json!({
         "title": title,

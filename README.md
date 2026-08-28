@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 840 HTTP routes. 148 app templates. 3429 regression assertions. ~46MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 840 HTTP routes. 148 app templates. 3446 regression assertions. ~46MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -212,7 +212,7 @@ found, including what is still broken.
 
 ### Developer Experience
 - **CLI** — `dockpanel status`, `sites`, `apps`, `diagnose`, `export`, `apply`
-- **Infrastructure as Code** — Export/import server config as YAML. Terraform/Pulumi provider API with scoped IaC tokens.
+- **Infrastructure as Code** — Export/import server config as YAML. A Terraform/Pulumi-shaped provider API also exists for reading site/database inventory (see [FEATURES.md](FEATURES.md#withdrawn-claims) — its tokens don't yet authenticate).
 - **Smart Diagnostics** — 6 check categories with one-click fixes. Auto-optimization recommendations.
 - **File Manager** — Browse, edit, upload files from the browser.
 - **Command Palette** — Ctrl+K to navigate anywhere.
