@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.173.0.** The version stamp, the template count and every
+> **Reflects v2.173.1.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -402,7 +402,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Ninety-five suites, **3477 assertions**, all green at the current commit:
+survivable. Ninety-six suites, **3484 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -501,6 +501,7 @@ survivable. Ninety-five suites, **3477 assertions**, all green at the current co
 | `certificate-registry-pin-e2e.sh` | 127 |
 | `oauth-csrf-pin-e2e.sh` | 11 |
 | `rhel-site-creation-pin-e2e.sh` | 27 |
+| `graceful-shutdown-timeout-pin-e2e.sh` | 7 |
 
 **On a schedule, from outside** (`live-surfaces.yml`, daily). Every layer above
 runs because something changed, which is exactly why none of them could catch the

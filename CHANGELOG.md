@@ -4,6 +4,30 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.173.1]
+
+### API shutdown is now bounded — a stuck deploy no longer waits the full systemd kill window
+
+A real deploy on this box measured the API taking the full ~90s systemd
+default `TimeoutStopSec` (unset in our unit) to stop on SIGTERM, because
+`axum::serve(...).with_graceful_shutdown(...)` waits for every in-flight
+connection to close on its own — an open SSE stream or WebSocket terminal
+session blocks that indefinitely. Fixed by arming a hard watchdog inside
+`shutdown_signal()` once the signal has actually fired: it sleeps 20s, then
+forces the process to exit if the drain (plus the background-service
+shutdown and DB-pool close that follow it) hasn't finished on its own. A
+first fix attempt — wrapping the whole `axum::serve(...)
+.with_graceful_shutdown(...)` future in a `tokio::time::timeout` — was caught
+in review before shipping: that future runs for the server's entire uptime,
+so timing out the whole thing would have force-exited the process ~20s after
+every single boot, shutdown or not. The corrected version only starts its
+clock once the shutdown signal has resolved. Verified live on a throwaway
+VPS under the same unmodified systemd unit as production: SIGTERM with a
+held-open connection went from 90s to 20s exactly (confirmed via journal
+timestamps), while a normal shutdown with no open connections stayed a fast
+~2s, and the server was independently confirmed to stay up and healthy well
+past the 20s bound with no shutdown signal sent at all.
+
 ## [2.173.0]
 
 ### No site of any runtime — static, PHP, Node, Python, proxy — could ever be created on the RHEL family

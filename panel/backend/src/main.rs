@@ -623,6 +623,13 @@ async fn main() {
     tracing::info!("DockPanel API shut down gracefully");
 }
 
+/// Hard bound on the drain phase after a shutdown signal fires: a 78% cut from
+/// systemd's default 90s `TimeoutStopSec` (unset in our unit) — short enough to act
+/// as a real bound, long enough that an ordinary slow request (some agent HTTP calls
+/// carry up to a 60s timeout) isn't routinely cut off mid-response during a normal
+/// deploy.
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
+
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -645,4 +652,27 @@ async fn shutdown_signal() {
         _ = ctrl_c => tracing::info!("Received Ctrl+C, shutting down..."),
         _ = terminate => tracing::info!("Received SIGTERM, shutting down..."),
     }
+
+    // `with_graceful_shutdown` waits for every in-flight connection to close on its
+    // own — an open SSE stream or WebSocket terminal session blocks that
+    // indefinitely, and axum spawns each connection onto its own task that this
+    // signal resolving does not cancel, so a hung connection (or the unbounded
+    // `shutdown_db.close().await` that runs afterward) could stall the whole
+    // process past systemd's default 90s TimeoutStopSec. Arm a hard watchdog now
+    // that the signal has actually fired, so shutdown is bounded no matter what
+    // happens downstream of this point — a plain `tokio::time::timeout` around the
+    // whole serve future would be wrong here: that future runs for the server's
+    // entire lifetime, not just the drain phase, so timing it out would kill the
+    // process ~20s after every boot regardless of whether shutdown was ever
+    // requested.
+    tokio::spawn(async {
+        tokio::time::sleep(GRACEFUL_SHUTDOWN_TIMEOUT).await;
+        tracing::warn!(
+            "Graceful shutdown did not finish within {}s of the shutdown signal (a \
+             long-lived connection or a stalled cleanup step is likely still open); \
+             forcing exit",
+            GRACEFUL_SHUTDOWN_TIMEOUT.as_secs()
+        );
+        std::process::exit(1);
+    });
 }
