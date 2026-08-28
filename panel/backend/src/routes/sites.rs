@@ -560,6 +560,10 @@ pub async fn create(
         agent_body["app_command"] = serde_json::json!(cmd);
     }
     if let Some(ref php) = body.php_version {
+        // Backend can't know the target server's distro; this Debian-shaped string is
+        // a VERSION CARRIER, not a literal path — the agent resolves the real socket
+        // (Debian or RHEL's unversioned one) via services::pkg::resolve_php_fpm_socket
+        // before ever touching a filesystem path.
         agent_body["php_socket"] = serde_json::json!(format!("unix:/run/php/php{php}-fpm.sock"));
     }
     if let Some(ref preset) = body.php_preset {
@@ -830,6 +834,7 @@ pub async fn create(
                 }
             };
             let ssl_runtime = runtime.to_string();
+            // Version carrier, not a literal path — see the comment on the create-site call site.
             let ssl_php_socket = body.php_version.as_ref().map(|v| format!("unix:/run/php/php{v}-fpm.sock"));
             let ssl_proxy_port = body.proxy_port;
             let ssl_php_preset = body.php_preset.clone();
@@ -2752,6 +2757,7 @@ pub async fn clone_site(
         nginx_body["proxy_port"] = serde_json::json!(port);
     }
     if let Some(ref php) = source.php_version {
+        // Version carrier, not a literal path — see the comment on the create-site call site.
         nginx_body["php_socket"] = serde_json::json!(format!("unix:/run/php/php{php}-fpm.sock"));
     }
     if let Some(ref preset) = source.php_preset {
@@ -3769,6 +3775,7 @@ pub(crate) fn build_nginx_body(site: &crate::models::Site) -> serde_json::Value 
         body["custom_nginx"] = serde_json::json!(custom);
     }
     if let Some(ref php) = site.php_version {
+        // Version carrier, not a literal path — see the comment on the create-site call site.
         body["php_socket"] = serde_json::json!(format!("unix:/run/php/php{php}-fpm.sock"));
     }
     if site.ssl_enabled {

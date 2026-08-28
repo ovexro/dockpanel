@@ -134,8 +134,8 @@ async fn check_nginx() -> Vec<DiagnosticFinding> {
         }
     }
 
-    // 2. Check for sites-enabled configs without matching root directory
-    if let Ok(mut entries) = tokio::fs::read_dir("/etc/nginx/sites-enabled").await {
+    // 2. Check for site configs without matching root directory
+    if let Ok(mut entries) = tokio::fs::read_dir(super::nginx::sites_dir()).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();

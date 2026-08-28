@@ -65,24 +65,11 @@ async fn is_installed(version: &str) -> bool {
 
 /// Check if a PHP-FPM socket file exists for THIS version.
 ///
-/// The two families put it in different places, and only the Debian one was
-/// ever checked: RHEL's php-fpm listens on `/run/php-fpm/www.sock` — one
-/// socket, unversioned, like the package and the unit.
-///
-/// That unversioned path is why this takes the trouble to confirm the version
-/// first. A bare `exists()` on it would answer `true` for every version in the
-/// list the moment any PHP was running — the same collapse the caller above
-/// just had to undo, one layer down.
+/// Delegates to [`crate::services::pkg::resolve_php_fpm_socket`], the shared
+/// resolver that also backs `nginx.rs::put_site()` — so this route and site
+/// creation can never again disagree about which family's socket is real.
 async fn socket_exists(version: &str) -> bool {
-    if std::path::Path::new(&format!("/run/php/php{version}-fpm.sock")).exists() {
-        return true;
-    }
-    match crate::services::pkg::installed_php_version().await {
-        Some(actual) => {
-            actual == version && std::path::Path::new("/run/php-fpm/www.sock").exists()
-        }
-        None => false,
-    }
+    crate::services::pkg::resolve_php_fpm_socket(version).await.is_some()
 }
 
 /// Check if PHP-FPM service is active.
@@ -102,17 +89,20 @@ async fn list_versions() -> Json<PhpListResponse> {
 
     for &v in ALLOWED_VERSIONS {
         let installed = is_installed(v).await;
-        let fpm_running = if installed {
-            is_fpm_running(v).await || socket_exists(v).await
+        let real_socket = if installed {
+            crate::services::pkg::resolve_php_fpm_socket(v).await
         } else {
-            false
+            None
         };
+        let fpm_running = installed && (is_fpm_running(v).await || real_socket.is_some());
 
         versions.push(PhpVersion {
             version: v.to_string(),
             installed,
             fpm_running,
-            socket: format!("/run/php/php{v}-fpm.sock"),
+            // Falls back to the Debian-shaped guess when nothing real was found yet
+            // (not installed, or FPM hasn't opened its socket) — same as before.
+            socket: real_socket.unwrap_or_else(|| format!("/run/php/php{v}-fpm.sock")),
         });
     }
 

@@ -670,7 +670,8 @@ pub async fn deploy_or_update(
                 && existing_domain.is_some()
                 && existing_port.is_some()
                 && std::path::Path::new(&format!(
-                    "/etc/nginx/sites-enabled/{}.conf",
+                    "{}/{}.conf",
+                    super::nginx::sites_dir(),
                     existing_domain.as_deref().unwrap_or("")
                 ))
                 .exists();
@@ -755,7 +756,7 @@ pub async fn deploy_or_update(
             // both the old name and the new one.
             let mut tls_outcome = None;
             if let Some(d) = domain {
-                let config_path = format!("/etc/nginx/sites-enabled/{d}.conf");
+                let config_path = format!("{}/{d}.conf", super::nginx::sites_dir());
                 if !domain_unchanged || !std::path::Path::new(&config_path).exists() {
                     // Neither trigger can name a path that was already
                     // serving THIS domain's HTTPS — a changed domain has
@@ -825,7 +826,7 @@ pub async fn deploy_or_update(
 /// operator already asked for, and failing their rename because a config file
 /// was already gone would be worse than the leak. Each branch says what it did.
 pub async fn release_domain_artifacts(domain: &str, host_port: Option<u16>) {
-    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let config_path = format!("{}/{domain}.conf", super::nginx::sites_dir());
     if std::path::Path::new(&config_path).exists() {
         if crate::services::ownership::app_vhost(&config_path, host_port).may_delete() {
             std::fs::remove_file(&config_path).ok();

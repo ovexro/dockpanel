@@ -56,6 +56,56 @@ pub fn document_root_for(site_dir: &str, runtime: &str) -> String {
     }
 }
 
+/// The directory nginx actually reads site vhosts from, given which
+/// convention this box's nginx package uses.
+///
+/// Debian/Ubuntu's nginx package ships `sites-available`/`sites-enabled`, and
+/// `nginx.conf` includes only the latter. The RHEL family's nginx package has
+/// **neither directory** — its `nginx.conf` includes `conf.d/*.conf` instead —
+/// which `setup.sh::configure_nginx` already detects (`[ -d
+/// /etc/nginx/sites-enabled ]`) when it places the PANEL's own vhost. Every
+/// SITE vhost writer used to hardcode the Debian path independently instead of
+/// sharing that same detection, so on a real RHEL box `/etc/nginx/sites-enabled`
+/// never existed and every write failed `ENOENT` — no site of any runtime had
+/// ever been creatable there.
+///
+/// Split from [`sites_dir`] the same way [`vhost_target_between`] is split
+/// from [`vhost_target`]: the decision itself takes a plain bool, so a test
+/// can exercise both conventions without needing nginx installed at all — a
+/// bare `cargo test` runner has neither directory, which would make a version
+/// that probed the filesystem directly pass or fail by accident of the
+/// environment rather than by the code being right.
+pub fn sites_dir_for(uses_sites_enabled: bool) -> &'static str {
+    if uses_sites_enabled {
+        "/etc/nginx/sites-enabled"
+    } else {
+        "/etc/nginx/conf.d"
+    }
+}
+
+/// The directory nginx actually reads site vhosts from on THIS box.
+pub fn sites_dir() -> &'static str {
+    sites_dir_for(std::path::Path::new("/etc/nginx/sites-enabled").is_dir())
+}
+
+/// The directory a parked (disabled) site's vhost lives in, apart from the
+/// live one — or the SAME directory as [`sites_dir_for`] when this box's
+/// nginx has no separate one (the RHEL family). A caller scanning both
+/// directories for a reference must skip the second scan when this returns
+/// the same path as `sites_dir_for`, or it double-counts every match.
+pub fn parked_dir_for(uses_sites_enabled: bool) -> &'static str {
+    if uses_sites_enabled {
+        "/etc/nginx/sites-available"
+    } else {
+        sites_dir_for(false)
+    }
+}
+
+/// The directory a parked (disabled) site's vhost lives in on THIS box.
+pub fn parked_dir() -> &'static str {
+    parked_dir_for(std::path::Path::new("/etc/nginx/sites-enabled").is_dir())
+}
+
 /// Whether this box actually serves `domain` over HTTPS.
 ///
 /// The panel used to assume it always did, and printed `https://` links and
@@ -73,7 +123,7 @@ pub fn domain_is_https(domain: &str) -> bool {
     if let Some(tls) = crate::services::traefik::route_is_tls(domain) {
         return tls;
     }
-    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let config_path = format!("{}/{domain}.conf", sites_dir());
     let Ok(config) = std::fs::read_to_string(&config_path) else {
         return false;
     };
@@ -179,15 +229,36 @@ pub fn vhost_target_between(in_service: &str, parked: &str) -> VhostTarget {
     }
 }
 
+/// The in-service path and the parked path for a domain, given which
+/// convention this box's nginx package uses. Split out for the same
+/// filesystem-independence reason as [`sites_dir_for`].
+///
+/// The parked path only has to satisfy one property: nginx must never include
+/// it. On Debian that's `sites-available` (nginx only reads `sites-enabled`);
+/// the RHEL family has no such second directory, so the live and parked paths
+/// share `conf.d`, distinguished by the `.disabled` suffix — nginx's own
+/// `include conf.d/*.conf` cannot match a name ending in `.disabled`.
+pub fn vhost_paths_for(domain: &str, uses_sites_enabled: bool) -> (String, String) {
+    let dir = sites_dir_for(uses_sites_enabled);
+    if uses_sites_enabled {
+        (
+            format!("{dir}/{domain}.conf"),
+            format!("/etc/nginx/sites-available/{domain}.conf.disabled"),
+        )
+    } else {
+        (
+            format!("{dir}/{domain}.conf"),
+            format!("{dir}/{domain}.conf.disabled"),
+        )
+    }
+}
+
 /// The in-service path and the parked path for a domain, in that order.
 ///
 /// One spelling, because three call sites building these names by hand is how
 /// the parked file ended up with no reader outside the pair that wrote it.
 pub fn vhost_paths(domain: &str) -> (String, String) {
-    (
-        format!("/etc/nginx/sites-enabled/{domain}.conf"),
-        format!("/etc/nginx/sites-available/{domain}.conf.disabled"),
-    )
+    vhost_paths_for(domain, std::path::Path::new("/etc/nginx/sites-enabled").is_dir())
 }
 
 /// Where a freshly rendered vhost for `domain` must be written on this box.
@@ -349,7 +420,7 @@ pub fn patch_static_vhost(body: &str) -> Option<String> {
 /// so one unrelated broken vhost would otherwise make this revert edits it made
 /// correctly and blame itself for a fault it did not cause.
 pub async fn retrofit_static_denies() {
-    let dir = std::path::Path::new("/etc/nginx/sites-enabled");
+    let dir = std::path::Path::new(sites_dir());
     let Ok(entries) = std::fs::read_dir(dir) else { return };
 
     let mut candidates: Vec<(std::path::PathBuf, String, String)> = Vec::new();
@@ -775,6 +846,14 @@ pub fn render_site_config(
 }
 
 /// Write a per-site PHP-FPM pool config with resource limits.
+///
+/// Debian-shaped layout only (`/etc/php/{version}/fpm/pool.d`) — the RHEL
+/// family has no per-version pool directory to write into (one `php-fpm`
+/// package serves whichever stream is active), so this never runs there in
+/// practice: `nginx.rs::put_site()` only calls it for a socket path that
+/// resolved to the Debian shape in the first place. If that ever changes,
+/// this early return keeps a RHEL call a no-op (degrading to the shared
+/// pool) rather than an error.
 pub fn write_php_pool_config(
     domain: &str,
     php_version: &str,
@@ -783,7 +862,7 @@ pub fn write_php_pool_config(
 ) -> Result<(), String> {
     let pool_dir = format!("/etc/php/{php_version}/fpm/pool.d");
     if !std::path::Path::new(&pool_dir).exists() {
-        return Ok(()); // PHP not installed — skip silently
+        return Ok(()); // Debian pool.d tree absent (RHEL, or PHP not installed) — skip silently
     }
 
     // Sanitize domain for use as pool name (replace dots with underscores)
@@ -986,10 +1065,23 @@ mod tests {
     fn both_paths_come_from_one_function_so_they_cannot_drift() {
         // The writer that parks a body and every writer that has to notice it
         // read the same two names from here.
-        let (in_service, parked) = vhost_paths("c.example");
+        let (in_service, parked) = vhost_paths_for("c.example", true);
         assert!(in_service.ends_with("/sites-enabled/c.example.conf"));
         assert!(parked.ends_with("/sites-available/c.example.conf.disabled"));
         assert_ne!(in_service, parked);
+    }
+
+    #[test]
+    fn the_rhel_family_has_no_second_directory_so_both_paths_share_conf_d() {
+        // RHEL's nginx package ships neither sites-available nor sites-enabled;
+        // this is the branch that was missing entirely, and every site write on
+        // that family failed ENOENT until it existed.
+        let (in_service, parked) = vhost_paths_for("c.example", false);
+        assert_eq!(in_service, "/etc/nginx/conf.d/c.example.conf");
+        assert_eq!(parked, "/etc/nginx/conf.d/c.example.conf.disabled");
+        assert_ne!(in_service, parked);
+        // nginx's own `include conf.d/*.conf` cannot match the parked name.
+        assert!(!parked.ends_with(".conf"), "the parked name must fall outside nginx's own glob");
     }
 
     // ── static-vhost deny retrofit — s311 / v2.68.2 ─────────────────────

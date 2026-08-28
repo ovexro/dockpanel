@@ -320,7 +320,7 @@ pub fn app_vhost(path: &str, host_port: Option<u16>) -> Owner {
 pub fn cert_dir_in_use_elsewhere(domain: &str) -> bool {
     let needle = format!("/etc/dockpanel/ssl/{domain}/");
     let own = format!("{domain}.conf");
-    let Ok(entries) = std::fs::read_dir("/etc/nginx/sites-enabled") else {
+    let Ok(entries) = std::fs::read_dir(super::nginx::sites_dir()) else {
         // Cannot tell — assume shared. Refusing to delete a cert directory is
         // recoverable; deleting one another vhost still points at is not.
         return true;
@@ -357,9 +357,11 @@ pub fn registry_cert_in_use(alias: &str) -> bool {
     let needle = format!("{}/{alias}/", super::ssl::SSL_REGISTRY_DIR);
     registry_needle_in_use(
         &needle,
-        std::path::Path::new("/etc/nginx/sites-enabled"),
-        // The parent of the parked path `nginx::vhost_paths` spells.
-        std::path::Path::new("/etc/nginx/sites-available"),
+        std::path::Path::new(super::nginx::sites_dir()),
+        // The parent of the parked path `nginx::vhost_paths` spells — the SAME
+        // directory as the live one on the RHEL family, which has no second
+        // directory; `registry_needle_references` skips the double scan then.
+        std::path::Path::new(super::nginx::parked_dir()),
     )
 }
 
@@ -371,9 +373,8 @@ pub fn registry_cert_references(alias: &str) -> Result<Vec<String>, String> {
     let needle = format!("{}/{alias}/", super::ssl::SSL_REGISTRY_DIR);
     registry_needle_references(
         &needle,
-        std::path::Path::new("/etc/nginx/sites-enabled"),
-        // The parent of the parked path `nginx::vhost_paths` spells.
-        std::path::Path::new("/etc/nginx/sites-available"),
+        std::path::Path::new(super::nginx::sites_dir()),
+        std::path::Path::new(super::nginx::parked_dir()),
     )
 }
 
@@ -414,6 +415,12 @@ fn registry_needle_references(
                 found.push(entry.path().display().to_string());
             }
         }
+    }
+    // The RHEL family has no separate parked directory (see `nginx::parked_dir`)
+    // — live and parked are the same path there, and the live scan above
+    // already covered it. Scanning again would list every match twice.
+    if parked_dir == live_dir {
+        return Ok(found);
     }
     let parked = match std::fs::read_dir(parked_dir) {
         Ok(parked) => parked,
@@ -735,6 +742,22 @@ mod tests {
         assert!(registry_needle_in_use(&needle, &live, &parked));
         std::fs::remove_file(parked.join("b.example.com.parked")).unwrap();
         assert!(!registry_needle_in_use(&needle, &live, &parked));
+    }
+
+    #[test]
+    fn a_single_shared_directory_is_not_scanned_twice() {
+        // The RHEL family has no separate parked directory — live and parked
+        // are the SAME path (see `nginx::parked_dir`). Scanning it twice would
+        // list a matching file twice, which is exactly what this pins against.
+        let needle = format!("{}/wild/", super::super::ssl::SSL_REGISTRY_DIR);
+        let (_t, live, _parked) = tmptree();
+        std::fs::write(
+            live.join("a.example.com.conf"),
+            format!("server {{\n    ssl_certificate {needle}fullchain.pem;\n}}\n"),
+        )
+        .unwrap();
+        let refs = registry_needle_references(&needle, &live, &live).unwrap();
+        assert_eq!(refs.len(), 1, "a shared live/parked directory must be scanned once, not twice: {refs:?}");
     }
 
     #[test]

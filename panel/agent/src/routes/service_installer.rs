@@ -1370,7 +1370,7 @@ async fn uninstall_waf() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Uninstalling WAF...");
 
     // Remove WAF directives from all nginx configs
-    let sites_dir = "/etc/nginx/sites-enabled";
+    let sites_dir = crate::services::nginx::sites_dir();
     if let Ok(entries) = std::fs::read_dir(sites_dir) {
         for entry in entries.flatten() {
             if let Ok(content) = std::fs::read_to_string(entry.path()) {

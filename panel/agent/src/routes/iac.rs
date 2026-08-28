@@ -153,9 +153,9 @@ async fn export() -> Result<Json<ServerExport>, (StatusCode, Json<serde_json::Va
     }))
 }
 
-/// Scan /etc/nginx/sites-enabled/ and extract site configurations.
+/// Scan the box's nginx site-config directory and extract site configurations.
 fn scan_nginx_sites() -> Vec<SiteExport> {
-    let sites_dir = std::path::Path::new("/etc/nginx/sites-enabled");
+    let sites_dir = std::path::Path::new(crate::services::nginx::sites_dir());
     let dir = match std::fs::read_dir(sites_dir) {
         Ok(d) => d,
         Err(_) => return vec![],

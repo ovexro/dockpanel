@@ -546,7 +546,7 @@ async fn scan_security_headers() -> Vec<Finding> {
     let mut findings = Vec::new();
 
     // Get list of nginx sites
-    let sites_dir = "/etc/nginx/sites-enabled";
+    let sites_dir = super::nginx::sites_dir();
     let mut entries = match tokio::fs::read_dir(sites_dir).await {
         Ok(e) => e,
         Err(_) => return findings,

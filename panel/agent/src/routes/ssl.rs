@@ -282,7 +282,7 @@ async fn upload_cert(
         ))?;
 
     // Enable SSL in nginx — read existing config to determine runtime
-    let site_conf = format!("/etc/nginx/sites-enabled/{}.conf", body.domain);
+    let site_conf = format!("{}/{}.conf", crate::services::nginx::sites_dir(), body.domain);
     let content = tokio::fs::read_to_string(&site_conf).await.unwrap_or_default();
     let is_proxy = content.contains("proxy_pass");
 
@@ -672,7 +672,7 @@ async fn provision_dns01(
     // (wildcard certs are applied per-site by the backend)
     let mut canonical = None;
     if !body.wildcard {
-        let site_conf = format!("/etc/nginx/sites-enabled/{domain}.conf");
+        let site_conf = format!("{}/{domain}.conf", crate::services::nginx::sites_dir());
         if std::path::Path::new(&site_conf).exists() {
             let content = tokio::fs::read_to_string(&site_conf).await.unwrap_or_default();
             let is_proxy = content.contains("proxy_pass");

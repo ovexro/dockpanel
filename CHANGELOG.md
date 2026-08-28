@@ -4,6 +4,54 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.173.0]
+
+### No site of any runtime — static, PHP, Node, Python, proxy — could ever be created on the RHEL family
+
+A carried tech-debt note claimed PHP's own readiness check (`settle()`) was a
+false positive on RHEL. It was not — `php.rs`'s socket check already knew
+about RHEL's unversioned PHP-FPM socket (`/run/php-fpm/www.sock`, one per
+box, versus Debian's `/run/php/php{version}-fpm.sock`). The real gap was one
+layer downstream: `nginx.rs::put_site()` validated and existence-checked the
+PHP socket as a literal Debian-shaped path with no RHEL fallback, so creating
+a PHP site was refused with "PHP {version} is not installed, or its PHP-FPM
+service is not running" even when PHP-FPM was genuinely installed and
+running. Fixed by `services::pkg::resolve_php_fpm_socket()`, the single
+resolver both `php.rs::socket_exists()` and `nginx.rs::put_site()` now share.
+
+Fixing that exposed a second, much larger defect one step further in: nginx's
+own vhost directory. Debian ships `sites-available`/`sites-enabled`; the RHEL
+family's nginx package has **neither** — `nginx.conf` there includes only
+`conf.d/*.conf`. Roughly 25 call sites across a dozen files — the vhost
+writer itself, SSL provisioning, git-deploy cleanup, Docker Apps, the WAF
+uninstaller, the security scanner, diagnostics, and the Infrastructure-as-Code
+exporter — each hardcoded the Debian path independently, so every one of them
+failed on RHEL regardless of which runtime a site used. `setup.sh` already
+detected this correctly for the *panel's own* vhost; no site vhost writer
+shared that detection. Fixed by `services::nginx::sites_dir()`, mirroring
+`setup.sh`'s own `[ -d /etc/nginx/sites-enabled ]` check, with every call site
+now reading the one shared decision instead of its own copy. The
+disable/enable (park) mechanism follows the same fix: RHEL has no second
+directory to park a disabled vhost in, so the live and parked files now share
+`conf.d`, distinguished by a `.disabled` suffix nginx's own glob cannot match.
+
+**Live-fire proof, both defects, one real Rocky Linux 9.8 box, one command:**
+published v2.172.0 refused with "PHP 8.3 is not installed"; the socket fix
+alone got past that and failed with "Failed to write config: No such file or
+directory"; both fixes together created the site, wrote its vhost to
+`/etc/nginx/conf.d/phptest2.example.com.conf`, passed `nginx -t`, and served
+real PHP — `curl` returned `PHP_WORKS:8.3.33` with `X-Powered-By: PHP/8.3.33`
+over HTTP 200. Disable/enable re-driven on the same site: the parked file
+landed at `{domain}.conf.disabled` in the same directory, the maintenance
+page served after a reload settled, and PHP output returned unchanged after
+re-enabling.
+
+27 new pin assertions in `rhel-site-creation-pin-e2e.sh`, mutation-tested
+against the pre-fix source: 28 of the 31 new/changed arms went red, the 3
+staying green are deliberate positive controls (the pre-existing Debian-only
+per-site pool degrade, and `mail.rs`'s own pre-existing dual-path check for
+the panel's vhost, which already got this right).
+
 ## [2.172.0]
 
 ### Security — the uptime check's redirect-hop SSRF guard had the same check-then-reconnect gap v2.166.0 closed for the initial request

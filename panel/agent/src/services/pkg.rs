@@ -246,6 +246,32 @@ pub async fn installed_php_version() -> Option<String> {
     (!major.is_empty() && !minor.is_empty()).then(|| format!("{major}.{minor}"))
 }
 
+/// Resolve the real, currently-existing PHP-FPM socket for a version, across
+/// both families.
+///
+/// Debian ships one socket per version at a fixed, predictable path. The RHEL
+/// family ships exactly one unversioned socket for whichever stream is
+/// active — see [`installed_php_version`] for why RHEL can only ever have one
+/// live version at a time. Callers that build a nginx vhost or answer a
+/// status check used to assume the Debian path unconditionally, which made
+/// PHP sites unreachable on the RHEL family even though PHP-FPM was
+/// genuinely installed and running: `settle()`'s own socket check already
+/// knew about this split (see [`crate::routes::php::socket_exists`]), but
+/// `nginx.rs::put_site()` re-implemented a Debian-only existence check
+/// instead of sharing it. This is the single source of truth both now call.
+pub async fn resolve_php_fpm_socket(version: &str) -> Option<String> {
+    let debian = format!("/run/php/php{version}-fpm.sock");
+    if std::path::Path::new(&debian).exists() {
+        return Some(debian);
+    }
+    if installed_php_version().await.as_deref() == Some(version)
+        && std::path::Path::new("/run/php-fpm/www.sock").exists()
+    {
+        return Some("/run/php-fpm/www.sock".to_string());
+    }
+    None
+}
+
 /// The PHP module streams this box offers, newest first. Empty on apt boxes,
 /// where versions come from the archive rather than a stream.
 pub async fn php_streams() -> Vec<String> {

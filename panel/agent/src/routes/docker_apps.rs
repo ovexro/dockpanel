@@ -638,7 +638,7 @@ async fn unexpose_domain(domain: &str, host_port: Option<u16>, response: &mut se
     // The vhost is rendered from the same template a site's is, so the only
     // thing in it identifying the app is the `proxy_pass` to the port the
     // container published.
-    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let config_path = format!("{}/{domain}.conf", nginx::sites_dir());
     let mut removed_vhost = false;
     if std::path::Path::new(&config_path).exists() {
         if ownership::app_vhost(&config_path, host_port).may_delete() {

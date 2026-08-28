@@ -3956,7 +3956,7 @@ pub(crate) async fn health_check_port(port: u16, timeout_secs: u64) -> Result<()
 /// Swap the proxy_pass port in an existing nginx config file.
 /// Returns Ok(()) on success, Err on failure.
 pub(crate) fn swap_nginx_proxy_port(domain: &str, old_port: u16, new_port: u16) -> Result<(), String> {
-    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let config_path = format!("{}/{domain}.conf", super::nginx::sites_dir());
     let content = std::fs::read_to_string(&config_path)
         .map_err(|e| format!("Failed to read nginx config: {e}"))?;
 
@@ -4700,7 +4700,7 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
     // copies of it at once cannot corrupt anything. See `shares_persistent_state`.
     if let (Some(domain), Some(old_port)) = (&domain, old_port) {
         // Check that nginx config exists for this domain
-        let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+        let config_path = format!("{}/{domain}.conf", super::nginx::sites_dir());
         if !unmounted.is_empty() {
             tracing::info!(
                 "Not using blue-green for {name}: {} declared path(s) are unmounted and have \

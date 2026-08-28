@@ -140,30 +140,40 @@ async fn put_site(
         if let Some(ref socket) = config.php_socket {
             // Extract socket path (e.g., "unix:/run/php/php8.4-fpm.sock" → "/run/php/php8.4-fpm.sock")
             let socket_path = socket.strip_prefix("unix:").unwrap_or(socket);
-            if !std::path::Path::new(socket_path).exists() {
-                // Extract version for a helpful error message
-                let version = socket_path
-                    .strip_prefix("/run/php/php")
-                    .and_then(|s| s.strip_suffix("-fpm.sock"))
-                    .unwrap_or("unknown");
-                // Where this used to send people was a dead end. Settings →
-                // Services has one PHP tile with no version on it, and it
-                // reports installed if ANY version is — so on a box with 8.4
-                // the operator was told to go and install 8.3 on a screen
-                // showing "Installed / Uninstall" and no install button at all.
-                // The PHP Version control is the one place that can do this,
-                // and since v2.49.0 it offers the install itself.
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(NginxResponse {
-                        success: false,
-                        message: format!(
-                            "PHP {version} is not installed, or its PHP-FPM service is not \
-                             running. Install it from the PHP Version control on the site — \
-                             it offers any version this server does not have yet."
-                        ),
-                    }),
-                ));
+            // Extract version to resolve against, not to check literally: the panel
+            // always sends the Debian-shaped path above as the wire format, but the
+            // REAL socket on a RHEL-family host is a different, unversioned path
+            // (`/run/php-fpm/www.sock`) that this literal `Path::exists()` could
+            // never see — every PHP site creation on RHEL was rejected as "not
+            // installed" even with PHP-FPM correctly installed and running.
+            // `resolve_php_fpm_socket` is the same resolver `php.rs::settle()`
+            // already uses, so the two routes can't disagree on what's real.
+            let version = socket_path
+                .strip_prefix("/run/php/php")
+                .and_then(|s| s.strip_suffix("-fpm.sock"))
+                .unwrap_or("unknown");
+            match crate::services::pkg::resolve_php_fpm_socket(version).await {
+                Some(real_socket) => config.php_socket = Some(format!("unix:{real_socket}")),
+                None => {
+                    // Where this used to send people was a dead end. Settings →
+                    // Services has one PHP tile with no version on it, and it
+                    // reports installed if ANY version is — so on a box with 8.4
+                    // the operator was told to go and install 8.3 on a screen
+                    // showing "Installed / Uninstall" and no install button at all.
+                    // The PHP Version control is the one place that can do this,
+                    // and since v2.49.0 it offers the install itself.
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(NginxResponse {
+                            success: false,
+                            message: format!(
+                                "PHP {version} is not installed, or its PHP-FPM service is not \
+                                 running. Install it from the PHP Version control on the site — \
+                                 it offers any version this server does not have yet."
+                            ),
+                        }),
+                    ));
+                }
             }
         }
 
@@ -434,7 +444,7 @@ async fn delete_site(
         ));
     }
 
-    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let config_path = format!("{}/{domain}.conf", services::nginx::sites_dir());
 
     if !std::path::Path::new(&config_path).exists() {
         return Err((
@@ -612,7 +622,7 @@ async fn get_site(
         ));
     }
 
-    let config_path = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let config_path = format!("{}/{domain}.conf", services::nginx::sites_dir());
     let ssl_cert_path = format!("/etc/dockpanel/ssl/{domain}/fullchain.pem");
     let config_exists = std::path::Path::new(&config_path).exists();
     let ssl_enabled = std::path::Path::new(&ssl_cert_path).exists();
@@ -732,7 +742,7 @@ async fn rename_site(
         })));
     }
 
-    let old_conf = format!("/etc/nginx/sites-enabled/{old_domain}.conf");
+    let old_conf = format!("{}/{old_domain}.conf", services::nginx::sites_dir());
     if !std::path::Path::new(&old_conf).exists() {
         return Err((StatusCode::NOT_FOUND, Json(NginxResponse {
             success: false, message: format!("No nginx config for {old_domain}"),
@@ -792,7 +802,7 @@ async fn rename_site(
     // a legacy config predating the panel) is claimable, and was silently
     // overwritten here and then bare-deleted on rollback. The tenant's own
     // config came back; the operator's never existed anywhere else.
-    let new_conf = format!("/etc/nginx/sites-enabled/{new_domain}.conf");
+    let new_conf = format!("{}/{new_domain}.conf", services::nginx::sites_dir());
     let displaced = std::fs::read_to_string(&new_conf).ok();
     if let Some(ref bytes) = displaced {
         tracing::warn!(
@@ -1145,7 +1155,7 @@ async fn add_redirect(
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
 
     // Include in nginx site config if not already
-    let site_conf = format!("/etc/nginx/sites-enabled/{}.conf", body.domain);
+    let site_conf = format!("{}/{}.conf", services::nginx::sites_dir(), body.domain);
     let site_content = std::fs::read_to_string(&site_conf).unwrap_or_default();
     if !site_content.contains(&format!("include /etc/nginx/redirects/{}.conf", body.domain)) {
         let include_line = format!(
@@ -1339,7 +1349,7 @@ async fn password_protect(
     }
 
     // Include in site config if not already
-    let site_conf = format!("/etc/nginx/sites-enabled/{}.conf", body.domain);
+    let site_conf = format!("{}/{}.conf", services::nginx::sites_dir(), body.domain);
     let site_content = std::fs::read_to_string(&site_conf).unwrap_or_default();
     if !site_content.contains(&format!("include /etc/nginx/auth/{}.conf", body.domain)) {
         if let Some(pos) = site_content.rfind('}') {
@@ -1492,7 +1502,7 @@ async fn add_alias(
         return Err(api_err(StatusCode::BAD_REQUEST, "Invalid alias domain format"));
     }
 
-    let site_conf = format!("/etc/nginx/sites-enabled/{}.conf", body.domain);
+    let site_conf = format!("{}/{}.conf", services::nginx::sites_dir(), body.domain);
     let content = std::fs::read_to_string(&site_conf)
         .map_err(|_| api_err(StatusCode::NOT_FOUND, "Site config not found"))?;
 
@@ -1548,7 +1558,7 @@ async fn list_aliases(Path(domain): Path<String>) -> Result<Json<serde_json::Val
     if !super::is_valid_domain(&domain) {
         return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
     }
-    let site_conf = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let site_conf = format!("{}/{domain}.conf", services::nginx::sites_dir());
     let content = std::fs::read_to_string(&site_conf).unwrap_or_default();
 
     let mut aliases: Vec<String> = Vec::new();
@@ -1591,7 +1601,7 @@ async fn remove_alias(
         return Err(api_err(StatusCode::BAD_REQUEST, "Alias required"));
     }
 
-    let site_conf = format!("/etc/nginx/sites-enabled/{domain}.conf");
+    let site_conf = format!("{}/{domain}.conf", services::nginx::sites_dir());
     let content = std::fs::read_to_string(&site_conf)
         .map_err(|_| api_err(StatusCode::NOT_FOUND, "Site config not found"))?;
 
