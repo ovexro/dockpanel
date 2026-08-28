@@ -395,17 +395,75 @@ non_smtpd_milters = {OPENDKIM_MILTER}
     // Roundcube this product installs and points at ssl://<domain>:993. Where
     // the box already holds a Let's Encrypt certificate for the panel host,
     // serve that.
+    //
+    // Dovecot 2.4 (Debian 13's stock package, issue #124) rewrote the settings
+    // file with no compatibility mode: a pre-2.4 drop-in fails `dovecot -n`
+    // outright rather than degrading. Detected from the installed binary, not
+    // the distro — that is what actually decides which shape parses.
+    // `protocols = imap pop3 lmtp`, `mail_uid`/`mail_gid`/`first_valid_uid` and
+    // the `service { unix_listener ... }` blocks are unaffected (confirmed
+    // against the reporter's own working fix and doc.dovecot.org), so only the
+    // mail-storage path, the auth database blocks and the ssl_cert/ssl_key
+    // names branch on version.
+    let v24 = dovecot_needs_v24_syntax().await;
     let dovecot_tls = match panel_tls_paths() {
         Some((cert, key)) => {
             tracing::info!("Dovecot will serve the panel's Let's Encrypt certificate");
-            format!("ssl = required\nssl_cert = <{cert}\nssl_key = <{key}\n")
+            if v24 {
+                format!("ssl = required\nssl_server_cert_file = {cert}\nssl_server_key_file = {key}\n")
+            } else {
+                format!("ssl = required\nssl_cert = <{cert}\nssl_key = <{key}\n")
+            }
         }
         None => "ssl = required\n".to_string(),
     };
-    let dovecot_base = r#"# DockPanel Dovecot configuration
-protocols = imap pop3 lmtp
+    let dovecot_mail_and_auth = if v24 {
+        // Two Debian-package 2.4 defaults fight this setup and both are silent
+        // until LMTP actually tries to deliver — neither shows up in `doveconf -n`
+        // as anything obviously ours to fix, and neither affects IMAP login, which
+        // is why a login-only smoke test would have missed both (measured live,
+        // issue #124's own fresh Debian 13 box):
+        //   1. `/etc/dovecot/conf.d/20-lmtp.conf` ships
+        //      `protocol lmtp { auth_username_format = %{user | username | lower} }`
+        //      uncommented, live. It scopes ONLY to the lmtp protocol and wins over
+        //      any `auth_username_format` set inside passdb/userdb — so LMTP looked
+        //      up the bare local part ("testuser") against a file keyed by the full
+        //      address ("testuser@domain") and answered "user doesn't exist" even
+        //      though `doveadm user testuser@domain` (and IMAP login) resolved it
+        //      correctly. Overridden back to the identity filter for our protocol
+        //      block, loaded after 20-lmtp.conf by filename order.
+        //   2. 2.4 introduces `mail_inbox_path` as a setting separate from
+        //      `mail_path`, defaulting to a legacy `/var/mail/%{user}` mbox spool
+        //      the LMTP delivery agent has no permission to create. Blanked so
+        //      INBOX falls back to `mail_path` like every other mailbox, matching
+        //      the only behaviour that ever existed pre-2.4.
+        r#"mail_driver = maildir
+mail_path = /var/vmail/%{user | domain}/%{user | username}
+mail_inbox_path =
+mail_uid = 5000
+mail_gid = 5000
+first_valid_uid = 5000
 
-mail_location = maildir:/var/vmail/%d/%n
+# Authentication
+passdb passwd-file {
+  passwd_file_path = /etc/dovecot/users
+}
+
+userdb passwd-file {
+  passwd_file_path = /etc/dovecot/users
+  fields {
+    uid:default = 5000
+    gid:default = 5000
+    home:default = /var/vmail/%{user | domain}/%{user | username}
+  }
+}
+
+protocol lmtp {
+  auth_username_format = %{user}
+}
+"#
+    } else {
+        r#"mail_location = maildir:/var/vmail/%d/%n
 mail_uid = 5000
 mail_gid = 5000
 first_valid_uid = 5000
@@ -421,27 +479,34 @@ userdb {
   args = /etc/dovecot/users
   default_fields = uid=5000 gid=5000 home=/var/vmail/%d/%n
 }
+"#
+    };
+    let dovecot_base = format!(
+        r#"# DockPanel Dovecot configuration
+protocols = imap pop3 lmtp
 
+{dovecot_mail_and_auth}
 # LMTP for Postfix delivery
-service lmtp {
-  unix_listener /var/spool/postfix/private/dovecot-lmtp {
+service lmtp {{
+  unix_listener /var/spool/postfix/private/dovecot-lmtp {{
     mode = 0600
     user = postfix
     group = postfix
-  }
-}
+  }}
+}}
 
 # SASL auth for Postfix
-service auth {
-  unix_listener /var/spool/postfix/private/auth {
+service auth {{
+  unix_listener /var/spool/postfix/private/auth {{
     mode = 0660
     user = postfix
     group = postfix
-  }
-}
+  }}
+}}
 
 # SSL
-"#;
+"#
+    );
     let dovecot_config = format!("{dovecot_base}{dovecot_tls}");
 
     write_file_atomic("/etc/dovecot/conf.d/99-dockpanel.conf", &dovecot_config).await
@@ -568,6 +633,39 @@ async fn mail_uninstall() -> Result<Json<serde_json::Value>, ApiErr> {
     tracing::info!("Mail server uninstalled (user mail data preserved in /var/vmail)");
 
     Ok(ok("Mail server uninstalled. Note: /var/vmail (user mail data) was NOT removed. Delete it manually if no longer needed."))
+}
+
+/// Whether the installed Dovecot needs the 2.4+ settings syntax.
+///
+/// Dovecot 2.4 is a breaking rewrite of the config file format with no
+/// compatibility mode — `mail_location`, the `passdb`/`userdb` block shape and
+/// the `ssl_cert`/`ssl_key` names all changed, and a 2.3-style drop-in fails
+/// `dovecot -n` outright rather than degrading (issue #124: Debian 13 ships
+/// Dovecot 2.4.1 out of the box). `dovecot --version` needs no config to
+/// answer and the binary is already on disk by the time this runs (package
+/// install is step 1 of this handler), so this asks the box rather than
+/// assuming a version from the distro — same discipline as
+/// `dovecot_password_schemes` below, and for the same reason: a distro/version
+/// pairing nobody has hit yet is a matter of when, not if.
+///
+/// Any failure to determine the version (binary missing, unparseable output)
+/// defaults to `false` — the syntax every prior install has always used, and
+/// the one still correct on the overwhelming majority of boxes today.
+async fn dovecot_needs_v24_syntax() -> bool {
+    let Ok(out) = safe_command("dovecot").arg("--version").output().await else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    let version = String::from_utf8_lossy(&out.stdout);
+    let Some(first_token) = version.split_whitespace().next() else {
+        return false;
+    };
+    let mut parts = first_token.split('.');
+    let major: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    (major, minor) >= (2, 4)
 }
 
 /// The password schemes THIS box's Dovecot can verify, upper-cased.

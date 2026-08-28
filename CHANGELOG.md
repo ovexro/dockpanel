@@ -4,6 +4,42 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.167.0]
+
+### Fixed — mail server install failed on Dovecot 2.4+ distros (e.g. Debian 13)
+
+Dovecot 2.4 rewrote its settings file format with no compatibility mode: a
+2.3-style config fails `dovecot -n` outright rather than degrading. The
+generated `/etc/dovecot/conf.d/99-dockpanel.conf` used the pre-2.4 syntax
+unconditionally, so on any distro shipping Dovecot 2.4+ (Debian 13 ships
+2.4.1), the mail installer wrote a config Dovecot immediately refused to
+load, and the mail server never started (reported in #124).
+
+The installer now detects the installed Dovecot version (`dovecot
+--version`, asked fresh at install time rather than inferred from the
+distro) and generates the matching syntax: `mail_driver`/`mail_path` in
+place of `mail_location`, named `passdb passwd-file {}` / `userdb
+passwd-file {}` blocks with a `fields {}` sub-block in place of the old
+driver/args form, and `ssl_server_cert_file`/`ssl_server_key_file` in place
+of `ssl_cert`/`ssl_key`. Two further Dovecot 2.4 defaults that only surface
+during actual mail delivery (not at daemon start or IMAP login) are also
+overridden: the stock Debian package's `protocol lmtp { auth_username_format
+= %{user | username | lower} }` silently stripped the domain from the LMTP
+delivery lookup against a passwd-file keyed by full address, and the new
+`mail_inbox_path` setting defaults to a legacy `/var/mail` mbox spool the
+delivery agent has no permission to create.
+
+Verified end to end on a fresh Debian 13 box: reproduced the exact reported
+failure (`doveconf: Fatal: ... mail_location: Unknown setting`, exit code
+89) on the published v2.166.0 binary, then confirmed the fix on a second,
+untouched Debian 13 box driven entirely through the panel's own API — mail
+install, domain creation, mailbox creation, a real IMAP login, and a real
+SMTP-to-LMTP delivery landing in the mailbox's maildir.
+
+Distros still shipping Dovecot 2.3 (Debian 12, Ubuntu 24.04, Rocky/Alma 9
+as of this release) are unaffected — they continue to get the syntax that
+has always worked for them.
+
 ## [2.166.0]
 
 ### Security — a resolved-then-reconnected SSRF guard could be bypassed by DNS rebinding
