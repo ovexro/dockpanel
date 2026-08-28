@@ -4,7 +4,45 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [2.171.0]
+## [2.172.0]
+
+### Security — the uptime check's redirect-hop SSRF guard had the same check-then-reconnect gap v2.166.0 closed for the initial request
+
+v2.166.0 closed a DNS-rebind TOCTOU at 9 SSRF-guarded call sites by pinning
+each connection to the exact address `resolve_validated` had just approved —
+except the uptime HTTP check's redirect-following, which was tracked
+separately as harder: it still re-validated each hop with a synchronous,
+blocking check (`host_resolves_internal_blocking`) and then let reqwest
+resolve the hop's hostname AGAIN, independently, to make the actual
+connection. A DNS server that answered those two lookups differently — a
+rebind, or simply a low TTL between the redirect-policy decision and the
+connect — sailed through unseen, on any redirect a monitored URL could send.
+
+Closed by installing `helpers::ValidatingResolver`, a `reqwest::dns::Resolve`
+implementation, as the uptime check's client-wide DNS resolver. It shares its
+internal-address classifier (`resolve_all_validated`) with `resolve_validated`
+rather than duplicating the rule, so validation and resolution are now the
+SAME lookup for every hop, not two — there is nothing left to race. The
+existing synchronous per-hop check stays in place alongside it: a redirect
+`Location` that is already a literal internal IP never reaches a `Resolve`
+implementation at all (the connector dials a literal IP directly), so that
+check is still the only thing that catches that shape.
+
+### Tests
+
+`ssrf-url-guard-pin-e2e.sh` gains §E (8 → 12): the resolver is wired into the
+uptime client's builder, its own `resolve()` calls the real validator rather
+than a stub, the pre-existing synchronous check is still present alongside it
+(not replaced by it), and the validator is the shared core for both the
+initial request and every redirect hop rather than a second, divergable copy.
+Mutation-tested against the pre-fix file: 3 of the 4 new arms went red, and the
+"synchronous check still present" arm correctly stayed green in both states,
+confirming it isolates the ADDITION rather than testing something already
+true. Three new Rust unit tests exercise `ValidatingResolver` through the
+actual `reqwest::dns::Resolve` trait method on its literal-IP branch (no
+network I/O, so no CI flake risk) — the DNS-dependent branch is exercised live
+by the uptime check itself, same as `resolve_validated`/`pinned_client`,
+neither of which has a dedicated unit test for the same reason.
 
 ### Security — the public status page could serve one tenant's data to a visitor of another's
 

@@ -533,11 +533,13 @@ fn http_check_client_builder() -> reqwest::ClientBuilder {
         // resolve to an internal IP are rejected); an over-limit chain surfaces as a
         // network error (→ "down") rather than a spurious 3xx.
         //
-        // ⚠ This hop-by-hop check still has the same check-then-reconnect gap
-        // `resolve_validated` closes for the INITIAL request below — pinning
-        // every redirect hop needs a custom `reqwest::dns::Resolve` impl
-        // rather than the builder-level `.resolve()` used for the first
-        // request, and is tracked separately as a harder follow-up.
+        // This blocking check catches a literal-IP redirect target outright (hyper's
+        // connector dials a literal IP directly — it never asks a resolver at all, so a
+        // resolver-level guard alone cannot see it) and gives hostname redirects a fast,
+        // synchronous first pass. It does NOT by itself close the TOCTOU between "this
+        // hostname checked clean" and "reqwest connects", which is why `.dns_resolver`
+        // below installs `ValidatingResolver` as well: for a hostname redirect, THAT is
+        // the lookup reqwest actually connects with, so there is nothing left to race.
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() > 5 {
                 return attempt.error("too many redirects");
@@ -550,6 +552,10 @@ fn http_check_client_builder() -> reqwest::ClientBuilder {
                 attempt.follow()
             }
         }))
+        // Fallback resolver for every hostname reqwest resolves that ISN'T the initial
+        // request's (that one is pinned separately by `pinned_client`'s `.resolve()`
+        // override, checked first) — covers every redirect hop to a different host.
+        .dns_resolver(std::sync::Arc::new(crate::helpers::ValidatingResolver))
         .danger_accept_invalid_certs(false)
 }
 

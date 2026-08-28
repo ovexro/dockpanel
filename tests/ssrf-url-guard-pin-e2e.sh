@@ -27,6 +27,19 @@
 #       lane the HTTP guard alone left open.
 #   §D  CONTEXT. Arms green at BOTH tags so a harness measuring nothing cannot
 #       read as a pass.
+#   §E  s419 (v2.172.0): the uptime HTTP check's redirect-following policy used to
+#       re-validate each hop with a BLOCKING, synchronous check
+#       (`host_resolves_internal_blocking`) and then let reqwest resolve the
+#       hop's hostname AGAIN, independently, to actually connect — the same
+#       check-then-reconnect TOCTOU `resolve_validated`/`pinned_client` closed
+#       for the INITIAL request at v2.166.0, still open on every redirect hop.
+#       Closed by installing `ValidatingResolver` (a `reqwest::dns::Resolve`
+#       impl, `helpers.rs`) as the client's DNS resolver via `.dns_resolver`,
+#       sharing `resolve_all_validated` with `resolve_validated` so validation
+#       and connection are now the SAME lookup on every hop, not two. The
+#       synchronous blocking check stays — it is the only thing that catches a
+#       redirect `Location` that is already a literal internal IP, which never
+#       reaches a `Resolve` impl at all.
 
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
@@ -136,6 +149,56 @@ if [ "${MON_CALLS:-0}" -ge 2 ]; then
   ok "§C monitors.rs validates the tcp/ping host at create and update ($MON_CALLS calls)"
 else
   bad "§C monitors.rs write-time host validation missing ($MON_CALLS calls, want ≥2)"
+fi
+
+echo
+echo "§E  the uptime redirect-hop resolver closes the check-then-reconnect gap"
+
+# Isolate http_check_client_builder()'s own body (start of its signature to the
+# closing brace at column 0 that ends the function) rather than grepping the
+# whole file — a bare '.dns_resolver(' or 'ValidatingResolver' match anywhere
+# else (e.g. this very comment block) would be vacuous. `code()` strips
+# comments FIRST so the header text above can never satisfy the co-occurrence
+# it is itself describing.
+BUILDER_FN=$(code "$UPT" | perl -0777 -ne 'print $1 if /(fn http_check_client_builder\(\).*?\n\}\n)/s')
+if [ -z "$BUILDER_FN" ]; then
+  bad "§E could not isolate http_check_client_builder() body — function renamed or removed?"
+elif grep -qF '.dns_resolver(' <<< "$BUILDER_FN" && grep -qF 'ValidatingResolver' <<< "$BUILDER_FN"; then
+  ok "§E http_check_client_builder() installs .dns_resolver(...ValidatingResolver...)"
+else
+  bad "§E http_check_client_builder() no longer wires a custom dns_resolver"
+fi
+# Positive control: the pre-existing synchronous blocking check is STILL in the
+# SAME function — proves the resolver was ADDED, not swapped in to replace the
+# only thing that can catch a literal-IP redirect target (a Resolve impl is
+# never consulted for one; hyper's connector dials a literal IP directly).
+if grep -qF 'host_resolves_internal_blocking' <<< "$BUILDER_FN"; then
+  ok "§E http_check_client_builder() still runs the synchronous per-hop block too"
+else
+  bad "§E the synchronous redirect-hop check is gone from http_check_client_builder()"
+fi
+
+# ValidatingResolver's OWN resolve() body must call the real validator, not a
+# stub — isolate the impl block specifically, not the whole file.
+RESOLVER_IMPL=$(code "$HELPERS" | perl -0777 -ne 'print $1 if /(impl reqwest::dns::Resolve for ValidatingResolver \{.*?\n\}\n)/s')
+if [ -z "$RESOLVER_IMPL" ]; then
+  bad "§E could not isolate ValidatingResolver's Resolve impl — renamed or removed?"
+elif grep -qF 'resolve_all_validated(' <<< "$RESOLVER_IMPL"; then
+  ok "§E ValidatingResolver::resolve() calls the real validator, not a stub"
+else
+  bad "§E ValidatingResolver::resolve() no longer calls resolve_all_validated"
+fi
+
+# The structural security property: the redirect-hop guard and the
+# INITIAL-request guard (resolve_validated, already pinned by §B/§C's siblings)
+# share ONE classifier rather than two that could quietly drift apart — count
+# resolve_all_validated( call sites across the whole file; both callers plus
+# its own `fn` line is 3.
+CALLS=$(grep -coF 'resolve_all_validated(' <<< "$(code "$HELPERS")")
+if [ "${CALLS:-0}" -ge 3 ]; then
+  ok "§E resolve_all_validated is the SHARED core for both the initial request and every redirect hop ($CALLS occurrences)"
+else
+  bad "§E resolve_all_validated is not shared by both guards ($CALLS occurrences, want ≥3 — declaration + 2 callers)"
 fi
 
 echo

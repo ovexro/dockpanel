@@ -918,6 +918,41 @@ pub async fn validate_host_not_internal(host: &str, port: u16) -> Result<(), Str
     Ok(())
 }
 
+/// Resolve `host` and return EVERY address DNS answers, after rejecting the
+/// whole name if any resolved address is internal (split-horizon DNS) — the
+/// shared core `resolve_validated` and [`ValidatingResolver`] both build on,
+/// so the internal-address rule lives in exactly one place. Port-agnostic:
+/// hostname→address resolution never depends on the port, so this always
+/// looks up port 0 and lets callers attach the port that matters to them —
+/// `resolve_validated` reattaches the real one; `ValidatingResolver` cannot,
+/// since `reqwest::dns::Resolve::resolve` receives a bare `Name`, and per its
+/// own contract a `SocketAddr` with port 0 is fixed up to the request's real
+/// port before anything connects.
+async fn resolve_all_validated(host: &str) -> Result<Vec<std::net::SocketAddr>, String> {
+    let bare = host.trim_matches(|c| c == '[' || c == ']');
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        if ip_is_internal(ip) {
+            return Err("points to a private/internal address".to_string());
+        }
+        return Ok(vec![std::net::SocketAddr::new(ip, 0)]);
+    }
+    let lower = bare.to_ascii_lowercase();
+    if lower == "localhost" || lower.ends_with(".localhost") {
+        return Err("points to a local address".to_string());
+    }
+    let addrs: Vec<std::net::SocketAddr> = match tokio::net::lookup_host((bare, 0)).await {
+        Ok(iter) => iter.collect(),
+        Err(_) => return Err("hostname could not be resolved".to_string()),
+    };
+    if addrs.is_empty() {
+        return Err("hostname could not be resolved".to_string());
+    }
+    if addrs.iter().any(|a| ip_is_internal(a.ip())) {
+        return Err("resolves to a private/internal address".to_string());
+    }
+    Ok(addrs)
+}
+
 /// Resolve `host:port`, checked the same way `validate_url_not_internal`/
 /// `validate_host_not_internal` already check it, and return the ONE address
 /// that check approved — so a caller can dial THAT address instead of asking
@@ -936,28 +971,44 @@ pub async fn validate_host_not_internal(host: &str, port: u16) -> Result<(), Str
 /// semantics (split-horizon DNS) before picking one to hand back — narrowing
 /// to the first address ONLY happens after every address has been cleared.
 pub async fn resolve_validated(host: &str, port: u16) -> Result<std::net::SocketAddr, String> {
-    let bare = host.trim_matches(|c| c == '[' || c == ']');
-    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
-        if ip_is_internal(ip) {
-            return Err("points to a private/internal address".to_string());
-        }
-        return Ok(std::net::SocketAddr::new(ip, port));
+    let addrs = resolve_all_validated(host).await?;
+    Ok(std::net::SocketAddr::new(addrs[0].ip(), port))
+}
+
+/// A `reqwest::dns::Resolve` impl that closes the check-then-reconnect gap
+/// [`resolve_validated`]/[`pinned_client`] cannot: those pin ONE hostname (the
+/// initial request's), so a redirect to a DIFFERENT host still falls through to
+/// reqwest's own resolver, which re-resolves independently of whatever guard
+/// decided to follow the redirect — a rebind between that decision and the
+/// actual connect sails through unseen, because the two never shared a lookup.
+///
+/// Installed via `ClientBuilder::dns_resolver`, this becomes the resolver
+/// reqwest calls to make EVERY connection, including a redirect hop — the
+/// per-domain `.resolve()` override `pinned_client` also applies is checked
+/// first and this is the fallback for every other name, so validation and
+/// resolution are now the same lookup for every hop, not just the first.
+///
+/// Does NOT replace `host_resolves_internal_blocking` in a redirect-policy
+/// closure: a `Location` that is already a literal IP never reaches a `Resolve`
+/// impl at all (hyper's connector dials a literal IP directly), so the
+/// synchronous host check is still what catches that case. This closes the
+/// narrower gap the other cannot — the TOCTOU on a hostname-based hop.
+pub struct ValidatingResolver;
+
+impl reqwest::dns::Resolve for ValidatingResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            match resolve_all_validated(&host).await {
+                Ok(addrs) => {
+                    let iter: reqwest::dns::Addrs = Box::new(addrs.into_iter());
+                    Ok(iter)
+                }
+                Err(e) => Err(Box::new(std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))
+                    as Box<dyn std::error::Error + Send + Sync>),
+            }
+        })
     }
-    let lower = bare.to_ascii_lowercase();
-    if lower == "localhost" || lower.ends_with(".localhost") {
-        return Err("points to a local address".to_string());
-    }
-    let addrs: Vec<std::net::SocketAddr> = match tokio::net::lookup_host((bare, port)).await {
-        Ok(iter) => iter.collect(),
-        Err(_) => return Err("hostname could not be resolved".to_string()),
-    };
-    if addrs.is_empty() {
-        return Err("hostname could not be resolved".to_string());
-    }
-    if addrs.iter().any(|a| ip_is_internal(a.ip())) {
-        return Err("resolves to a private/internal address".to_string());
-    }
-    Ok(addrs[0])
 }
 
 /// Build a `reqwest::Client` whose DNS resolution for `host` is hard-pinned to
@@ -1731,6 +1782,52 @@ mod ssrf_tests {
     fn v6_public_allowed() {
         assert!(!v6_is_internal("2606:4700:4700::1111".parse::<Ipv6Addr>().unwrap()));
         assert!(!ip_is_internal("2001:4860:4860::8888".parse::<std::net::IpAddr>().unwrap()));
+    }
+}
+
+#[cfg(test)]
+mod validating_resolver_tests {
+    // Exercises `ValidatingResolver` through the actual `reqwest::dns::Resolve`
+    // trait method reqwest calls on every hop — not the classifier functions
+    // directly — so a future refactor that disconnects the impl from
+    // `resolve_all_validated` fails here even if `ip_is_internal` itself is
+    // untouched. Scoped to the literal-IP branch (no `tokio::net::lookup_host`
+    // call), which needs no network and cannot flake in CI — the DNS-dependent
+    // branch is exercised live by the uptime check itself, same as
+    // `resolve_validated`/`pinned_client` above, neither of which has a unit
+    // test for the same reason.
+    use super::ValidatingResolver;
+    use reqwest::dns::{Name, Resolve};
+    use std::str::FromStr;
+
+    async fn resolve(host: &str) -> Result<Vec<std::net::IpAddr>, ()> {
+        let name = Name::from_str(host).map_err(|_| ())?;
+        ValidatingResolver
+            .resolve(name)
+            .await
+            .map(|addrs| addrs.map(|a| a.ip()).collect())
+            .map_err(|_| ())
+    }
+
+    #[tokio::test]
+    async fn a_literal_internal_ip_redirect_target_is_refused() {
+        for host in ["127.0.0.1", "10.1.2.3", "192.168.1.1", "169.254.169.254", "100.64.0.1", "::1", "fe80::1"] {
+            assert!(resolve(host).await.is_err(), "{host} must be refused, not handed to reqwest to connect");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_literal_public_ip_redirect_target_resolves_to_itself() {
+        for host in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
+            let addrs = resolve(host).await.unwrap_or_else(|_| panic!("{host} must resolve"));
+            assert_eq!(addrs, vec![host.parse::<std::net::IpAddr>().unwrap()]);
+        }
+    }
+
+    #[tokio::test]
+    async fn localhost_is_refused_by_name_before_any_lookup() {
+        assert!(resolve("localhost").await.is_err());
+        assert!(resolve("foo.localhost").await.is_err());
     }
 }
 
