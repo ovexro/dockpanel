@@ -1611,8 +1611,20 @@ async fn stack_action(
     }
 
     // Read the published port while the containers still exist — it is what
-    // proves the vhost is this stack's before anything deletes it.
-    let stack_port = stack_containers.iter().find_map(|a| a.port);
+    // proves the vhost is this stack's before anything deletes it. Sourced
+    // from `inspect_container`'s HostConfig (via `inspect_host_port`), the
+    // same primitive `removal_identity` already uses for single-app removal —
+    // NOT `DeployedApp.port` (`stack_containers`' own field), which reflects
+    // Docker's LIVE container listing and reads empty the moment a stack is
+    // stopped ("parked"), permanently stranding its vhost and certificate the
+    // first time `remove` runs against it.
+    let mut stack_port = None;
+    for app in &stack_containers {
+        if let Some(p) = docker_apps::inspect_host_port(&app.container_id).await {
+            stack_port = Some(p);
+            break;
+        }
+    }
 
     let mut results = Vec::new();
     for app in &stack_containers {

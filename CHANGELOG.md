@@ -4,6 +4,26 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.170.0]
+
+### Fixed — a parked (stopped) Compose stack's vhost and certificate could never be cleaned up
+
+`unexpose_domain`'s ownership check needs a container's published port to
+prove a vhost is still fronting it before deleting the vhost and its
+certificate. Single-app removal (`removal_identity`) has always sourced this
+correctly — a fresh `inspect_container` call, reading the port from
+`HostConfig.PortBindings`, which survives a stop. Stack removal took a
+different, weaker path: `DeployedApp.port`, sourced from Docker's
+`list_containers` API, which only reports a *live* (currently bound) port —
+empty the moment a stack is stopped ("parked"). A parked-then-removed stack
+could therefore never prove ownership of its own vhost, and the vhost and
+certificate were left behind permanently, with no later panel action able to
+recover them (the container that would have proven it is by then gone too).
+
+Added `docker_apps::inspect_host_port`, the same `HostConfig`-based lookup
+`removal_identity` already used, callable from just a container id. Stack
+removal now calls it instead of relying on the live listing.
+
 ## [2.169.0]
 
 ### Security — a git deploy's `repo_url` had no SSRF guard at all

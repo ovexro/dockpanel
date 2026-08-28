@@ -273,6 +273,27 @@ else
   bad "B3 app removal deletes /var/lib/dockpanel/apps/{name} on an unvalidated label"
 fi
 
+# B2c/B2d — s417: stack removal used to derive its ownership proof from
+# `DeployedApp.port` (`list_deployed_apps`'s own field), read from Docker's
+# LIVE container listing — empty for a STOPPED ("parked") container, so a
+# parked-then-removed stack could never prove its vhost was its own, and the
+# vhost + certificate were stranded forever, unrecoverable by any later panel
+# action (the container that would have proven it is by then gone too).
+# `removal_identity` (single-app removal, just above) already solved this
+# correctly, from `inspect_container`'s HostConfig; these arms are the same
+# capability reaching the stack path.
+SA=$(fnbody "$AR" "stack_action")
+if derives "$SA" 'inspect_host_port'; then
+  ok "B2c stack removal derives its port proof from inspect_container's HostConfig, not the live listing"
+else
+  bad "B2c stack removal cannot prove ownership of a parked (stopped) stack's vhost — it is stranded forever"
+fi
+if derives "$SA" 'unexpose_domain\([^;]*stack_port'; then
+  ok "B2d that proof actually reaches the vhost-deletion call, not dropped on the floor"
+else
+  bad "B2d stack_port is computed but never reaches unexpose_domain"
+fi
+
 # The proof itself must come from the container's MOUNTS, not from its name.
 AS=$(subj "$APPS_SVC") || AS=""
 RI=$(fnbody "$AS" "removal_identity")

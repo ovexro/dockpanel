@@ -4000,6 +4000,22 @@ pub(crate) fn extract_host_port(
         .ok()
 }
 
+/// The same port [`extract_host_port`] reads for [`removal_identity`], for a
+/// caller that only has a container id — a fresh `inspect_container`, so it
+/// works whether the container is running or stopped. `list_deployed_apps`'s
+/// own `port` field cannot substitute here: it is read from Docker's
+/// `list_containers` API, which only reports a LIVE (currently bound) port —
+/// empty for a stopped ("parked") container even though its HostConfig still
+/// carries the binding. `None` here means either the container has no
+/// recorded binding or has been removed entirely (nothing left to inspect);
+/// a caller proving ownership of a vhost must treat both the same way
+/// `removal_identity` already does — refuse to delete rather than guess.
+pub(crate) async fn inspect_host_port(container_id: &str) -> Option<u16> {
+    let docker = Docker::connect_with_local_defaults().ok()?;
+    let info = docker.inspect_container(container_id, None).await.ok()?;
+    extract_host_port(info.host_config.as_ref()?)
+}
+
 /// The mount destinations this container already has, read from BOTH spellings.
 ///
 /// A container may express a mount as a `Binds` entry (`"src:dst[:opts]"`) or as a
