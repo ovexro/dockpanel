@@ -4,6 +4,24 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.178.0]
+
+### Two one-click app templates that could never work under this panel's own security policy, withdrawn
+
+A user reported Dozzle crash-looping with `Could not connect to any Docker Engine` on every
+deploy (#125). Root cause: Dozzle needs the host Docker socket for its entire purpose, and
+`deploy_app` deliberately never mounts it — a prior decision, already recorded in source,
+because it's a full host-escape vector regardless of who is allowed to trigger the deploy.
+Checking found Portainer has the identical defect: its web UI starts and serves a login page
+fine with no socket, then every real feature behind it silently fails, which is why the
+weekly Template Census's start/respond check never caught it the way Dozzle's crash-loop did.
+The same policy is enforced independently at the Compose-stack level too — both the backend's
+YAML validation and the agent's resolved-path check block a socket mount there as well, plus
+host-root and a few other sensitive paths — so there is no supported way to run a
+Docker-socket-dependent tool through DockPanel at all. Both templates are withdrawn from the
+catalogue (148 → 146) rather than left broken, or granted an escape hatch that would reverse a
+deliberate security decision.
+
 ## [2.177.0]
 
 ### A second dead column rode along with the one already found and fixed on the same table

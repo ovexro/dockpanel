@@ -217,9 +217,6 @@ const appIcons: Record<string, ReactNode> = {
   adminer: (
     <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#22c55e" width="128" height="128"/><path fill="#fff" d="M64 20c-22 0-40 7.2-40 16v56c0 8.8 18 16 40 16s40-7.2 40-16V36c0-8.8-18-16-40-16z" opacity=".15"/><ellipse fill="#fff" cx="64" cy="36" rx="36" ry="12" opacity=".9"/><path d="M28 48c0 6.6 16.1 12 36 12s36-5.4 36-12" opacity=".6" stroke="#fff" strokeWidth="2" fill="none"/><path d="M28 68c0 6.6 16.1 12 36 12s36-5.4 36-12" opacity=".4" stroke="#fff" strokeWidth="2" fill="none"/><path fill="none" stroke="#fff" strokeWidth="2" opacity=".3" d="M28 36v56M100 36v56"/></svg>
   ),
-  portainer: (
-    <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#13bef9" width="128" height="128"/><path fill="#fff" d="M40 36h20v20H40zm24 0h20v20H64zm-24 24h20v20H40zm24 0h20v20H64zm-24 24h20v20H40z" opacity=".9"/><path fill="#fff" d="M64 84h20v20H64z" opacity=".5"/><rect fill="#fff" x="88" y="60" width="20" height="20" opacity=".3"/></svg>
-  ),
   pgadmin: (
     <svg className="w-6 h-6" viewBox="0 0 128 128"><rect rx="16" fill="#336791" width="128" height="128"/><path fill="#fff" d="M64 18c-18.8 0-34 13.6-34 30.4 0 10.8 6.4 20.2 16 25.6V96c0 4.4 3.6 8 8 8h20c4.4 0 8-3.6 8-8V74c9.6-5.4 16-14.8 16-25.6C98 31.6 82.8 18 64 18z" opacity=".2"/><path fill="#fff" d="M64 24c-15.2 0-27.6 11-27.6 24.6 0 9.4 5.8 17.6 14.4 21.6l2.2 1V88h22V71.2l2.2-1c8.6-4 14.4-12.2 14.4-21.6C91.6 35 79.2 24 64 24zM56 54a5 5 0 110-10 5 5 0 010 10zm16 0a5 5 0 110-10 5 5 0 010 10z" opacity=".9"/><path fill="#fff" d="M53 88h22v6H53z" opacity=".6"/><circle fill="#fff" cx="92" cy="28" r="6" opacity=".7"/><path fill="#fff" d="M92 34v16" stroke="#fff" strokeWidth="3" opacity=".5"/><path fill="#fff" d="M84 42h16" stroke="#fff" strokeWidth="3" opacity=".5"/></svg>
   ),

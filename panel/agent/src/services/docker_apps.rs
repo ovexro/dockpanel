@@ -693,17 +693,13 @@ static TEMPLATES: &[AppTemplateDef] = &[
         env_vars: &[],
         volumes: &["/app/data"],
     },
-    AppTemplateDef {
-        id: "portainer",
-        name: "Portainer",
-        description: "Docker management UI for containers, images, volumes, and networks",
-        category: "Tools",
-        image: "portainer/portainer-ce:lts",
-        default_port: 9443,
-        container_port: "9443/tcp",
-        env_vars: &[],
-        volumes: &["/data"],
-    },
+    // Portainer withdrawn (v2.178.0) — same defect as Dozzle above: it needs the
+    // host Docker socket to do anything (containers/images/volumes/networks
+    // ARE the product) and `deploy_app` deliberately never mounts it. Unlike
+    // Dozzle it does not crash-loop — its web UI starts and serves a login page
+    // fine with no socket, then every real feature behind it fails — so it was
+    // never caught by the weekly Template Census's start/respond check. See
+    // FEATURES.md §Withdrawn Claims.
     AppTemplateDef {
         id: "n8n",
         name: "n8n",
@@ -1725,17 +1721,10 @@ static TEMPLATES: &[AppTemplateDef] = &[
         volumes: &["/config"],
     },
     // ─── Monitoring (additional) ────────────────────────────────
-    AppTemplateDef {
-        id: "dozzle",
-        name: "Dozzle",
-        description: "Real-time Docker container log viewer with a clean web interface",
-        category: "Monitoring",
-        image: "amir20/dozzle:latest",
-        default_port: 9999,
-        container_port: "8080/tcp",
-        env_vars: &[],
-        volumes: &[],
-    },
+    // Dozzle withdrawn (v2.178.0) — see CENSUS_KNOWN_BROKEN's former entry and
+    // FEATURES.md §Withdrawn Claims. It fatals with "Could not connect to any
+    // Docker Engine" on every deployment, because it needs the host Docker
+    // socket and `deploy_app` deliberately never mounts it (host escape).
     AppTemplateDef {
         id: "glances",
         name: "Glances",
@@ -3585,10 +3574,14 @@ pub async fn deploy_app(
         binds.push(format!("{resolved_str}:{vol}"));
     }
 
-    // NOTE: Portainer Docker socket auto-mount was removed for security.
-    // Mounting the host Docker socket gives full host escape capabilities.
-    // If Portainer needs Docker access, the admin should configure it separately
-    // via docker-compose or manual volume mounts outside of DockPanel.
+    // NOTE: the one-click catalogue deliberately never mounts the host Docker
+    // socket for ANY template — it gives whatever runs with it full host escape
+    // capabilities, not just Docker visibility, regardless of who was allowed to
+    // trigger the deploy. Portainer and Dozzle both needed it for their core
+    // purpose and both were withdrawn from the catalogue rather than granted it
+    // (v2.178.0; see FEATURES.md §Withdrawn Claims). An admin who wants a
+    // socket-mounted tool anyway can still build one via Docker → Create Stack,
+    // outside this sandboxing, with full awareness of the tradeoff.
 
     let mut host_config = bollard::service::HostConfig {
         port_bindings: Some(port_bindings),
@@ -6489,11 +6482,6 @@ mod tests {
          nothing answers — and correcting the port alone would only expose the \
          second failure, which is that a frappe bench needs MariaDB, Redis and a \
          site that only `bench new-site` creates",
-        "dozzle | exits with `Could not connect to any Docker Engine`. It reads the \
-         Docker socket, and `deploy_app` deliberately does not mount it — that \
-         auto-mount was REMOVED for security, because it is a host escape. So this \
-         template cannot work under the panel's own policy and never could; \
-         withdrawal is the honest end state",
         "authelia | prints its help and exits 0, the same shape as the templates \
          the command table fixes. §6 of app-template-images-pin-e2e.sh explains \
          why a command is the wrong instrument here: with one it would sit \

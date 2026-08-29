@@ -129,7 +129,6 @@ declare -A LIVE=(
   [mattermost]='mattermost/mattermost-team-edition:release-11'
   [metabase]='metabase/metabase:v0.58-lts'
   [outline]='outlinewiki/outline:1.9'
-  [portainer]='portainer/portainer-ce:lts'
   [vaultwarden]='vaultwarden/server:1.37.1'
   [keycloak]='quay.io/keycloak/keycloak:26.7'
   [woodpecker]='woodpeckerci/woodpecker-server:v3'
@@ -145,14 +144,19 @@ done
 [ "$missing" -eq 0 ] && ok "all ${#LIVE[@]} replacement references are present"
 
 echo
-echo "§4 the four templates with no maintained official image stay withdrawn"
+echo "§4 the six withdrawn templates stay withdrawn"
 
 # Withdrawn rather than repointed: the only pullable candidates were a frozen
 # vendor archive (bitnamilegacy, unpatched), a personal-account rebuild, or an
 # amd64-only third-party image — and this panel publishes an arm64 build.
-for id in discourse zabbix strapi stable-diffusion-webui; do
+#
+# dozzle and portainer (v2.178.0) are a DIFFERENT withdrawal shape: their images
+# resolve fine, but both need the host Docker socket for their core purpose and
+# `deploy_app` deliberately never mounts it (a host-escape vector regardless of
+# who is allowed to trigger the deploy) — see FEATURES.md §Withdrawn Claims.
+for id in discourse zabbix strapi stable-diffusion-webui dozzle portainer; do
   if grep -qF "id:\"$id\"" <<<"$FLAT"; then
-    bad "template '$id' is back in the catalogue — no maintained official image exists for it"
+    bad "template '$id' is back in the catalogue — it was withdrawn and should stay withdrawn"
   else
     ok "'$id' withdrawn"
   fi
@@ -161,7 +165,7 @@ done
 # A withdrawn template whose icon survives is a severed pair: dead code keyed by
 # an id nothing can render.
 orphan=0
-for id in strapi discourse; do
+for id in strapi discourse portainer; do
   if [ -f "$ICONS" ] && grep -qE "^  $id: \(" "$ICONS"; then
     bad "$ICONS still carries an icon for the withdrawn '$id'"
     orphan=1
