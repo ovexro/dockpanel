@@ -4,6 +4,36 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.175.0]
+
+### Installing PowerDNS on a second server silently overwrote the first server's credentials
+
+`install_powerdns` is per-server (the same class as Redis, Fail2Ban and
+Cloudflare Tunnel), but the API URL and key it saves live in the panel's
+global settings — nothing recorded which server they belonged to. Installing
+PowerDNS on a second managed server overwrote the first server's saved
+credentials with no warning, silently pointing every existing PowerDNS DNS
+zone at the wrong authoritative server. Installing now records which server
+owns the saved credentials and refuses a second install elsewhere with a
+clear error naming that server; uninstalling frees the slot again (but only
+when uninstalling from the server that actually owns it, so it can't be used
+to steal another server's live credentials).
+
+### Downloading an SBOM regenerated it from scratch every time, even seconds after the last download
+
+The "Download SBOM" button always ran a fresh syft scan (2-4 minutes) even
+when a just-generated document already existed — the fast, cache-serving
+endpoint built for exactly this existed but the button never called it. It
+now serves the stored SBOM instantly when one exists, falling back to a full
+scan only when none is stored yet. A new "Regenerate" button sits next to it
+for forcing a fresh scan on demand.
+
+### Also
+
+- Removed `sbom_enabled`, a settings row seeded in v2.7.11 that nothing ever
+  read or wrote — SBOM availability is actually driven by whether syft is
+  installed, not this row.
+
 ## [2.174.0]
 
 ### A vulnerable container image found nothing but a row — and a fixed security scan never told the dashboard it was fixed

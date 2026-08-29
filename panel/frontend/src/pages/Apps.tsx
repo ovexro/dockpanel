@@ -2,7 +2,7 @@ import { useAuth } from "../context/AuthContext";
 import { useServer } from "../context/ServerContext";
 import { Navigate } from "react-router-dom";
 import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import ProvisionLog from "../components/ProvisionLog";
 import { PrereqList, usePrereqs } from "../components/Prerequisite";
 import { FieldHelp } from "../components/FieldHelp";
@@ -629,14 +629,30 @@ export default function Apps() {
     setScanDrawerImage(image);
   };
 
-  const downloadSbom = async (appName: string, image: string) => {
+  const downloadSbom = async (appName: string, image: string, forceRegenerate = false) => {
     setSbomLoading(appName);
     try {
-      const result = await api.post<{ image: string; generated_at: string; spdx: unknown }>(
-        `/apps/${encodeURIComponent(appName)}/sbom`,
-        {}
-      );
-      const blob = new Blob([JSON.stringify(result.spdx, null, 2)], {
+      // A GET here serves the already-stored document instantly — no syft
+      // run — via download_app_sbom. Only fall back to the generating POST
+      // when there's no cached SBOM yet (404) or the caller explicitly asked
+      // to regenerate. Previously this always POSTed, forcing a 180-240s
+      // syft run on every click even when a fresh SBOM already existed.
+      let spdx: unknown;
+      if (!forceRegenerate) {
+        try {
+          spdx = await api.get(`/apps/${encodeURIComponent(appName)}/sbom`);
+        } catch (e) {
+          if (!(e instanceof ApiError) || e.status !== 404) throw e;
+        }
+      }
+      if (spdx === undefined) {
+        const result = await api.post<{ image: string; generated_at: string; spdx: unknown }>(
+          `/apps/${encodeURIComponent(appName)}/sbom`,
+          {}
+        );
+        spdx = result.spdx;
+      }
+      const blob = new Blob([JSON.stringify(spdx, null, 2)], {
         type: "application/json",
       });
       const url = URL.createObjectURL(blob);
@@ -3617,10 +3633,19 @@ volumes:
                         type="button"
                         onClick={() => downloadSbom(matchedApp.name, scanDrawerImage)}
                         disabled={sbomLoading === matchedApp.name}
-                        title="Generate and download an SPDX 2.3 SBOM for this image (syft)"
+                        title="Download the stored SPDX 2.3 SBOM for this image, generating one first if none exists yet"
                         className="px-3 py-1.5 text-xs font-medium bg-dark-600 text-dark-50 rounded hover:bg-dark-500 disabled:opacity-50"
                       >
                         {sbomLoading === matchedApp.name ? "Generating SBOM..." : "Download SBOM"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => downloadSbom(matchedApp.name, scanDrawerImage, true)}
+                        disabled={sbomLoading === matchedApp.name}
+                        title="Force a fresh SBOM scan (syft) instead of using the stored one"
+                        className="px-3 py-1.5 text-xs font-medium bg-dark-600 text-dark-50 rounded hover:bg-dark-500 disabled:opacity-50"
+                      >
+                        Regenerate
                       </button>
                     </div>
                   )}

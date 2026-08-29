@@ -191,7 +191,7 @@ echo "§3 every creation site records an owner"
 # file, so git_deploys could lose 3 of its 4 and stay green — which is how the
 # pre-change ratio (3 of 16) could be re-established one site at a time. Adding a
 # provisioning log to a feature is expected to change the number here.
-census="backups:2 deploy:1 sites:1 migration:1 git_deploys:4 mail:2 system:3 docker_apps:2"
+census="backups:2 deploy:1 sites:1 migration:1 git_deploys:4 mail:2 system:4 docker_apps:2"
 total=0
 for e in $census; do
   f=${e%%:*}; want=${e##*:}
@@ -203,10 +203,10 @@ for e in $census; do
     bad "$f.rs registers $got owners, expected $want — a creation site lost its owner, or a new one needs adding here"
   fi
 done
-if [ "$total" -eq 16 ]; then
-  ok "16 creation sites, all owned"
+if [ "$total" -eq 17 ]; then
+  ok "17 creation sites, all owned"
 else
-  bad "$total registrations across the census, expected 16"
+  bad "$total registrations across the census, expected 17"
 fi
 
 echo

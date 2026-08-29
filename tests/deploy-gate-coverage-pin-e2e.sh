@@ -276,10 +276,10 @@ echo "── §6 the app-keyed scan surface is keyed by NAME ──"
 APPS_TSX=panel/frontend/src/pages/Apps.tsx
 BAD_KEY=$($G -c "rescanApp(matchedApp.container_id\|downloadSbom(matchedApp.container_id" "$APPS_TSX" || true)
 GOOD_KEY=$($G -c "rescanApp(matchedApp.name\|downloadSbom(matchedApp.name" "$APPS_TSX" || true)
-if [ "$BAD_KEY" -eq 0 ] && [ "$GOOD_KEY" -eq 3 ]; then
-  ok "all 3 scan/SBOM buttons pass the app NAME to a name-keyed route"
+if [ "$BAD_KEY" -eq 0 ] && [ "$GOOD_KEY" -eq 4 ]; then
+  ok "all 4 scan/SBOM buttons pass the app NAME to a name-keyed route"
 else
-  bad "scan/SBOM buttons: $GOOD_KEY pass a name (expected 3), $BAD_KEY pass a container id (expected 0) — a hex id matches no app name and the route 404s"
+  bad "scan/SBOM buttons: $GOOD_KEY pass a name (expected 4), $BAD_KEY pass a container id (expected 0) — a hex id matches no app name and the route 404s"
 fi
 # Control: the hex id is still used where it belongs, so the grep above can fire
 # in both directions rather than being green because the file changed shape.

@@ -10,7 +10,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser, ServerScope};
-use crate::error::{agent_error, ApiError};
+use crate::error::{agent_error, err, internal_error, ApiError};
 use crate::routes::sites::ProvisionStep;
 use crate::services::activity;
 use crate::services::agent::AgentHandle;
@@ -777,9 +777,44 @@ pub async fn disable_auto_updates(
 pub async fn install_powerdns(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     body: axum::body::Bytes,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    // pdns_api_url/pdns_api_key live in the global `settings` table (no per-server
+    // row), but installation is per-server (this handler is ServerScope-scoped, same
+    // as Redis/Fail2Ban/Cloudflare Tunnel). Installing on a second server would
+    // silently overwrite the first server's credentials — every existing PowerDNS
+    // zone would then point at the wrong authoritative server with no error anywhere.
+    // `pdns_server_id` records which server currently owns the saved credentials;
+    // absent means either no install yet or a pre-existing install from before this
+    // check shipped (grandfathered — not blocked).
+    let owner: Option<(String,)> = sqlx::query_as(
+        "SELECT value FROM settings WHERE key = 'pdns_server_id'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("check pdns owner", e))?;
+    if let Some((owner_id_str,)) = owner {
+        if let Ok(owner_id) = owner_id_str.parse::<Uuid>() {
+            if owner_id != server_id {
+                let owner_name: Option<(String,)> = sqlx::query_as(
+                    "SELECT name FROM servers WHERE id = $1",
+                )
+                .bind(owner_id)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(|e| internal_error("look up pdns owner server", e))?;
+                let label = owner_name.map(|(n,)| n).unwrap_or_else(|| owner_id.to_string());
+                return Err(err(
+                    StatusCode::CONFLICT,
+                    &format!(
+                        "PowerDNS is already configured for server '{label}'. Uninstall it there first — installing on a second server would overwrite those credentials and orphan its DNS zones."
+                    ),
+                ));
+            }
+        }
+    }
+
     // Optional {"backend":"sqlite"|"pgsql"} forwarded to the agent (issue #63).
     // Absent/invalid → None, so the agent applies its pgsql default (back-compat).
     let forward_body = serde_json::from_slice::<serde_json::Value>(&body).ok()
@@ -840,6 +875,10 @@ pub async fn install_powerdns(
                         .unwrap_or_else(|_| key.to_string());
                     let _ = sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('pdns_api_key', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()")
                         .bind(&encrypted_key)
+                        .execute(&db)
+                        .await;
+                    let _ = sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('pdns_server_id', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()")
+                        .bind(server_id.to_string())
                         .execute(&db)
                         .await;
                 }
@@ -979,9 +1018,93 @@ pub async fn uninstall_fail2ban(
 pub async fn uninstall_powerdns(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    install_service_with_log(&state, agent, claims.sub, &claims.email, "PowerDNS (uninstall)", "/services/uninstall/powerdns", None).await
+    // Custom (not the shared install_service_with_log helper) because a successful
+    // uninstall must also free the `pdns_server_id` ownership slot install_powerdns
+    // guards on — otherwise uninstalling here would leave this server permanently
+    // recorded as the owner and block ever installing PowerDNS anywhere else.
+    let install_id = Uuid::new_v4();
+
+    crate::helpers::register_provision_log(
+        &state.provision_logs,
+        &state.deploy_owners,
+        install_id,
+        claims.sub,
+        32,
+    );
+
+    let logs = state.provision_logs.clone();
+    let db = state.db.clone();
+    let user_id = claims.sub;
+    let email = claims.email.clone();
+
+    tokio::spawn(async move {
+        let emit = |step: &str, lbl: &str, status: &str, msg: Option<String>| {
+            let ev = ProvisionStep {
+                step: step.into(),
+                label: lbl.into(),
+                status: status.into(),
+                message: msg,
+            };
+            if let Ok(mut map) = logs.lock() {
+                if let Some((history, tx, _)) = map.get_mut(&install_id) {
+                    history.push(ev.clone());
+                    let _ = tx.send(ev);
+                }
+            }
+        };
+
+        emit("install", "Uninstalling PowerDNS", "in_progress", None);
+
+        match agent
+            .post_long("/services/uninstall/powerdns", None, INSTALL_AGENT_TIMEOUT_SECS)
+            .await
+        {
+            Ok(_) => {
+                // Only clear the saved credentials if THIS server is the recorded
+                // owner (or no owner was ever recorded — pre-existing install from
+                // before pdns_server_id shipped). Uninstalling on a server that never
+                // owned the install must not wipe another server's live credentials.
+                let owner: Result<Option<(String,)>, _> = sqlx::query_as(
+                    "SELECT value FROM settings WHERE key = 'pdns_server_id'",
+                )
+                .fetch_optional(&db)
+                .await;
+                let owned_by_this_server = match owner {
+                    Ok(Some((id_str,))) => id_str.parse::<Uuid>().map(|id| id == server_id).unwrap_or(true),
+                    Ok(None) => true,
+                    Err(_) => false,
+                };
+                if owned_by_this_server {
+                    let _ = sqlx::query("DELETE FROM settings WHERE key IN ('pdns_api_url', 'pdns_api_key', 'pdns_server_id')")
+                        .execute(&db)
+                        .await;
+                }
+
+                emit("install", "Uninstalling PowerDNS", "done", None);
+                emit("complete", "PowerDNS uninstalled", "done", None);
+                activity::log_activity(
+                    &db, user_id, &email, "service.uninstall",
+                    Some("system"), Some("powerdns"), None, None,
+                ).await;
+                tracing::info!("Service uninstalled: PowerDNS");
+            }
+            Err(e) => {
+                emit("install", "Uninstalling PowerDNS", "error", Some(format!("{e}")));
+                emit("complete", "Uninstall failed", "error", None);
+                tracing::error!("Service uninstall failed: PowerDNS: {e}");
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&install_id);
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({
+        "install_id": install_id,
+        "message": "PowerDNS uninstallation started",
+    }))))
 }
 
 pub async fn uninstall_redis(

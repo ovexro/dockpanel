@@ -20,9 +20,8 @@ That's the whole setup. SBOMs are generated on demand — there is no scheduled 
 ## Download an SBOM for a deployed app
 
 1. On the **Apps** page, click the row of any running app to open its scan drawer.
-2. Click **Download SBOM**. DockPanel runs syft against the app's image (10 – 60 s on first generation), persists the result, and triggers a browser download of `<app>.spdx.json`.
-
-Subsequent downloads of the same image return the persisted SBOM immediately — re-click **Download SBOM** to regenerate from a fresh image pull if the image has been updated.
+2. Click **Download SBOM**. The first time, DockPanel runs syft against the app's image (2 – 4 minutes), persists the result, and triggers a browser download of `<app>.spdx.json`. On every later click it serves that persisted document immediately — no re-scan.
+3. Click **Regenerate** instead to force a fresh syft scan, bypassing the persisted document. Do this after redeploying under a mutable tag (e.g. `:latest`) — the SBOM is keyed by the image reference string, so a rebuild that keeps the same tag won't be noticed automatically.
 
 ## Verify the SBOM matches the binary you're auditing
 
