@@ -264,18 +264,24 @@ fi
 # Deny-by-default, spelled out explicitly rather than left to the image's own
 # defaults — mutation-detectable: flip any one of these to "1" in source and
 # this arm goes red.
-DENY=(POST EXEC IMAGES NETWORKS VOLUMES SERVICES SWARM SYSTEM TASKS BUILD COMMIT AUTH SECRETS CONFIGS DISTRIBUTION NODES PLUGINS SESSION GRPC INFO ALLOW_START ALLOW_STOP ALLOW_RESTARTS ALLOW_PAUSE ALLOW_UNPAUSE)
+DENY=(POST EXEC IMAGES NETWORKS VOLUMES SERVICES SWARM SYSTEM TASKS BUILD COMMIT AUTH SECRETS CONFIGS DISTRIBUTION NODES PLUGINS SESSION GRPC ALLOW_START ALLOW_STOP ALLOW_RESTARTS ALLOW_PAUSE ALLOW_UNPAUSE)
 denied_ok=1
 for tog in "${DENY[@]}"; do
   grep -qF "(\"$tog\",\"0\")" <<<"$FLAT" || { bad "DOZZLE_PROXY_ENV no longer denies $tog"; denied_ok=0; }
 done
 [ "$denied_ok" -eq 1 ] && ok "all ${#DENY[@]} dangerous socket-proxy endpoints stay denied"
 
-if grep -qF '("CONTAINERS","1")' <<<"$FLAT"; then
-  ok "the proxy grants exactly the one endpoint dozzle needs (CONTAINERS)"
-else
-  bad "DOZZLE_PROXY_ENV no longer grants CONTAINERS — dozzle cannot list containers at all"
-fi
+# CONTAINERS + INFO are the only two grants — verified live at s426: with
+# INFO=0, Dozzle's client failed `GET /info` on every connect and reported
+# the remote host `available:false` even though container listing worked
+# underneath, which would have shipped looking broken to every real user.
+# /info returns daemon/host metadata only (no container/image/secret data).
+GRANT=(CONTAINERS INFO)
+granted_ok=1
+for tog in "${GRANT[@]}"; do
+  grep -qF "(\"$tog\",\"1\")" <<<"$FLAT" || { bad "DOZZLE_PROXY_ENV no longer grants $tog"; granted_ok=0; }
+done
+[ "$granted_ok" -eq 1 ] && ok "the proxy grants exactly the two endpoints dozzle needs (CONTAINERS, INFO)"
 
 SIDECAR=panel/agent/src/services/app_sidecar.rs
 if [ -f "$SIDECAR" ]; then

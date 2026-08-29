@@ -520,16 +520,25 @@ fn template_cmd(id: &str) -> Option<Vec<String>> {
 /// `tecnativa/docker-socket-proxy`'s per-endpoint ACL, spelled out in full and
 /// deny-by-default rather than left to the image's own defaults — the same
 /// posture `deploy_app`'s `cap_drop: ALL` + explicit `cap_add` allowlist
-/// already takes for every template container. Only `CONTAINERS` is granted:
-/// Dozzle's entire purpose is listing containers and streaming their logs,
-/// both served under that one toggle, and nothing else it could ask for
-/// (exec into a container, create one, touch images/volumes/networks/swarm,
-/// or any POST at all) is enabled.
+/// already takes for every template container. `CONTAINERS` and `INFO` are
+/// the only two granted: Dozzle's entire purpose is listing containers and
+/// streaming their logs (`CONTAINERS`), and its client calls `GET /info` on
+/// every connect to populate the remote host's CPU/memory/Docker-version
+/// card and decide whether the host is "available" at all — verified live
+/// (s426): with `INFO=0` Dozzle logged `Failed to get docker info` on every
+/// deploy and reported the host `available:false` even though container
+/// listing worked underneath, which would have shipped looking broken to
+/// every real user. `/info` returns daemon/host metadata only (OS, CPU
+/// count, Docker version) — no container, image or secret data — so
+/// granting it does not reopen the vector this whole sidecar exists to
+/// close. Nothing else Dozzle could ask for (exec into a container, create
+/// one, touch images/volumes/networks/swarm, or any POST at all) is enabled.
 static DOZZLE_PROXY_ENV: &[(&str, &str)] = &[
     ("CONTAINERS", "1"),
     ("EVENTS", "1"),
     ("PING", "1"),
     ("VERSION", "1"),
+    ("INFO", "1"),
     ("POST", "0"),
     ("EXEC", "0"),
     ("IMAGES", "0"),
@@ -549,7 +558,6 @@ static DOZZLE_PROXY_ENV: &[(&str, &str)] = &[
     ("PLUGINS", "0"),
     ("SESSION", "0"),
     ("GRPC", "0"),
-    ("INFO", "0"),
     ("ALLOW_START", "0"),
     ("ALLOW_STOP", "0"),
     ("ALLOW_RESTARTS", "0"),

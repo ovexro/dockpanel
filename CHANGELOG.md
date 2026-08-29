@@ -4,6 +4,23 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.179.1]
+
+### Fixed — the sidecar proxy denied Dozzle its own connection health check
+
+v2.179.0 shipped `DOZZLE_PROXY_ENV` denying `INFO`, reasoning Dozzle's only
+needs were listing containers and streaming logs. Deploying it for real
+against the live demo panel (not just a synthetic probe) found otherwise:
+Dozzle's client calls `GET /info` on every connect to populate the remote
+host's CPU/memory/Docker-version card and decide whether the host is
+"available" at all. With `INFO` denied, every deploy logged `Failed to get
+docker info` and reported the host `available:false`, even though container
+listing worked underneath — it would have shipped looking broken to every
+real user. `/info` returns daemon/host metadata only (OS, CPU count, Docker
+version), no container/image/secret data, so granting it does not reopen the
+vector the sidecar exists to close. Verified before and after on the same
+config: the error is gone and the connection completes cleanly with `INFO=1`.
+
 ## [2.179.0]
 
 ### Dozzle reinstated behind a Docker-socket-proxy sidecar
