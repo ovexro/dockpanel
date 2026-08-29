@@ -1,5 +1,6 @@
 pub mod agent_unit;
 pub mod app_process;
+pub mod app_sidecar;
 pub mod command_filter;
 pub mod backups;
 pub mod backup_drill;

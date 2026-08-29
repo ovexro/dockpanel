@@ -1,3 +1,4 @@
+use super::app_sidecar;
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
     RenameContainerOptions, StartContainerOptions, StopContainerOptions,
@@ -514,6 +515,100 @@ fn template_cmd(id: &str) -> Option<Vec<String>> {
         .iter()
         .find(|(template_id, _)| *template_id == id)
         .map(|(_, args)| args.iter().map(|a| (*a).to_string()).collect())
+}
+
+/// `tecnativa/docker-socket-proxy`'s per-endpoint ACL, spelled out in full and
+/// deny-by-default rather than left to the image's own defaults — the same
+/// posture `deploy_app`'s `cap_drop: ALL` + explicit `cap_add` allowlist
+/// already takes for every template container. Only `CONTAINERS` is granted:
+/// Dozzle's entire purpose is listing containers and streaming their logs,
+/// both served under that one toggle, and nothing else it could ask for
+/// (exec into a container, create one, touch images/volumes/networks/swarm,
+/// or any POST at all) is enabled.
+static DOZZLE_PROXY_ENV: &[(&str, &str)] = &[
+    ("CONTAINERS", "1"),
+    ("EVENTS", "1"),
+    ("PING", "1"),
+    ("VERSION", "1"),
+    ("POST", "0"),
+    ("EXEC", "0"),
+    ("IMAGES", "0"),
+    ("NETWORKS", "0"),
+    ("VOLUMES", "0"),
+    ("SERVICES", "0"),
+    ("SWARM", "0"),
+    ("SYSTEM", "0"),
+    ("TASKS", "0"),
+    ("BUILD", "0"),
+    ("COMMIT", "0"),
+    ("AUTH", "0"),
+    ("SECRETS", "0"),
+    ("CONFIGS", "0"),
+    ("DISTRIBUTION", "0"),
+    ("NODES", "0"),
+    ("PLUGINS", "0"),
+    ("SESSION", "0"),
+    ("GRPC", "0"),
+    ("INFO", "0"),
+    ("ALLOW_START", "0"),
+    ("ALLOW_STOP", "0"),
+    ("ALLOW_RESTARTS", "0"),
+    ("ALLOW_PAUSE", "0"),
+    ("ALLOW_UNPAUSE", "0"),
+];
+
+/// Templates whose catalogue entry alone cannot serve their purpose — they
+/// need a companion container holding a capability (Docker API access) this
+/// panel deliberately never hands the app container itself. A side table
+/// rather than an `AppTemplateDef` field, for the same reason `TEMPLATE_CMD`
+/// is one: one entry here should never have to touch the other 140+ template
+/// literals.
+static TEMPLATE_SIDECAR: &[(&str, app_sidecar::SidecarDef)] = &[(
+    "dozzle",
+    app_sidecar::SidecarDef {
+        image: "tecnativa/docker-socket-proxy:latest",
+        alias: "dockerproxy",
+        port: 2375,
+        proxy_env: DOZZLE_PROXY_ENV,
+        client_env_var: "DOZZLE_REMOTE_HOST",
+    },
+)];
+
+/// The sidecar a template needs, if any.
+fn template_sidecar(id: &str) -> Option<&'static app_sidecar::SidecarDef> {
+    TEMPLATE_SIDECAR
+        .iter()
+        .find(|(template_id, _)| *template_id == id)
+        .map(|(_, s)| s)
+}
+
+/// The sidecar a running container's template needs, read from the
+/// `dockpanel.app.template` label rather than the container's own live
+/// network attachments — the same reason `catalogue_cmd_for` reads the label
+/// instead of the resolved `Cmd`: this is the panel's CURRENT policy for the
+/// template, not whatever the container happens to be doing right now.
+fn catalogue_sidecar_for(labels: Option<&HashMap<String, String>>) -> Option<&'static app_sidecar::SidecarDef> {
+    labels
+        .and_then(|l| l.get("dockpanel.app.template"))
+        .and_then(|template_id| template_sidecar(template_id))
+}
+
+/// Attach `env_list`/the returned `NetworkingConfig` to `app_name`'s sidecar
+/// network, if the template this container was deployed from has one —
+/// called from EVERY recreate path (`update_app`'s stop/start fallback,
+/// `blue_green_update`, `change_container_image`, `update_env`), so an image
+/// swap or an env edit can never silently strand the app back on the default
+/// bridge, unable to resolve a sidecar it depends on. A no-op (returns
+/// `None`, leaves `env_list` untouched) for every template without one.
+fn reattach_sidecar_if_any(
+    labels: Option<&HashMap<String, String>>,
+    app_name: &str,
+    env_list: &mut Vec<String>,
+) -> Option<bollard::container::NetworkingConfig<String>> {
+    let sidecar = catalogue_sidecar_for(labels)?;
+    env_list.retain(|e| !e.starts_with(&format!("{}=", sidecar.client_env_var)));
+    env_list.push(sidecar.client_env_entry());
+    Some(app_sidecar::attach_config(app_name))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1721,10 +1816,24 @@ static TEMPLATES: &[AppTemplateDef] = &[
         volumes: &["/config"],
     },
     // ─── Monitoring (additional) ────────────────────────────────
-    // Dozzle withdrawn (v2.178.0) — see CENSUS_KNOWN_BROKEN's former entry and
-    // FEATURES.md §Withdrawn Claims. It fatals with "Could not connect to any
-    // Docker Engine" on every deployment, because it needs the host Docker
-    // socket and `deploy_app` deliberately never mounts it (host escape).
+    // Dozzle was withdrawn at v2.178.0 (#125 — it fatals with "Could not
+    // connect to any Docker Engine" because `deploy_app` deliberately never
+    // mounts the host Docker socket into any one-click app) and reinstated at
+    // v2.179.0 behind a paired docker-socket-proxy sidecar instead — see
+    // `TEMPLATE_SIDECAR` and `services::app_sidecar`. The socket is real, but
+    // this container never touches it: the sidecar does, on a network
+    // nothing else can reach.
+    AppTemplateDef {
+        id: "dozzle",
+        name: "Dozzle",
+        description: "Real-time Docker container log viewer with a clean web interface",
+        category: "Monitoring",
+        image: "amir20/dozzle:latest",
+        default_port: 9999,
+        container_port: "8080/tcp",
+        env_vars: &[],
+        volumes: &[],
+    },
     AppTemplateDef {
         id: "glances",
         name: "Glances",
@@ -3499,6 +3608,14 @@ pub async fn deploy_app(
 
     let container_name = format!("{CONTAINER_NAME_PREFIX}{name}");
 
+    // Deploy this template's sidecar (if it has one) BEFORE creating the main
+    // container, so a sidecar failure never leaves an app half-deployed with
+    // no way to reach the capability it needs. See `services::app_sidecar`.
+    let sidecar = template_sidecar(template.id);
+    if let Some(sc) = sidecar {
+        app_sidecar::deploy(&docker, name, sc).await?;
+    }
+
     // Values this template wants filled in from the domain the operator claimed.
     // Empty for 142 of the 148 templates, and for every deploy without a domain.
     let derived: Vec<(&'static str, String)> = domain
@@ -3506,7 +3623,12 @@ pub async fn deploy_app(
         .unwrap_or_default();
 
     // Build environment variables: merge template defaults with user-supplied values
-    let env_list = merge_deploy_env(template.env_vars, &env, &derived);
+    let mut env_list = merge_deploy_env(template.env_vars, &env, &derived);
+    // Reasserted, not merely defaulted — see `SidecarDef::client_env_entry`.
+    if let Some(sc) = sidecar {
+        env_list.retain(|e| !e.starts_with(&format!("{}=", sc.client_env_var)));
+        env_list.push(sc.client_env_entry());
+    }
 
     // Port bindings
     let mut port_bindings = HashMap::new();
@@ -3575,13 +3697,17 @@ pub async fn deploy_app(
     }
 
     // NOTE: the one-click catalogue deliberately never mounts the host Docker
-    // socket for ANY template — it gives whatever runs with it full host escape
-    // capabilities, not just Docker visibility, regardless of who was allowed to
-    // trigger the deploy. Portainer and Dozzle both needed it for their core
-    // purpose and both were withdrawn from the catalogue rather than granted it
-    // (v2.178.0; see FEATURES.md §Withdrawn Claims). An admin who wants a
-    // socket-mounted tool anyway can still build one via Docker → Create Stack,
-    // outside this sandboxing, with full awareness of the tradeoff.
+    // socket for ANY template's OWN container — it gives whatever runs with it
+    // full host escape capabilities, not just Docker visibility, regardless of
+    // who was allowed to trigger the deploy. Portainer needed it for its core
+    // purpose (create/stop/exec containers, manage volumes/networks) and stays
+    // withdrawn (v2.178.0; see FEATURES.md §Withdrawn Claims) — a read-only
+    // proxy would gut it and a write-permitting one reopens the risk. Dozzle
+    // only ever needed to list containers and read logs, so it was reinstated
+    // (v2.179.0) behind a `docker-socket-proxy` sidecar that holds the real
+    // socket instead — see `TEMPLATE_SIDECAR` / `services::app_sidecar`. An
+    // admin who wants a different socket-mounted tool anyway can still build
+    // one via Docker → Create Stack, outside this sandboxing entirely.
 
     let mut host_config = bollard::service::HostConfig {
         port_bindings: Some(port_bindings),
@@ -3676,6 +3802,12 @@ pub async fn deploy_app(
         },
         exposed_ports: Some(exposed_ports),
         host_config: Some(host_config),
+        // Attaches to the sidecar's private network instead of the default
+        // bridge when this template has one — the SAME config every recreate
+        // path (`update_app`, `blue_green_update`, `change_container_image`,
+        // `update_env`) applies via `reattach_sidecar_if_any`, so an update
+        // can never silently drop this back onto the default bridge.
+        networking_config: sidecar.map(|_| app_sidecar::attach_config(name)),
         labels: Some({
             let mut labels = HashMap::from([
                 ("dockpanel.managed".to_string(), "true".to_string()),
@@ -3696,7 +3828,7 @@ pub async fn deploy_app(
         ..Default::default()
     };
 
-    let container = docker
+    let container = match docker
         .create_container(
             Some(CreateContainerOptions {
                 name: container_name.as_str(),
@@ -3705,7 +3837,18 @@ pub async fn deploy_app(
             config,
         )
         .await
-        .map_err(|e| format!("Failed to create container: {e}"))?;
+    {
+        Ok(c) => c,
+        Err(e) => {
+            // A sidecar deployed above and never given a main container to pair
+            // with is not a partial app an operator could ever find or delete —
+            // take it and its network with the failed deploy.
+            if sidecar.is_some() {
+                app_sidecar::teardown(name).await;
+            }
+            return Err(format!("Failed to create container: {e}"));
+        }
+    };
 
     if let Err(e) = docker
         .start_container(&container.id, None::<StartContainerOptions<String>>)
@@ -3726,6 +3869,9 @@ pub async fn deploy_app(
                 }),
             )
             .await;
+        if sidecar.is_some() {
+            app_sidecar::teardown(name).await;
+        }
         return Err(format!("Failed to start container: {e}"));
     }
 
@@ -3845,10 +3991,27 @@ pub async fn list_deployed_apps() -> Result<Vec<DeployedApp>, String> {
     Ok(apps)
 }
 
+/// This container's app name, read fresh from Docker — used by the
+/// power-action and removal paths below to find a paired sidecar (if any)
+/// without assuming the caller already has the labels in hand. `None` only
+/// when the container itself cannot be inspected, which every caller here
+/// treats as "nothing to mirror" rather than an error: the main action is
+/// what the operator asked for.
+async fn current_app_name(docker: &Docker, container_id: &str) -> Option<String> {
+    let info = docker.inspect_container(container_id, None).await.ok()?;
+    let labels = info.config.as_ref().and_then(|c| c.labels.as_ref());
+    let name = info.name.as_deref().unwrap_or_default().trim_start_matches('/').to_string();
+    Some(app_data_name(labels, &name))
+}
+
 /// Stop a running app container.
 pub async fn stop_app(container_id: &str) -> Result<(), String> {
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
+
+    if let Some(app_name) = current_app_name(&docker, container_id).await {
+        app_sidecar::mirror_stop(&docker, &app_name).await;
+    }
 
     docker
         .stop_container(container_id, Some(StopContainerOptions { t: 10 }))
@@ -3864,6 +4027,12 @@ pub async fn start_app(container_id: &str) -> Result<(), String> {
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
 
+    // Sidecar first: an app whose sidecar is still cold should not race its
+    // own first connection attempt against it.
+    if let Some(app_name) = current_app_name(&docker, container_id).await {
+        app_sidecar::mirror_start(&docker, &app_name).await;
+    }
+
     docker
         .start_container(container_id, None::<StartContainerOptions<String>>)
         .await
@@ -3877,6 +4046,10 @@ pub async fn start_app(container_id: &str) -> Result<(), String> {
 pub async fn restart_app(container_id: &str) -> Result<(), String> {
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
+
+    if let Some(app_name) = current_app_name(&docker, container_id).await {
+        app_sidecar::mirror_restart(&docker, &app_name).await;
+    }
 
     docker
         .restart_container(container_id, Some(bollard::container::RestartContainerOptions { t: 10 }))
@@ -4345,12 +4518,19 @@ async fn blue_green_update(
             .ok();
     }
 
+    // Keyed off the real app name, not `new_name` (the temp blue container) —
+    // the sidecar and its network are the app's, unaffected by the swap.
+    let app_name = app_data_name(config.labels.as_ref(), name);
+    let mut env_list = config.env.clone().unwrap_or_default();
+    let networking_config = reattach_sidecar_if_any(config.labels.as_ref(), &app_name, &mut env_list);
+
     let new_config = Config {
         image: config.image.clone(),
-        env: config.env.clone(),
+        env: if env_list.is_empty() { None } else { Some(env_list) },
         exposed_ports: config.exposed_ports.clone(),
         labels: config.labels.clone(),
         host_config: Some(new_host_config),
+        networking_config,
         cmd: config.cmd.clone(),
         entrypoint: config.entrypoint.clone(),
         working_dir: if config.working_dir.as_deref() == Some("") {
@@ -4772,12 +4952,16 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
         .await
         .map_err(|e| format!("Failed to remove old container: {e}"))?;
 
+    let mut env_list = config.env.clone().unwrap_or_default();
+    let networking_config = reattach_sidecar_if_any(config.labels.as_ref(), &app_name, &mut env_list);
+
     let new_config = Config {
         image: config.image,
-        env: config.env,
+        env: if env_list.is_empty() { None } else { Some(env_list) },
         exposed_ports: config.exposed_ports,
         labels: config.labels,
         host_config: Some(host_config),
+        networking_config,
         cmd: config.cmd,
         entrypoint: config.entrypoint,
         working_dir: if config.working_dir.as_deref() == Some("") {
@@ -4959,13 +5143,17 @@ pub async fn change_container_image(container_id: &str, new_image: &str) -> Resu
         .await
         .map_err(|e| format!("Failed to remove old container: {e}"))?;
 
+    let mut env_list = config.env.clone().unwrap_or_default();
+    let networking_config = reattach_sidecar_if_any(config.labels.as_ref(), &app_name, &mut env_list);
+
     // Recreate with the SAME hardening/networking/limits/labels/env, only the image changes.
     let new_config = Config {
         image: Some(new_image.to_string()),
-        env: config.env,
+        env: if env_list.is_empty() { None } else { Some(env_list) },
         exposed_ports: config.exposed_ports,
         labels: config.labels,
         host_config: Some(host_config),
+        networking_config,
         cmd: catalogue_cmd,
         ..Default::default()
     };
@@ -5176,7 +5364,7 @@ pub async fn update_env(
     let unmounted = unmounted_declared_volumes(&config, &host_config);
 
     // Build new env list, carrying over anything the caller sent back masked.
-    let (env_list, kept) = merge_env_preserving_masked(&new_env, config.env.as_deref().unwrap_or(&[]));
+    let (mut env_list, kept) = merge_env_preserving_masked(&new_env, config.env.as_deref().unwrap_or(&[]));
 
     if !kept.is_empty() {
         tracing::info!(
@@ -5224,6 +5412,8 @@ pub async fn update_env(
         .await
         .map_err(|e| format!("Failed to remove old container: {e}"))?;
 
+    let networking_config = reattach_sidecar_if_any(config.labels.as_ref(), &app_name, &mut env_list);
+
     // Recreate with new env
     let new_config = Config {
         image: config.image,
@@ -5231,6 +5421,7 @@ pub async fn update_env(
         exposed_ports: config.exposed_ports,
         labels: config.labels,
         host_config: Some(host_config),
+        networking_config,
         cmd: config.cmd,
         entrypoint: config.entrypoint,
         working_dir: if config.working_dir.as_deref() == Some("") {
@@ -5273,6 +5464,10 @@ pub async fn remove_app(container_id: &str) -> Result<(), String> {
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
 
+    // Read before removal — there is nothing left to ask afterwards, and this
+    // is how the app's sidecar (if any) gets found and torn down alongside it.
+    let app_name = current_app_name(&docker, container_id).await;
+
     // Stop first (ignore error if already stopped)
     docker
         .stop_container(container_id, Some(StopContainerOptions { t: 10 }))
@@ -5290,6 +5485,10 @@ pub async fn remove_app(container_id: &str) -> Result<(), String> {
         )
         .await
         .map_err(|e| format!("Failed to remove container: {e}"))?;
+
+    if let Some(name) = app_name {
+        app_sidecar::teardown(&name).await;
+    }
 
     tracing::info!("App container removed: {container_id}");
     Ok(())
@@ -5951,6 +6150,139 @@ mod tests {
 
         // The control: a root image must resolve to None so nothing is chowned.
         assert_eq!(resolve_volume_owner(&docker, "nginx:alpine").await, None);
+    }
+
+    /// Runs a `curlimages/curl` container on `network`, waits for it to exit,
+    /// and returns its exit code and log output — the harness the sidecar
+    /// proxy test below uses to prove the ACL from OUTSIDE the proxy's own
+    /// process, the same vantage point a real Dozzle container has.
+    async fn run_probe(docker: &Docker, network: &str, name: &str, args: &[&str]) -> String {
+        let _ = docker
+            .remove_container(
+                name,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    v: true,
+                    ..Default::default()
+                }),
+            )
+            .await;
+
+        let mut pull = docker.create_image(
+            Some(CreateImageOptions { from_image: "curlimages/curl:latest", ..Default::default() }),
+            None,
+            None,
+        );
+        while let Some(r) = pull.next().await {
+            let _ = r;
+        }
+
+        let mut endpoints = HashMap::new();
+        endpoints.insert(network.to_string(), bollard::models::EndpointSettings::default());
+        let config = Config {
+            image: Some("curlimages/curl:latest".to_string()),
+            cmd: Some(args.iter().map(|s| s.to_string()).collect()),
+            networking_config: Some(bollard::container::NetworkingConfig { endpoints_config: endpoints }),
+            ..Default::default()
+        };
+        let container = docker
+            .create_container(Some(CreateContainerOptions { name, platform: None }), config)
+            .await
+            .expect("create probe container");
+        docker
+            .start_container(&container.id, None::<StartContainerOptions<String>>)
+            .await
+            .expect("start probe container");
+
+        let mut wait = docker.wait_container(&container.id, None::<bollard::container::WaitContainerOptions<String>>);
+        while let Some(w) = wait.next().await {
+            let _ = w;
+        }
+
+        let logs = get_app_logs(&container.id, 50).await.unwrap_or_default();
+        let _ = docker
+            .remove_container(
+                &container.id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    v: true,
+                    ..Default::default()
+                }),
+            )
+            .await;
+        logs
+    }
+
+    /// Exercises the REAL `docker-socket-proxy` sidecar end to end against the
+    /// local daemon — not just that `app_sidecar::deploy` compiles, but that
+    /// the security property it exists for actually holds, from a probe
+    /// container on the sidecar's own network (the same vantage point a real
+    /// Dozzle container has, never the panel's own process).
+    #[tokio::test]
+    #[ignore = "creates real containers and a real network; run with cargo test -p dockpanel-agent sidecar_actually_proxies -- --ignored --nocapture"]
+    async fn sidecar_actually_proxies_reads_and_refuses_writes() {
+        let docker = Docker::connect_with_unix_defaults().expect("docker");
+        let app = "sidecartest-s426";
+
+        // Clean up any leftover from a prior interrupted run before asserting anything.
+        app_sidecar::teardown(app).await;
+
+        let sidecar = template_sidecar("dozzle").expect("dozzle must declare a sidecar");
+        let network = app_sidecar::deploy(&docker, app, sidecar)
+            .await
+            .expect("sidecar deploy must succeed");
+        assert_eq!(network, app_sidecar::network_name(app));
+
+        let sidecar_id = app_sidecar::find(&docker, app)
+            .await
+            .expect("the sidecar container must be discoverable by its deterministic name");
+        let info = docker.inspect_container(&sidecar_id, None).await.expect("inspect sidecar");
+        assert_eq!(
+            info.state.and_then(|s| s.running),
+            Some(true),
+            "the sidecar must actually be running, not just created"
+        );
+
+        let read = run_probe(
+            &docker,
+            &network,
+            "sidecar-probe-read",
+            &["-s", "-o", "/dev/null", "-w", "%{http_code}", "http://dockerproxy:2375/containers/json"],
+        )
+        .await;
+        assert_eq!(
+            read.trim(),
+            "200",
+            "CONTAINERS=1 must let a probe on the private network list containers through the \
+             proxy — dozzle cannot do its entire job otherwise; got {read:?}"
+        );
+
+        let write = run_probe(
+            &docker,
+            &network,
+            "sidecar-probe-write",
+            &[
+                "-s", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST",
+                "http://dockerproxy:2375/containers/create", "-d", "{}",
+            ],
+        )
+        .await;
+        assert_eq!(
+            write.trim(),
+            "403",
+            "POST=0 must refuse container creation through the proxy — this is the actual \
+             security boundary #125's fix depends on; got {write:?}"
+        );
+
+        app_sidecar::teardown(app).await;
+        assert!(
+            app_sidecar::find(&docker, app).await.is_none(),
+            "teardown must remove the sidecar container"
+        );
+        assert!(
+            docker.inspect_network::<String>(&network, None).await.is_err(),
+            "teardown must remove the app's private network"
+        );
     }
 
     /// Build a minimal ustar header. Only the three fields the extractor reads

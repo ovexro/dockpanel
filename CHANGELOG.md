@@ -4,6 +4,26 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.179.0]
+
+### Dozzle reinstated behind a Docker-socket-proxy sidecar
+
+v2.178.0 withdrew Dozzle and Portainer because both needed the host Docker socket for their
+entire purpose, and `deploy_app` deliberately never mounts it into any template's own
+container — a full host-escape vector regardless of who is allowed to trigger the deploy.
+Dozzle only ever needed to list containers and read their logs, both of which are safely
+servable through a `docker-socket-proxy` sidecar that holds the real socket instead and
+exposes a `CONTAINERS`-scoped, explicitly deny-by-default slice of the Docker API over a
+network nothing else can reach — the industry-standard pattern for exactly this situation,
+and one Dozzle's own docs already recommend. A new `services::app_sidecar` module gives a
+template a private per-app bridge network and a paired sidecar container; every container
+recreate path (image change, env edit, blue-green update) now re-attaches that network and
+reasserts the client env var, so an update can never silently strand the app back on the
+default bridge. Portainer stays withdrawn permanently: its core purpose needs write-level
+Docker API access that a safe proxy cannot grant without reopening most of the original risk,
+and it is largely redundant with DockPanel's own native Docker Apps management page. Catalogue:
+146 → 147. Filed and tracked on #125.
+
 ## [2.178.0]
 
 ### Two one-click app templates that could never work under this panel's own security policy, withdrawn

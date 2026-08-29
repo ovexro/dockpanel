@@ -1,6 +1,6 @@
 {
   "_generated": "Do not edit. Source of truth is TEMPLATES in panel/agent/src/services/docker_apps.rs. Regenerate with UPDATE_TEMPLATE_CATALOGUE=1 cargo test -p dockpanel-agent catalogue",
-  "count": 146,
+  "count": 147,
   "templates": [
     {
       "category": "CMS",
@@ -1890,6 +1890,17 @@
       "volumes": [
         "/config"
       ]
+    },
+    {
+      "category": "Monitoring",
+      "cmd": null,
+      "container_port": "8080/tcp",
+      "default_port": 9999,
+      "env_vars": [],
+      "id": "dozzle",
+      "image": "amir20/dozzle:latest",
+      "name": "Dozzle",
+      "volumes": []
     },
     {
       "category": "Monitoring",

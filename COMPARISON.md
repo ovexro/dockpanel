@@ -29,7 +29,7 @@ An honest comparison. We're not shy about where DockPanel leads — and we're up
 
 **7x lighter, stack against stack** — The panel binaries are ~46MB on disk. At runtime the panel services themselves idle around ~49MB of RAM (cgroup accounting: agent ~35MB + API ~14MB), or about ~109MB counting the bundled PostgreSQL. That last figure is the one to compare, because cPanel's 800MB+ and CloudPanel's 250MB+ include their databases too — measuring our services against their whole stacks would flatter us by a factor nobody could reproduce. On a $5 VPS with 1GB of RAM, the honest gap is still the difference between running your apps and running out of memory.
 
-**Docker integration that no other free panel has** — 146 one-click app templates across 14 categories. Docker Compose stack management. Container logs, shell, stats, resource limits, health checks. Blue-green zero-downtime updates. This is a full container management platform built into a hosting panel. HestiaCP, CloudPanel, and CyberPanel have nothing close to this.
+**Docker integration that no other free panel has** — 147 one-click app templates across 14 categories. Docker Compose stack management. Container logs, shell, stats, resource limits, health checks. Blue-green zero-downtime updates. This is a full container management platform built into a hosting panel. HestiaCP, CloudPanel, and CyberPanel have nothing close to this.
 
 **A complete developer toolkit** — Git push-to-deploy with Nixpacks auto-build (30+ languages, no Dockerfile needed), preview environments with TTL, a full CLI for automation, and Infrastructure as Code (YAML export/import). These are features that RunCloud and Ploi charge $8-15/month for. DockPanel includes all of them for free.
 

@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 840 HTTP routes. 146 app templates. 3537 regression assertions. ~46MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 840 HTTP routes. 147 app templates. 3541 regression assertions. ~46MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">
@@ -42,13 +42,13 @@ on any firewalld box by design. See [getting started](docs/getting-started.md#re
 
 ## Why DockPanel?
 
-No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 146 one-click Docker app templates, per-image CVE scanning with deploy gating, a WAF, passkey login, GPU passthrough, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all while the panel services themselves use under 20MB of RAM. DockPanel does.
+No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 147 one-click Docker app templates, per-image CVE scanning with deploy gating, a WAF, passkey login, GPU passthrough, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all while the panel services themselves use under 20MB of RAM. DockPanel does.
 
 | | DockPanel | HestiaCP | CloudPanel | RunCloud |
 |---|---|---|---|---|
 | **Price** | **Free** | Free | Free | $8/mo+ |
 | **Stack** | **Rust + React** | PHP | PHP | PHP (SaaS) |
-| **Docker native** | **146 templates** | No | No | No |
+| **Docker native** | **147 templates** | No | No | No |
 | **Git deploy** | **Blue-green, zero-downtime** | No | No | Basic |
 | **Multi-server** | **Unlimited** | No | No | Yes |
 | **Reseller + white-label** | **Yes** | Reseller only | No | No |
@@ -87,7 +87,7 @@ found, including what is still broken.
 </details>
 
 <details>
-<summary><strong>Docker Apps</strong> — 146 one-click templates across 14 categories</summary>
+<summary><strong>Docker Apps</strong> — 147 one-click templates across 14 categories</summary>
 
 ![Docker Apps](.github/screenshots/dp-apps.png)
 </details>
@@ -175,7 +175,7 @@ found, including what is still broken.
 ### Hosting
 - **Sites** — Static, PHP (8.1–8.5), Node.js, Python, reverse proxy. Automatic Nginx config, SSL, PHP-FPM pools.
 - **Databases** — MySQL/PostgreSQL in Docker. Built-in SQL browser, visual schema browser, scheduled dump/restore. Auto-cleanup on site delete.
-- **Docker Apps** — 146 templates across 14 categories (AI, CMS, Database, Media, Monitoring, and more). Compose stacks. Resource limits. GPU passthrough.
+- **Docker Apps** — 147 templates across 14 categories (AI, CMS, Database, Media, Monitoring, and more). Compose stacks. Resource limits. GPU passthrough.
 - **Git Deploy** — Push-to-deploy. Atomic zero-downtime deploys (Capistrano-style). Nixpacks (30+ languages). Preview environments.
 - **WordPress Toolkit** — Multi-site dashboard, vulnerability scanning, security hardening, bulk updates.
 - **CMS Install** — WordPress, Laravel, Drupal, Joomla, Symfony, CodeIgniter — one click.

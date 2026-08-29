@@ -84,11 +84,22 @@ done
 # naive s{/\*.*?\*/}{}gs deletes real code because `/*` occurs inside string
 # literals, and a truncated subject makes an ABSENCE arm pass on code the
 # stripper merely removed — failure in the reassuring direction.
+#
+# The trailing `#[cfg(test)] mod tests { ... }` block is ALSO cut, to end of
+# file — matched only by that exact two-line marker (never a bare `#[cfg(test)]`
+# on a single function elsewhere), so this can only ever remove the whole-file
+# test module this codebase's convention always puts last, never production
+# code partway through a file. §A's census is about what SHIPS: a test helper
+# can share the create+remove shape a real recreate path has (a probe
+# container has no data-loss stakes to migrate) without being one, and
+# `#[cfg(test)]` code never reaches a customer's server to have this bug in
+# the first place.
 code() {
   perl -0777 -pe '
     s{\{/\*.*?\*/\}}{}gs;
     s{^[ \t]*/\*.*?\*/[ \t]*$}{}gms;
     s{^\s*//.*$}{}gm;
+    s{^\#\[cfg\(test\)\]\nmod tests \{.*\z}{}ms;
   ' "$1"
 }
 

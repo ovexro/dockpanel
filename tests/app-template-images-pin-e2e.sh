@@ -144,17 +144,22 @@ done
 [ "$missing" -eq 0 ] && ok "all ${#LIVE[@]} replacement references are present"
 
 echo
-echo "§4 the six withdrawn templates stay withdrawn"
+echo "§4 the five withdrawn templates stay withdrawn"
 
 # Withdrawn rather than repointed: the only pullable candidates were a frozen
 # vendor archive (bitnamilegacy, unpatched), a personal-account rebuild, or an
 # amd64-only third-party image — and this panel publishes an arm64 build.
 #
-# dozzle and portainer (v2.178.0) are a DIFFERENT withdrawal shape: their images
-# resolve fine, but both need the host Docker socket for their core purpose and
-# `deploy_app` deliberately never mounts it (a host-escape vector regardless of
-# who is allowed to trigger the deploy) — see FEATURES.md §Withdrawn Claims.
-for id in discourse zabbix strapi stable-diffusion-webui dozzle portainer; do
+# portainer (v2.178.0) is a DIFFERENT withdrawal shape: its image resolves
+# fine, but it needs the host Docker socket for its core purpose (create/stop/
+# exec containers, manage volumes/networks) and `deploy_app` deliberately never
+# mounts it (a host-escape vector regardless of who is allowed to trigger the
+# deploy) — see FEATURES.md §Withdrawn Claims. dozzle had the identical defect
+# and was withdrawn alongside it at v2.178.0, but reinstated at v2.179.0 behind
+# a docker-socket-proxy sidecar that holds the real socket instead (§7 below)
+# — a read-only proxy suffices for it because listing containers and reading
+# logs is ALL it ever needed, unlike portainer's write-level requirements.
+for id in discourse zabbix strapi stable-diffusion-webui portainer; do
   if grep -qF "id:\"$id\"" <<<"$FLAT"; then
     bad "template '$id' is back in the catalogue — it was withdrawn and should stay withdrawn"
   else
@@ -172,6 +177,11 @@ for id in strapi discourse portainer; do
   fi
 done
 [ "$orphan" -eq 0 ] && ok "no icon outlives its withdrawn template"
+
+# dozzle never had a dedicated entry in appIcons even before its withdrawal —
+# unlike strapi/discourse/portainer, it was never one of the templates this
+# map special-cases, so there is no icon to reinstate. It renders via the same
+# `tmpl.name[0]` letter-badge fallback it always did; nothing here regresses.
 
 echo
 echo "§5 every start command established by running the image is still declared"
@@ -231,6 +241,53 @@ for id in authentik vllm surrealdb; do
     ok "'$id' carries no command"
   fi
 done
+
+echo
+echo "§7 dozzle's reinstated socket access is proxied, never mounted directly"
+
+# #125's root cause was a template needing the host Docker socket; the FIX is
+# not to grant it one — the catalogue file itself must never reference the
+# real socket path. Only the sidecar module (a separate file, checked below)
+# does, and only for its OWN container.
+if grep -qE '/var/run/docker\.sock' "$CATALOGUE"; then
+  bad "$CATALOGUE references the host Docker socket directly — it should never; only the sidecar does"
+else
+  ok "the catalogue itself never references the host Docker socket path"
+fi
+
+if grep -qF '"dozzle",app_sidecar::SidecarDef{image:"tecnativa/docker-socket-proxy:latest"' <<<"$FLAT"; then
+  ok "dozzle's sidecar pins the tecnativa/docker-socket-proxy image"
+else
+  bad "dozzle's TEMPLATE_SIDECAR entry changed or is missing"
+fi
+
+# Deny-by-default, spelled out explicitly rather than left to the image's own
+# defaults — mutation-detectable: flip any one of these to "1" in source and
+# this arm goes red.
+DENY=(POST EXEC IMAGES NETWORKS VOLUMES SERVICES SWARM SYSTEM TASKS BUILD COMMIT AUTH SECRETS CONFIGS DISTRIBUTION NODES PLUGINS SESSION GRPC INFO ALLOW_START ALLOW_STOP ALLOW_RESTARTS ALLOW_PAUSE ALLOW_UNPAUSE)
+denied_ok=1
+for tog in "${DENY[@]}"; do
+  grep -qF "(\"$tog\",\"0\")" <<<"$FLAT" || { bad "DOZZLE_PROXY_ENV no longer denies $tog"; denied_ok=0; }
+done
+[ "$denied_ok" -eq 1 ] && ok "all ${#DENY[@]} dangerous socket-proxy endpoints stay denied"
+
+if grep -qF '("CONTAINERS","1")' <<<"$FLAT"; then
+  ok "the proxy grants exactly the one endpoint dozzle needs (CONTAINERS)"
+else
+  bad "DOZZLE_PROXY_ENV no longer grants CONTAINERS — dozzle cannot list containers at all"
+fi
+
+SIDECAR=panel/agent/src/services/app_sidecar.rs
+if [ -f "$SIDECAR" ]; then
+  SIDECAR_FLAT=$(tr -d ' \t\n' < "$SIDECAR")
+  if grep -qF 'binds:Some(vec!["/var/run/docker.sock:/var/run/docker.sock:ro"' <<<"$SIDECAR_FLAT"; then
+    ok "only the sidecar container mounts the real socket, and read-only"
+  else
+    bad "app_sidecar.rs no longer mounts the host socket into the sidecar — dozzle would be unreachable again"
+  fi
+else
+  bad "missing $SIDECAR — the sidecar module was removed but dozzle's catalogue entry was not"
+fi
 
 echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
