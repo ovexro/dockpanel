@@ -100,14 +100,23 @@ else
   bad "B3 must call plan_from_price_id and use metadata only as the None-arm fallback — trusting metadata directly reintroduces the desync bug"
 fi
 
-# B4 POSITIONAL: the price_id read must precede the plan_def() call that
-# determines the persisted server_limit — resolving it after would be dead code.
+# B4 POSITIONAL: the price_id read must precede the resolver call that uses it
+# — resolving it after would be dead code.
 PRICE_LINE=$(grep -n '\["items"\]\["data"\]\[0\]\["price"\]\["id"\]' <<< "$UPDATED" | head -1 | cut -d: -f1)
-PLANDEF_LINE=$(grep -n 'plan_def(plan\.as_str())' <<< "$UPDATED" | head -1 | cut -d: -f1)
-if [ -n "$PRICE_LINE" ] && [ -n "$PLANDEF_LINE" ] && [ "$PRICE_LINE" -lt "$PLANDEF_LINE" ]; then
-  ok "B4 the price lookup (line $PRICE_LINE) precedes plan_def() (line $PLANDEF_LINE)"
+RESOLVE_LINE=$(grep -n 'plan_from_price_id(&state\.db, price_id)' <<< "$UPDATED" | head -1 | cut -d: -f1)
+if [ -n "$PRICE_LINE" ] && [ -n "$RESOLVE_LINE" ] && [ "$PRICE_LINE" -lt "$RESOLVE_LINE" ]; then
+  ok "B4 the price lookup (line $PRICE_LINE) precedes the resolver call (line $RESOLVE_LINE)"
 else
-  bad "B4 the price lookup must precede plan_def — price=${PRICE_LINE:-none} plandef=${PLANDEF_LINE:-none}"
+  bad "B4 the price lookup must precede the resolver call — price=${PRICE_LINE:-none} resolve=${RESOLVE_LINE:-none}"
+fi
+
+# B5: plan_server_limit is no longer written here — migration
+# 20260313100000_remove_billing_enforcement.sql deliberately set it to
+# unlimited for everyone; a webhook write would fight that decision again.
+if grep -qE 'plan_server_limit' <<< "$UPDATED"; then
+  bad "B5 customer.subscription.updated must NOT write plan_server_limit — the migration already set it to unlimited for everyone"
+else
+  ok "B5 customer.subscription.updated no longer writes plan_server_limit"
 fi
 
 echo "== §C  create_checkout refuses a second active subscription =="
@@ -168,6 +177,55 @@ if grep -qE 'session\.get\("error"\)' <<< "$PORTAL"; then
   ok "D3 customer_portal now checks Stripe's error key"
 else
   bad "D3 customer_portal must check session.get(\"error\") before reading session[\"url\"] — a 4xx (e.g. deleted customer) degrades to a confusing generic 502 otherwise"
+fi
+
+echo "== §E  the webhook no longer fights migration 20260313100000's unlimited-for-everyone decision =="
+
+# E1: PlanDef carries no server_limit field — it was write-only the moment
+# nothing enforced it, and would silently invite a future writer to reuse it.
+PLANDEF_STRUCT=$(awk '/^struct PlanDef \{/{i=1} i{print} i && /^}$/{exit}' "$BILLING")
+if grep -qE 'server_limit' <<< "$PLANDEF_STRUCT"; then
+  bad "E1 PlanDef must not carry a server_limit field — it is written nowhere and read nowhere post-fix"
+else
+  ok "E1 PlanDef no longer carries a dead server_limit field"
+fi
+
+# E2: checkout.session.completed no longer writes plan_server_limit.
+COMPLETED=$(awk '/"checkout\.session\.completed" =>/{i=1} i{print} i && /^        }$/{exit}' "$BILLING")
+NCOMP=$(grep -c . <<< "$COMPLETED")
+if [ "$NCOMP" -ge 10 ]; then
+  ok "E2-control checkout.session.completed arm extracted — $NCOMP lines"
+else
+  bad "E2-control checkout.session.completed arm extracted — only $NCOMP lines (the extractor broke)"
+fi
+if grep -qE 'plan_server_limit' <<< "$COMPLETED"; then
+  bad "E2 checkout.session.completed must NOT write plan_server_limit — the migration already set it to unlimited for everyone"
+else
+  ok "E2 checkout.session.completed no longer writes plan_server_limit"
+fi
+
+# E3: customer.subscription.deleted no longer writes plan_server_limit.
+DELETED=$(awk '/"customer\.subscription\.deleted" =>/{i=1} i{print} i && /^        }$/{exit}' "$BILLING")
+NDEL=$(grep -c . <<< "$DELETED")
+if [ "$NDEL" -ge 8 ]; then
+  ok "E3-control customer.subscription.deleted arm extracted — $NDEL lines"
+else
+  bad "E3-control customer.subscription.deleted arm extracted — only $NDEL lines (the extractor broke)"
+fi
+if grep -qE 'plan_server_limit' <<< "$DELETED"; then
+  bad "E3 customer.subscription.deleted must NOT write plan_server_limit — it would re-restrict a downgraded user below the column's own unlimited default"
+else
+  ok "E3 customer.subscription.deleted no longer writes plan_server_limit"
+fi
+
+# E4 negative control: plan_server_limit must not appear ANYWHERE in the
+# webhook function at all — not just absent from the three arms checked
+# individually, catching a write hidden outside a match arm.
+WEBHOOK=$(awk '/^pub async fn webhook\(/{i=1} i{print} i && /^}$/{exit}' "$BILLING")
+if grep -qE 'plan_server_limit' <<< "$WEBHOOK"; then
+  bad "E4 plan_server_limit must not appear anywhere in webhook() — a write outside the three checked arms would still fight the migration"
+else
+  ok "E4-negative-control plan_server_limit does not appear anywhere in webhook()"
 fi
 
 echo

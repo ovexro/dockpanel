@@ -11,18 +11,22 @@ use crate::auth::AuthUser;
 use crate::error::{ApiError, err, internal_error, upstream_error};
 use crate::AppState;
 
-/// Plan definitions: name, price_id (set via Stripe dashboard), server_limit.
+/// Plan definitions: display name only. `users.plan_server_limit` is NOT set
+/// from here — migration `20260313100000_remove_billing_enforcement.sql`
+/// deliberately set every row (and the column default) to unlimited, and
+/// nothing in the codebase reads the column. Writing a tier-specific number
+/// from the webhook would fight that decision and was itself a bug: a paying
+/// customer's recorded limit ended up STRICTER than a free user's.
 struct PlanDef {
     name: &'static str,
-    server_limit: i32,
 }
 
 fn plan_def(plan: &str) -> PlanDef {
     match plan {
-        "starter" => PlanDef { name: "Starter", server_limit: 1 },
-        "pro" => PlanDef { name: "Pro", server_limit: 5 },
-        "agency" => PlanDef { name: "Agency", server_limit: 20 },
-        _ => PlanDef { name: "Free", server_limit: 1 },
+        "starter" => PlanDef { name: "Starter" },
+        "pro" => PlanDef { name: "Pro" },
+        "agency" => PlanDef { name: "Agency" },
+        _ => PlanDef { name: "Free" },
     }
 }
 
@@ -310,10 +314,9 @@ pub async fn webhook(
                 let pd = plan_def(plan);
                 sqlx::query(
                     "UPDATE users SET plan = $1, plan_status = 'active', \
-                     plan_server_limit = $2, stripe_subscription_id = $3 WHERE id = $4::uuid",
+                     stripe_subscription_id = $2 WHERE id = $3::uuid",
                 )
                 .bind(plan)
-                .bind(pd.server_limit)
                 .bind(subscription_id)
                 .bind(user_id)
                 .execute(&state.db)
@@ -344,14 +347,12 @@ pub async fn webhook(
                 _ => status,
             };
 
-            let pd = plan_def(plan.as_str());
             sqlx::query(
-                "UPDATE users SET plan = $1, plan_status = $2, plan_server_limit = $3 \
-                 WHERE stripe_subscription_id = $4",
+                "UPDATE users SET plan = $1, plan_status = $2 \
+                 WHERE stripe_subscription_id = $3",
             )
             .bind(plan.as_str())
             .bind(plan_status)
-            .bind(pd.server_limit)
             .bind(sub_id)
             .execute(&state.db)
             .await
@@ -365,7 +366,7 @@ pub async fn webhook(
 
             sqlx::query(
                 "UPDATE users SET plan = 'free', plan_status = 'active', \
-                 plan_server_limit = 1, stripe_subscription_id = NULL \
+                 stripe_subscription_id = NULL \
                  WHERE stripe_subscription_id = $1",
             )
             .bind(sub_id)

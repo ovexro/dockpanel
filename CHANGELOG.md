@@ -4,6 +4,20 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.176.1]
+
+### The billing webhook wrote a stricter server limit for paying customers than free users got by default
+
+Migration `20260313100000_remove_billing_enforcement.sql` deliberately set
+every account's server limit (and the column's own default) to unlimited —
+but the webhook kept writing the old tier-specific numbers (1/5/20) on every
+checkout and plan change, so a real Stripe subscriber ended up with a
+*lower* recorded limit than a brand-new free signup. Harmless today since
+nothing reads the column, but it would have inverted the moment enforcement
+was ever restored. The webhook no longer writes `plan_server_limit` at all —
+the column is fully owned by its schema default now, matching the
+enforcement-removal migration's own decision instead of quietly fighting it.
+
 ## [2.176.0]
 
 ### A Customer Portal plan change silently desynced Stripe billing from what a customer actually paid
