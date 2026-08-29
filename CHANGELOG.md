@@ -4,6 +4,41 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.176.0]
+
+### A Customer Portal plan change silently desynced Stripe billing from what a customer actually paid
+
+`customer.subscription.updated` determined a customer's plan tier from
+`metadata.plan`, a value stamped once at the *original* checkout and never
+touched again. Upgrading or downgrading through Stripe's self-service
+Customer Portal changes the subscription's price but not its metadata — so a
+portal-driven plan change permanently recorded the *old* plan (and its old
+server limit) with no reconciliation ever correcting it. The webhook now
+resolves the plan from the subscription's current price against the
+admin-configured `stripe_price_{plan}` settings, falling back to metadata
+only when no configured price matches.
+
+### Two of three Stripe API calls in the billing flow ignored Stripe's own error responses
+
+Creating a Stripe customer and opening the Customer Portal both read a
+success field (`id` / `url`) straight off the response without first checking
+for Stripe's `error` key — a 4xx from Stripe (e.g. a deleted customer)
+degraded to a generic "missing customer id" / "missing portal URL" 502
+instead of surfacing the actual cause. Both now check for `error` first,
+matching the pattern the checkout-session call already used.
+
+### Starting checkout while already subscribed could spawn a second Stripe subscription
+
+`create_checkout` never checked whether the caller already had an active
+subscription before starting a new one — an upgrade click (or an accidental
+double-click) could create a second Stripe subscription and desync the
+recorded `stripe_subscription_id`. It now rejects with 409 when a
+subscription is already on file, pointing the caller at the Customer Portal
+to make changes instead.
+
+Found by a fan-out audit-coverage pass on `billing.rs` — this Stripe
+integration had never had a dedicated review before this session.
+
 ## [2.175.0]
 
 ### Installing PowerDNS on a second server silently overwrote the first server's credentials

@@ -26,6 +26,29 @@ fn plan_def(plan: &str) -> PlanDef {
     }
 }
 
+/// Resolve a Stripe price ID back to a plan key by matching it against the
+/// admin-configured `stripe_price_{plan}` settings rows. This is the reliable
+/// source of truth for a subscription's CURRENT tier — `metadata.plan` is a
+/// merchant-set snapshot taken once at original checkout and is never revised
+/// by a Customer Portal upgrade/downgrade, which changes the subscription's
+/// price but not its metadata.
+async fn plan_from_price_id(db: &sqlx::PgPool, price_id: &str) -> Option<String> {
+    if price_id.is_empty() {
+        return None;
+    }
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key, value FROM settings WHERE key IN \
+         ('stripe_price_starter', 'stripe_price_pro', 'stripe_price_agency')",
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
+
+    rows.into_iter()
+        .find(|(_, v)| v == price_id)
+        .map(|(k, _)| k.trim_start_matches("stripe_price_").to_string())
+}
+
 /// GET /api/billing/plan — Get current user's plan info.
 pub async fn current_plan(
     State(state): State<AppState>,
@@ -72,13 +95,20 @@ pub async fn create_checkout(
     }
 
     // Get or create Stripe customer
-    let user: (Option<String>, String) = sqlx::query_as(
-        "SELECT stripe_customer_id, email FROM users WHERE id = $1",
+    let user: (Option<String>, String, Option<String>) = sqlx::query_as(
+        "SELECT stripe_customer_id, email, stripe_subscription_id FROM users WHERE id = $1",
     )
     .bind(claims.sub)
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("create checkout", e))?;
+
+    if user.2.is_some() {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "You already have an active subscription — use the Customer Portal to change plans",
+        ));
+    }
 
     let customer_id = if let Some(cid) = user.0 {
         cid
@@ -95,6 +125,10 @@ pub async fn create_checkout(
 
         let body: serde_json::Value = resp.json().await
             .map_err(|e| upstream_error("Stripe response parse", e))?;
+
+        if let Some(err_msg) = body.get("error") {
+            return Err(upstream_error("Stripe customer creation", err_msg));
+        }
 
         let cid = body["id"].as_str()
             .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "Stripe: missing customer id"))?
@@ -195,6 +229,10 @@ pub async fn customer_portal(
     let session: serde_json::Value = resp.json().await
         .map_err(|e| upstream_error("Stripe response parse", e))?;
 
+    if let Some(err_msg) = session.get("error") {
+        return Err(upstream_error("Stripe portal", err_msg));
+    }
+
     let url = session["url"].as_str()
         .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "Stripe: missing portal URL"))?;
 
@@ -288,8 +326,16 @@ pub async fn webhook(
         "customer.subscription.updated" => {
             let sub = &event["data"]["object"];
             let status = sub["status"].as_str().unwrap_or("");
-            let plan = sub["metadata"]["plan"].as_str().unwrap_or("starter");
             let sub_id = sub["id"].as_str().unwrap_or("");
+
+            // Derive the plan from the subscription's CURRENT price, not the
+            // frozen checkout-time metadata — a portal-driven upgrade/downgrade
+            // changes the price without ever touching metadata.
+            let price_id = sub["items"]["data"][0]["price"]["id"].as_str().unwrap_or("");
+            let plan = match plan_from_price_id(&state.db, price_id).await {
+                Some(p) => p,
+                None => sub["metadata"]["plan"].as_str().unwrap_or("starter").to_string(),
+            };
 
             let plan_status = match status {
                 "active" | "trialing" => "active",
@@ -298,12 +344,12 @@ pub async fn webhook(
                 _ => status,
             };
 
-            let pd = plan_def(plan);
+            let pd = plan_def(plan.as_str());
             sqlx::query(
                 "UPDATE users SET plan = $1, plan_status = $2, plan_server_limit = $3 \
                  WHERE stripe_subscription_id = $4",
             )
-            .bind(plan)
+            .bind(plan.as_str())
             .bind(plan_status)
             .bind(pd.server_limit)
             .bind(sub_id)
