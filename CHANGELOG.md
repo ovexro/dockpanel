@@ -4,6 +4,28 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.177.0]
+
+### A second dead column rode along with the one already found and fixed on the same table
+
+`backup_destinations.encryption_enabled` was added in the same migration and the same
+`ALTER TABLE` as `encryption_key` — the column found dead and fixed in v2.24.0, when restore
+was found to be reading a key nothing ever wrote. That fix documented `encryption_key`'s
+deadness at three call sites; `encryption_enabled` had zero readers, zero writers, and no
+comment anywhere, and rode along unexamined through both that fix and a second pass on this
+table, because nothing named it as a thing to check. It's harmless today (0 backup
+destinations configured on demo.dockpanel.dev, so nothing could have gated on it) — DockPanel
+encrypts per-policy (`backup_policies.encrypt`), with one key derived from the process JWT
+secret, never per-destination, so neither column was ever going to be wired to anything. Now
+documented directly above the `BackupDestination` struct, the same defence already used for
+excluding `config` from `SelectableDestination`, so a future reader has a reason to check
+before reintroducing either field.
+
+An independent fan-out audit of `secrets.rs`'s ownership-scoping axis (Secrets Manager vault
+CRUD, versioning, site auto-injection, export/import) found this table's scoping clean —
+13/13 handlers correctly scoped, including the two adjacent files (`deploy.rs`'s auto-inject,
+`sites.rs`'s ownership transfer) that share the same invariant. No change needed there.
+
 ## [2.176.1]
 
 ### The billing webhook wrote a stricter server limit for paying customers than free users got by default

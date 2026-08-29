@@ -36,6 +36,18 @@ pub struct SelectableDestination {
     pub dtype: String,
 }
 
+/// `encryption_enabled` and `encryption_key` are schema columns from the
+/// `20260322000000_backup_orchestrator.sql` migration's original per-destination
+/// encryption design; both are dead and are excluded from this struct BY
+/// CONSTRUCTION, the same defence `SelectableDestination` above uses for `config`.
+/// The design that shipped instead encrypts per-POLICY (`backup_policies.encrypt`)
+/// with one key derived from the process JWT secret
+/// (`backup_policy_executor::derive_backup_encryption_key`) — never per-destination,
+/// so neither column was ever wired to anything. `encryption_key`'s deadness was
+/// found and documented at three call sites (v2.24.0, lesson #70); this comment is
+/// `encryption_enabled`'s first documentation anywhere — it had zero readers or
+/// writers and no comment, and rode along unnoticed through that same fix and a
+/// second pass on this table, because nothing named it as a thing to check.
 #[derive(serde::Serialize, serde::Deserialize, sqlx::FromRow, Clone)]
 pub struct BackupDestination {
     pub id: Uuid,

@@ -528,6 +528,48 @@ else
   bad "$TYP_LEAKS markup-mode conditional branch(es) in $TYP — they render as source text in the PDF"
 fi
 
+echo "== §12  backup_destinations.encryption_enabled is a documented dead column, not a forgotten one (s425) =="
+#
+# The struct is the caller-facing shape written by hand — unlike SelectableDestination,
+# whose "config absent by construction" comment already explains itself, nothing ever
+# explained why encryption_enabled/encryption_key are missing from BackupDestination.
+# That silence is exactly what let TWO prior remediation passes on this same migration
+# (v2.24.0's encryption_key fix, and a second pass on this table) walk past the sibling
+# column: it had zero readers, zero writers, and no comment anywhere.
+DEST_RAW=$(cat "$DEST")
+STRUCT_BODY=$(sed -n '/^pub struct BackupDestination {/,/^}/p' "$DEST")
+
+if [ -z "$STRUCT_BODY" ]; then
+  bad "§12 could not locate 'pub struct BackupDestination' in $DEST — extraction failed, arm skipped"
+elif ! grep -qE '^\s*pub id: Uuid,' <<< "$STRUCT_BODY"; then
+  bad "§12 struct extraction landed on the wrong block (no 'id' field) — positive control failed"
+else
+  ok "§12 struct extraction located BackupDestination correctly (positive control: 'id' field present)"
+  if grep -qE 'encryption_enabled|encryption_key' <<< "$STRUCT_BODY"; then
+    bad "§12 BackupDestination declares an encryption_enabled/encryption_key field — a dead column was reintroduced without removing or updating the tombstone comment above the struct"
+  else
+    ok "§12 BackupDestination still excludes encryption_enabled/encryption_key (by construction)"
+  fi
+fi
+
+# The tombstone must live directly above the struct, not merely somewhere in the file —
+# an unattached comment gives a future reader no reason to look at it before adding a field.
+PRE_STRUCT=$(grep -B12 '^pub struct BackupDestination {' "$DEST")
+if grep -q 'encryption_enabled' <<< "$PRE_STRUCT" && grep -q 'encryption_key' <<< "$PRE_STRUCT"; then
+  ok "§12 a tombstone comment directly above BackupDestination documents both dead columns"
+else
+  bad "§12 no comment directly above BackupDestination documents encryption_enabled/encryption_key as dead — a future reader has no way to know they are intentionally unused"
+fi
+
+# Regression control: if this ever fires red, the "zero readers/writers" claim the
+# tombstone makes is now false and the comment (or the code) needs to change.
+ENC_ENABLED_HITS=$(grep -rniE 'encryption_enabled' --include=*.rs --include=*.tsx --include=*.ts panel/ | grep -vF "$DEST" | wc -l)
+if [ "$ENC_ENABLED_HITS" -gt 0 ]; then
+  bad "§12 encryption_enabled is referenced outside $DEST ($ENC_ENABLED_HITS hit(s)) — the dead-column claim in the tombstone is stale"
+else
+  ok "§12 encryption_enabled has no reader or writer anywhere else in the tree"
+fi
+
 echo
 echo "backup-truth: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
