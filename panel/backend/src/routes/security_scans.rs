@@ -235,6 +235,52 @@ pub async fn trigger_scan(
     )
     .await;
 
+    // Resolve any stale firing alert BEFORE deciding whether to raise a new
+    // one — mirrors `security_scanner::run_scan`'s resolve-then-fire order,
+    // which this manual path never had. Without it, clicking "Run Scan" to
+    // confirm a fix left the earlier `alerts` row `status = 'firing'` forever
+    // (or until the next scheduled scan, up to 7 days later): the dashboard's
+    // firing-alert count and its -15 health-score penalty never cleared even
+    // though the scan the operator just ran came back clean, while the
+    // scan-history tiles (which read `security_scans` directly) updated
+    // instantly — the two halves of the same dashboard card disagreed with
+    // each other after every manual rescan.
+    //
+    // ⚠ Looped over EVERY admin, not just `claims.sub` (the one who clicked).
+    // `run_scan` — the scheduled twin this mirrors — fires per-admin
+    // (`send_scan_alerts`), so a multi-admin install can have one firing row
+    // PER ADMIN for the same condition. Resolving only the clicking admin's
+    // own row would leave every other admin's row stuck exactly as before,
+    // which is the bug this fix exists to close for admins who didn't happen
+    // to be the one who clicked.
+    let admins: Vec<(uuid::Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE role = 'admin'")
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+    for (user_id,) in &admins {
+        notifications::resolve_alert(
+            &state.db,
+            *user_id,
+            Some(server_id),
+            None,
+            "security",
+            "",
+            "Security alert resolved",
+            "A manual security scan found no matching issue — the earlier alert no longer applies.",
+        )
+        .await;
+    }
+    if let Err(e) = sqlx::query(
+        "UPDATE alerts SET status = 'resolved', resolved_at = NOW() \
+         WHERE alert_type = 'security' AND server_id = $1 AND status = 'acknowledged'",
+    )
+    .bind(server_id)
+    .execute(&state.db)
+    .await
+    {
+        tracing::error!("Failed to resolve acknowledged security alerts: {e}");
+    }
+
     // Create alerts for critical/warning findings
     if critical > 0 || warning > 0 {
         let severity = if critical > 0 { "critical" } else { "warning" };

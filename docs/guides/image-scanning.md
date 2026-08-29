@@ -46,6 +46,10 @@ All endpoints require admin auth.
 | `GET` | `/api/apps/:name/scan` | Latest stored scan for an app's image |
 | `GET` | `/api/image-scan/recent` | Latest row per scanned image |
 
+## Alerts
+
+A critical or high-severity finding fires an `image_scan` alert to every administrator, keyed per image so unrelated images never resolve or suppress each other's alert. It clears itself automatically the next time that image scans clean — no manual acknowledgement needed. Mute or route it like any other alert type from **Settings → Notifications**.
+
 ## Storage
 
 Scan results are stored in the `image_scan_findings` table. Per image, only the most recent 30 scans are retained; older rows are trimmed after each scan to keep the table lean.

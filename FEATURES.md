@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.173.1 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.174.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -107,7 +107,7 @@
 | `backup_scheduler` | per schedule | Execute scheduled backups |
 | `server_monitor` | 60s | Check server health, update status |
 | `uptime_monitor` | per monitor | HTTP/TCP uptime checks |
-| `security_scanner` | daily | Automated security audits |
+| `security_scanner` | weekly | Automated security audits |
 | `alert_engine` | 60s | Evaluate alert rules, fire notifications |
 | `auto_healer` | 120s | Auto-fix crashed services, full disk, expiring SSL |
 | `metrics_collector` | 60s | Store CPU/mem/disk history, 7-day retention |
@@ -237,7 +237,7 @@ honest:
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
 | App templates | 148 | derived | every commit |
 | HTTP routes | 840 (546 backend + 294 agent) | derived | every commit |
-| Regression-pin assertions | 3484 (96 suites) | derived | every commit |
+| Regression-pin assertions | 3499 (97 suites) | derived | every commit |
 | Frontend pages | 53 | derived | every commit |
 | DB migrations | 120 | derived | every commit |
 | Supervised background services | 15 | derived | every commit |

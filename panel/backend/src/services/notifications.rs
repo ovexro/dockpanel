@@ -816,6 +816,7 @@ pub const SUPPRESSIBLE_ALERT_TYPES: &[&str] = &[
     "ssl_expiry",
     "ssl_renewal_failure",
     "security",
+    "image_scan",
     "slow_response",
 ];
 

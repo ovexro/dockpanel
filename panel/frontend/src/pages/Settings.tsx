@@ -47,6 +47,7 @@ const SUPPRESSIBLE_ALERT_TYPES: { key: string; label: string }[] = [
   { key: "ssl_expiry", label: "SSL expiry" },
   { key: "ssl_renewal_failure", label: "SSL renewal" },
   { key: "security", label: "Security scan" },
+  { key: "image_scan", label: "Image scan" },
   { key: "slow_response", label: "Slow response" },
 ];
 

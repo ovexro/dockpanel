@@ -101,6 +101,7 @@ const TYPE_LABELS: Record<string, string> = {
   cron_failure: "Cron",
   backup_verification_failed: "Backup verification",
   security: "Security scan",
+  image_scan: "Image scan",
   slow_response: "Slow response",
 };
 

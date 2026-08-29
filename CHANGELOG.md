@@ -4,6 +4,43 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.174.0]
+
+### A vulnerable container image found nothing but a row — and a fixed security scan never told the dashboard it was fixed
+
+A fan-out audit of the image-scan / SBOM / security-scan surface found an
+earlier ownership-scoping fix still intact, but surfaced two real gaps
+nothing since had noticed:
+
+A critical or high-severity vulnerability discovered in a running container
+image — whether by the manual "Scan" button, a deploy-triggered scan, or the
+30-minute background sweep that runs against every fleet member — was
+written to `image_scan_findings` and nowhere else. No alert fired, nothing
+appeared in the firing count, and the only way to notice was opening the Apps
+page and reading the badge. Image scans now fire through the same alert
+pipeline the full-server security scanner already used, keyed per
+`(server, image)` so two images never resolve or suppress each other's alert,
+and clear themselves the same way once a later scan comes back clean. New
+`image_scan` type in Settings → Notifications, so it can be muted like every
+other alert.
+
+Separately — found by the audit's completeness pass, not by the topic it was
+assigned — clicking "Run Scan" on the Security page to confirm a fix never
+cleared the alert the earlier, dirty scan had raised. The scheduled weekly
+scan always resolved a stale firing alert before deciding whether to raise a
+new one; the manual path never did, so a clean manual rescan left the
+dashboard's firing-alert badge and its -15 health-score penalty stuck for up
+to 7 days, until the next scheduled scan happened to run — while the
+scan-history tiles right next to it, which read the scan table directly,
+updated instantly. The two halves of the same dashboard card disagreed with
+each other after every manual rescan that fixed something. Both paths now
+resolve before they decide whether to fire.
+
+Also: `FEATURES.md`'s Background Services table listed the security scanner
+as running `daily`; it has run `weekly` since v2.58.0, and `SECURITY.md` said
+so correctly the whole time — a docs/docs contradiction in the same repo that
+no test caught.
+
 ## [2.173.1]
 
 ### API shutdown is now bounded — a stuck deploy no longer waits the full systemd kill window

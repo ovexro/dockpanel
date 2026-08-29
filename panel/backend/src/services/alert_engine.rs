@@ -108,10 +108,15 @@ pub async fn run(pool: PgPool, agents: AgentRegistry, mut shutdown_rx: tokio::sy
 /// before any of that runs means the condition is still true on the first tick
 /// after the window closes, and pages then.
 ///
-/// The five types raised elsewhere (`backup_failure`, `backup_verification_failed`,
-/// `cron_failure`, `security`, `ssl_renewal_failure`) are deliberately NOT
-/// suppressed: they report one-shot events rather than a standing condition, so
-/// nothing re-evaluates them afterwards and suppressing one would lose it.
+/// The six types raised elsewhere (`backup_failure`, `backup_verification_failed`,
+/// `cron_failure`, `security`, `image_scan`, `ssl_renewal_failure`) are
+/// deliberately NOT suppressed: each report is the result of a specific run
+/// (a backup, a cron job, a scan), not a standing condition THIS engine
+/// re-evaluates on its own 60-second loop — this function's suppression exists
+/// for the 14 types checked below, in this loop. A run that happens to fall
+/// inside a maintenance window is not deferred to the next tick the way a
+/// standing condition is; suppressing it here would lose that run's result
+/// outright, not merely delay it.
 async fn maintenance_users(pool: &PgPool) -> HashSet<Uuid> {
     sqlx::query_scalar::<_, Uuid>(
         "SELECT DISTINCT user_id FROM maintenance_windows \
