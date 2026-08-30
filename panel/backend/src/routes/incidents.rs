@@ -205,7 +205,7 @@ pub async fn create(
     .await;
 
     // Notify subscribers
-    notify_subscribers(&incident.title, status, req.description.as_deref().unwrap_or(""));
+    notify_subscribers(&incident.title, status, req.description.as_deref().unwrap_or(""), incident.user_id);
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "incident.create",
@@ -381,7 +381,7 @@ pub async fn update(
         .execute(&state.db).await;
 
         // Notify subscribers of update
-        notify_subscribers(&incident.title, update_status, message);
+        notify_subscribers(&incident.title, update_status, message, incident.user_id);
     }
 
     // Re-fetch after postmortem auto-populate to return the complete record
@@ -491,11 +491,11 @@ pub async fn post_update(
     .map_err(|e| internal_error("post update", e))?;
 
     // Notify subscribers
-    let title: Option<(String,)> = sqlx::query_as("SELECT title FROM managed_incidents WHERE id = $1")
+    let title: Option<(String, Uuid)> = sqlx::query_as("SELECT title, user_id FROM managed_incidents WHERE id = $1")
         .bind(id).fetch_optional(&state.db).await
         .map_err(|e| internal_error("incident notify title lookup", e))?;
-    if let Some((title,)) = title {
-        notify_subscribers(&title, &req.status, &req.message);
+    if let Some((title, owner_id)) = title {
+        notify_subscribers(&title, &req.status, &req.message, owner_id);
     }
 
     Ok((StatusCode::CREATED, Json(update)))
@@ -766,13 +766,22 @@ pub async fn subscribe(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid email address"));
     }
 
+    // s427: which tenant's page this visitor is actually looking at — see
+    // `resolve_current_status_page_owner`'s own doc comment for the tie-break
+    // and the no-config fallback. `None` here means the install has no users
+    // at all, which cannot happen on a reachable running panel.
+    let owner_id = crate::services::public_status::resolve_current_status_page_owner(&state.db)
+        .await
+        .ok_or_else(|| internal_error("subscribe", sqlx::Error::RowNotFound))?;
+
     let token = uuid::Uuid::new_v4().to_string().replace('-', "");
 
     let _ = sqlx::query(
-        "INSERT INTO status_page_subscribers (email, verify_token, verified) \
-         VALUES ($1, $2, TRUE) \
-         ON CONFLICT (email) DO NOTHING"
+        "INSERT INTO status_page_subscribers (owner_id, email, verify_token, verified) \
+         VALUES ($1, $2, $3, TRUE) \
+         ON CONFLICT (owner_id, email) DO NOTHING"
     )
+    .bind(owner_id)
     .bind(&req.email)
     .bind(&token)
     .execute(&state.db)
@@ -793,21 +802,38 @@ pub async fn unsubscribe(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     crate::services::public_status::require_enabled(&state.db).await?;
 
-    let _ = sqlx::query("DELETE FROM status_page_subscribers WHERE email = $1")
+    // s427: scoped to the page the visitor is actually looking at — `IS NOT
+    // DISTINCT FROM` rather than `=` so this still matches a legacy row whose
+    // owner could not be resolved (both sides NULL), instead of `NULL = NULL`
+    // silently matching nothing. Without this scoping, unsubscribing from one
+    // tenant's public page could remove a row that belongs to a DIFFERENT
+    // tenant the visitor never subscribed through.
+    let owner_id = crate::services::public_status::resolve_current_status_page_owner(&state.db).await;
+    let _ = sqlx::query(
+        "DELETE FROM status_page_subscribers WHERE email = $1 AND owner_id IS NOT DISTINCT FROM $2"
+    )
         .bind(&req.email)
+        .bind(owner_id)
         .execute(&state.db).await;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// GET /api/status-page/subscribers — List subscribers (admin).
+///
+/// s427: scoped to the calling admin's own `owner_id`, matching every sibling
+/// status-page admin endpoint (`get_config`, `list_components`, ...) — before
+/// this, any admin on the install could read every OTHER tenant's subscriber
+/// email list, not just their own.
 pub async fn list_subscribers(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let rows: Vec<(String, bool, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT email, verified, created_at FROM status_page_subscribers ORDER BY created_at DESC LIMIT 1000"
+        "SELECT email, verified, created_at FROM status_page_subscribers \
+         WHERE owner_id = $1 ORDER BY created_at DESC LIMIT 1000"
     )
+    .bind(claims.sub)
     .fetch_all(&state.db).await
     .map_err(|e| internal_error("list subscribers", e))?;
 
@@ -1005,10 +1031,11 @@ pub async fn public_status_page(
 /// subscribe endpoint is unauthenticated and unthrottled, so that list is
 /// attacker-grown. See `services::status_notices` for the ordering and
 /// backpressure guarantees; it also applies the fan-out cap.
-fn notify_subscribers(title: &str, status: &str, message: &str) {
+fn notify_subscribers(title: &str, status: &str, message: &str, owner_id: Uuid) {
     crate::services::status_notices::enqueue(
         title,
         format!("[Status Update] {title} — {status}"),
         format!("{title}\nStatus: {status}\n\n{message}"),
+        owner_id,
     );
 }

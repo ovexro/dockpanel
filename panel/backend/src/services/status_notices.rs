@@ -21,12 +21,14 @@
 //! One worker draining a bounded FIFO gives both back: notices go out in the
 //! order the events happened, and exactly one fan-out is ever in flight.
 //!
-//! KNOWN LIMITATION: `status_page_subscribers` has no owner column, so the
-//! subscriber list is global — on a multi-tenant install every verified
-//! subscriber receives every tenant's status notices. Scoping it needs a schema
-//! change and is tracked separately.
+//! s427: `status_page_subscribers` carries an `owner_id`, and every
+//! [`StatusNotice`] carries the tenant its producer belongs to — the fan-out
+//! below only reaches subscribers stamped with that same owner. Before this,
+//! the subscriber list was global: on a multi-tenant install every verified
+//! subscriber received every tenant's status notices.
 
 use sqlx::PgPool;
+use uuid::Uuid;
 
 /// Largest subscriber fan-out one notice may send. The public subscribe
 /// endpoint is unauthenticated, so this list is attacker-growable; without a
@@ -43,6 +45,11 @@ pub struct StatusNotice {
     pub source: String,
     pub subject: String,
     pub message: String,
+    /// s427: the tenant this notice's monitor/incident belongs to. The
+    /// fan-out below only reaches subscribers stamped with this SAME
+    /// owner_id — previously every verified subscriber got every tenant's
+    /// notices regardless of who they subscribed through.
+    pub owner_id: Uuid,
 }
 
 static NOTICE_TX: std::sync::OnceLock<tokio::sync::mpsc::Sender<StatusNotice>> =
@@ -79,9 +86,10 @@ pub fn start_worker(pool: PgPool) {
 
             let emails: Vec<(String,)> = sqlx::query_as(
                 "SELECT email FROM status_page_subscribers \
-                 WHERE verified = TRUE AND notify_incidents = TRUE \
-                 ORDER BY created_at ASC LIMIT $1",
+                 WHERE owner_id = $1 AND verified = TRUE AND notify_incidents = TRUE \
+                 ORDER BY created_at ASC LIMIT $2",
             )
+            .bind(notice.owner_id)
             .bind(MAX_SUBSCRIBER_FANOUT)
             .fetch_all(&pool)
             .await
@@ -125,7 +133,7 @@ pub fn start_worker(pool: PgPool) {
 /// A full queue drops the notice with a warning rather than applying
 /// backpressure to a monitor check or an HTTP handler: a status email is worth
 /// less than timely checks and a responsive API.
-pub fn enqueue(source: &str, subject: String, message: String) {
+pub fn enqueue(source: &str, subject: String, message: String, owner_id: Uuid) {
     let Some(tx) = NOTICE_TX.get() else {
         tracing::warn!("Status-notice worker not started; dropping '{source}' notification");
         return;
@@ -135,6 +143,7 @@ pub fn enqueue(source: &str, subject: String, message: String) {
         source: source.to_string(),
         subject,
         message,
+        owner_id,
     };
 
     if tx.try_send(notice).is_err() {

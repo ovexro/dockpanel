@@ -4,6 +4,32 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.180.0]
+
+### Fixed — status-page subscribers had no tenant, so every install's fan-out and admin list were install-wide
+
+`status_page_subscribers` was the one status-page table s418 (v2.171.0) never
+scoped: it carried no `owner_id`, so on any multi-tenant/reseller install
+(this panel's stated market) the fan-out worker mailed every verified
+subscriber for every tenant's incident and monitor notices, and
+`GET /api/status-page/subscribers` returned every tenant's subscriber email
+list to any admin who called it — a real address-book leak, not just a
+notification-noise bug. Documented as a known, deliberate limitation in
+`services/status_notices.rs` since it shipped; tracked since s424.
+
+Fixed by extending s418's own pattern (the "winning" `status_page_config`
+row, `ORDER BY created_at ASC, id ASC LIMIT 1`) to the subscriber table: a new
+`owner_id` column, backed by a migration that backfills existing rows to that
+same winning owner — falling back to the install's first user for the
+(documented, reachable) case where the global publish switch is on but no
+config row has ever been created. `subscribe`/`unsubscribe` now resolve and
+respect that owner; `list_subscribers` scopes to the calling admin, matching
+every sibling status-page admin endpoint; the fan-out worker only mails
+subscribers stamped with the same tenant as the notice's own monitor or
+incident. `status-page-gate-pin-e2e.sh` gained 19 new mutation-tested
+assertions (§H/§I/§J) pinning the scoping at the query, schema and
+call-site level.
+
 ## [2.179.1]
 
 ### Fixed — the sidecar proxy denied Dozzle its own connection health check

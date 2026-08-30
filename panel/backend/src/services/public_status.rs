@@ -37,6 +37,7 @@
 
 use axum::http::StatusCode;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::error::{err, ApiError};
 
@@ -77,6 +78,38 @@ pub async fn require_enabled(pool: &PgPool) -> Result<(), ApiError> {
     } else {
         Err(err(StatusCode::NOT_FOUND, "Status page not enabled"))
     }
+}
+
+/// The tenant `routes::incidents::public_status_page` currently publishes —
+/// same tie-break, extracted so `subscribe`/`unsubscribe`/`list_subscribers`
+/// agree with the public page on who "the" status page belongs to instead of
+/// treating `status_page_subscribers` as install-wide.
+///
+/// Falls back to the install's very first user when no `status_page_config`
+/// row exists at all — reachable because `status_page_enabled` (checked by
+/// `is_enabled` above) lives on a different settings screen than
+/// `status_page_config`, so a visitor can reach `/subscribe` before an admin
+/// has ever touched status-page settings. `None` only if `users` itself is
+/// empty, which cannot happen on a running install.
+pub async fn resolve_current_status_page_owner(pool: &PgPool) -> Option<Uuid> {
+    let from_config: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT user_id FROM status_page_config ORDER BY created_at ASC, id ASC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    if let Some((uid,)) = from_config {
+        return Some(uid);
+    }
+
+    let earliest_user: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM users ORDER BY created_at ASC LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+    earliest_user.map(|(uid,)| uid)
 }
 
 #[cfg(test)]

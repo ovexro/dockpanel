@@ -415,6 +415,186 @@ if I=$(subj "$INC"); then
   fi
 fi
 
+echo "== §H  the subscriber list and its fan-out are ALSO scoped (s427) =="
+
+# v2.180.0. §G scoped every READ of the public page to one tenant. The
+# subscriber table (and the worker that mails it) was the one piece of this
+# surface §G never touched — s418's own fan-out found it, deferred it, and it
+# sat as a documented, zero-owner-column carry until now. Same failure shape as
+# §G: a real address list, readable/mailable across every tenant on the
+# install, not just the one whose page a visitor actually subscribed through.
+
+NOTICES=panel/backend/src/services/status_notices.rs
+UPT=panel/backend/src/services/uptime.rs
+
+if G=$(subj "$GATE"); then
+  if grep -qE 'pub async fn resolve_current_status_page_owner' <<< "$G"; then
+    ok "H1 public_status.rs exposes resolve_current_status_page_owner"
+  else
+    bad "H1 public_status.rs exposes resolve_current_status_page_owner"
+  fi
+
+  # The fallback that makes this reachable even before an admin has ever
+  # visited status-page settings — see resolve_current_status_page_owner's own
+  # doc comment for why `status_page_enabled` can be true with zero config rows.
+  RCSPO=$(fnbody "$G" resolve_current_status_page_owner)
+  if [ "${#RCSPO}" -ge 200 ] && grep -qE 'FROM users ORDER BY created_at ASC' <<< "$RCSPO"; then
+    ok "H2 the owner resolver falls back to the install's first user when no config row exists"
+  else
+    bad "H2 the owner resolver falls back to the install's first user when no config row exists"
+  fi
+fi
+
+if I=$(subj "$INC"); then
+  SUBBODY=$(fnbody "$I" subscribe)
+  UNSUBBODY=$(fnbody "$I" unsubscribe)
+  LISTBODY=$(fnbody "$I" list_subscribers)
+
+  if [ "${#SUBBODY}" -ge 300 ] && [ "${#UNSUBBODY}" -ge 100 ] && [ "${#LISTBODY}" -ge 100 ]; then
+    ok "H3 function subjects resolved (subscribe ${#SUBBODY}c, unsubscribe ${#UNSUBBODY}c, list_subscribers ${#LISTBODY}c)"
+
+    if grep -qE 'resolve_current_status_page_owner' <<< "$SUBBODY" \
+    && grep -qE 'INSERT INTO status_page_subscribers \(owner_id, email' <<< "$SUBBODY"; then
+      ok "H4 subscribe resolves and stamps an owner_id on the new row"
+    else
+      bad "H4 subscribe resolves and stamps an owner_id on the new row"
+    fi
+
+    if grep -qE 'resolve_current_status_page_owner' <<< "$UNSUBBODY" \
+    && grep -qE 'WHERE email = \$1 AND owner_id IS NOT DISTINCT FROM \$2' <<< "$UNSUBBODY"; then
+      ok "H5 unsubscribe only removes the row for the page the visitor is looking at"
+    else
+      bad "H5 unsubscribe only removes the row for the page the visitor is looking at"
+    fi
+
+    # The negative control: list_subscribers must not be install-wide. Before
+    # s427 this endpoint had no WHERE clause at all — any admin's JWT could
+    # read every OTHER tenant's subscriber email list.
+    if grep -qE 'WHERE owner_id = \$1' <<< "$LISTBODY" \
+    && grep -qE '\.bind\(claims\.sub\)' <<< "$LISTBODY"; then
+      ok "H6 list_subscribers is scoped to the calling admin's own owner_id"
+    else
+      bad "H6 list_subscribers is scoped to the calling admin's own owner_id"
+    fi
+  else
+    bad "H3 subscribe/unsubscribe/list_subscribers subjects resolved — H4-H6 would be vacuous"
+    bad "H4 subscribe stamps owner_id"; bad "H5 unsubscribe scoped"; bad "H6 list_subscribers scoped"
+  fi
+fi
+
+echo "== §I  the notify fan-out cannot reach a subscriber of a DIFFERENT tenant (s427) =="
+
+if [ ! -f "$NOTICES" ]; then
+  bad "I1 $NOTICES exists"
+  bad "I2 enqueue requires an owner_id"
+  bad "I3 the worker's subscriber SELECT is scoped to owner_id"
+else
+  N=$(subj "$NOTICES")
+  if grep -qE 'pub owner_id: Uuid' <<< "$N"; then
+    ok "I1 StatusNotice carries an owner_id field"
+  else
+    bad "I1 StatusNotice carries an owner_id field"
+  fi
+
+  ENQSIG=$(fnsig "$N" enqueue)
+  if grep -qE 'owner_id: Uuid' <<< "$ENQSIG"; then
+    ok "I2 enqueue() requires an owner_id — a call site missing it cannot compile"
+  else
+    bad "I2 enqueue() requires an owner_id — a call site missing it cannot compile"
+  fi
+
+  # The one query that actually enforces isolation between two tenants' mail.
+  # H4-H6 prove the DATA is tagged; this proves the FAN-OUT respects the tag.
+  if grep -qE 'WHERE owner_id = \$1 AND verified = TRUE AND notify_incidents = TRUE' <<< "$N" \
+  && grep -qE '\.bind\(notice\.owner_id\)' <<< "$N"; then
+    ok "I3 the worker's subscriber SELECT is scoped to the notice's own owner_id"
+  else
+    bad "I3 the worker's subscriber SELECT is scoped to the notice's own owner_id"
+  fi
+fi
+
+# Every real producer must pass its OWN tenant's id, never a borrowed one.
+# Named per call site so a regression says which producer stopped scoping.
+if U=$(subj "$UPT"); then
+  DOWNCALLS=$(grep -c 'notify_status_subscribers(&monitor\.name, "investigating"' <<< "$U" || true)
+  UPCALLS=$(grep -c 'notify_status_subscribers(&monitor\.name, "resolved"' <<< "$U" || true)
+  if grep -qE 'notify_status_subscribers\(&monitor\.name, "investigating"[^;]*monitor\.user_id\);' <<< "$U" \
+  && [ "${DOWNCALLS:-0}" -eq 1 ]; then
+    ok "I4 the down-transition call passes the monitor's own user_id"
+  else
+    bad "I4 the down-transition call passes the monitor's own user_id"
+  fi
+  if grep -qE 'notify_status_subscribers\(&monitor\.name, "resolved"[^;]*monitor\.user_id\);' <<< "$U" \
+  && [ "${UPCALLS:-0}" -eq 1 ]; then
+    ok "I4b the recovery call passes the monitor's own user_id"
+  else
+    bad "I4b the recovery call passes the monitor's own user_id"
+  fi
+  if grep -qE 'owner_id: uuid::Uuid' <<< "$(fnsig "$U" notify_status_subscribers)"; then
+    ok "I5 notify_status_subscribers requires an owner_id"
+  else
+    bad "I5 notify_status_subscribers requires an owner_id"
+  fi
+fi
+
+if I=$(subj "$INC"); then
+  # Named per call site rather than one loose substring match: a `grep -q`
+  # over the whole file passes the instant ANY ONE of the three happens to
+  # match, so a regression in two of three sites would read as healthy.
+  CALLSITES=$(grep -oE 'notify_subscribers\([^;]*\);' <<< "$I" | grep -v 'fn notify_subscribers')
+  NCALLS=$(grep -c . <<< "$CALLSITES" 2>/dev/null || echo 0)
+  if [ "$NCALLS" -eq 3 ]; then
+    ok "I6 exactly 3 notify_subscribers call sites found (a 4th needs its own arm here)"
+  else
+    bad "I6 expected 3 notify_subscribers call sites, found $NCALLS — I7-I9 would be vacuous or miscounted"
+  fi
+
+  if grep -qE 'notify_subscribers\(&incident\.title, status, req\.description\.as_deref\(\)\.unwrap_or\(""\), incident\.user_id\);' <<< "$I"; then
+    ok "I7 create_incident passes the just-inserted incident's own user_id"
+  else
+    bad "I7 create_incident passes the just-inserted incident's own user_id"
+  fi
+
+  if grep -qE 'notify_subscribers\(&incident\.title, update_status, message, incident\.user_id\);' <<< "$I"; then
+    ok "I8 the PUT update path passes the already-fetched incident's own user_id"
+  else
+    bad "I8 the PUT update path passes the already-fetched incident's own user_id"
+  fi
+
+  if grep -qE 'SELECT title, user_id FROM managed_incidents WHERE id = \$1' <<< "$I" \
+  && grep -qE 'notify_subscribers\(&title, &req\.status, &req\.message, owner_id\);' <<< "$I"; then
+    ok "I9 the POST update path fetches THIS incident's own owner before enqueuing, then passes it"
+  else
+    bad "I9 the POST update path fetches THIS incident's own owner before enqueuing, then passes it"
+  fi
+fi
+
+echo "== §J  the schema backs the scoping, not just the query strings =="
+
+SUBMIG=$(for m in panel/backend/migrations/*.sql; do
+  grep -qE 'ALTER TABLE status_page_subscribers' "$m" && grep -qE 'ADD COLUMN IF NOT EXISTS owner_id' "$m" \
+    && printf '%s\n' "$m"
+done)
+if [ -n "$SUBMIG" ]; then
+  ok "J1 a migration adds status_page_subscribers.owner_id"
+  if grep -qE 'UNIQUE \(owner_id, email\)' $SUBMIG; then
+    ok "J2 that migration replaces the global email-only uniqueness with (owner_id, email)"
+  else
+    bad "J2 that migration replaces the global email-only uniqueness with (owner_id, email)"
+  fi
+  # The negative control for J2: the OLD single-column constraint must actually
+  # be dropped, not just shadowed by a new one sitting alongside it.
+  if grep -qE 'DROP CONSTRAINT IF EXISTS status_page_subscribers_email_key' $SUBMIG; then
+    ok "J3 the old install-wide UNIQUE(email) constraint is dropped"
+  else
+    bad "J3 the old install-wide UNIQUE(email) constraint is dropped"
+  fi
+else
+  bad "J1 a migration adds status_page_subscribers.owner_id"
+  bad "J2 replaces global uniqueness with (owner_id, email)"
+  bad "J3 drops the old UNIQUE(email) constraint"
+fi
+
 echo
 printf 'status-page-gate: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

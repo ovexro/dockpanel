@@ -282,7 +282,7 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
         let _ = create_auto_incident(pool, monitor, cause).await;
 
         // GAP 19: Notify status page subscribers
-        notify_status_subscribers(&monitor.name, "investigating", &format!("{} is experiencing issues: {cause}", monitor.name));
+        notify_status_subscribers(&monitor.name, "investigating", &format!("{} is experiencing issues: {cause}", monitor.name), monitor.user_id);
     } else if new_status == "up" && monitor.status == "down" {
         // Just recovered — resolve incident
         if let Err(e) = sqlx::query(
@@ -299,7 +299,7 @@ async fn check_monitor(monitor: &MonitorRow, client: &reqwest::Client, pool: &Pg
         let _ = resolve_auto_incident(pool, monitor).await;
 
         // GAP 19: Notify subscribers of recovery
-        notify_status_subscribers(&monitor.name, "resolved", &format!("{} is back online", monitor.name));
+        notify_status_subscribers(&monitor.name, "resolved", &format!("{} is back online", monitor.name), monitor.user_id);
 
         tracing::info!("Monitor {} ({}) is back UP", monitor.name, monitor.url);
         send_alerts(pool, monitor, &format!("{} is back up ({}ms)", monitor.name, response_time), "info").await;
@@ -814,11 +814,12 @@ async fn resolve_auto_incident(pool: &PgPool, monitor: &MonitorRow) -> Result<()
 /// Hands off to the shared status-notice worker — see
 /// `services::status_notices` for why this must not run inline in the monitor
 /// check and must not be a detached per-event spawn.
-fn notify_status_subscribers(monitor_name: &str, status: &str, message: &str) {
+fn notify_status_subscribers(monitor_name: &str, status: &str, message: &str, owner_id: uuid::Uuid) {
     crate::services::status_notices::enqueue(
         monitor_name,
         format!("[Status Update] {} — {}", monitor_name, status),
         message.to_string(),
+        owner_id,
     );
 }
 
