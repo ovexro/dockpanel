@@ -681,10 +681,20 @@ async fn send_alerts(pool: &PgPool, monitor: &MonitorRow, message: &str, severit
 
     let (pagerduty_key, webhook_url) = extra_channels.unwrap_or((None, None));
 
+    // All four of these are encrypted at rest (alert_rules.notify_pagerduty_key/
+    // notify_webhook_url in alerts.rs, monitors.alert_slack_url/alert_discord_url
+    // in monitors.rs). This function only has a PgPool, no AppState/jwt_secret,
+    // so it decrypts the same way notifications::get_user_channels does.
+    use crate::services::secrets_crypto::decrypt_credential_from_env as decrypt_env;
+    let pagerduty_key = pagerduty_key.as_deref().map(decrypt_env);
+    let webhook_url = webhook_url.as_deref().map(decrypt_env);
+    let slack_url = monitor.alert_slack_url.as_deref().map(decrypt_env);
+    let discord_url = monitor.alert_discord_url.as_deref().map(decrypt_env);
+
     let channels = crate::services::notifications::NotifyChannels {
         email,
-        slack_url: monitor.alert_slack_url.clone(),
-        discord_url: monitor.alert_discord_url.clone(),
+        slack_url,
+        discord_url,
         pagerduty_key,
         webhook_url,
         muted_types: String::new(),

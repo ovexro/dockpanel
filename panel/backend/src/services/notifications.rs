@@ -539,6 +539,22 @@ pub async fn get_user_channels(
 
     let (notify_email, slack_url, discord_url, pagerduty_key, webhook_url, muted_types) = rule?;
 
+    // These four are encrypted at rest (alerts.rs::upsert_rules). This function
+    // takes only a PgPool (no AppState/jwt_secret), matching the exact context
+    // `decrypt_credential_from_env` documents itself for.
+    let slack_url = slack_url
+        .as_deref()
+        .map(crate::services::secrets_crypto::decrypt_credential_from_env);
+    let discord_url = discord_url
+        .as_deref()
+        .map(crate::services::secrets_crypto::decrypt_credential_from_env);
+    let pagerduty_key = pagerduty_key
+        .as_deref()
+        .map(crate::services::secrets_crypto::decrypt_credential_from_env);
+    let webhook_url = webhook_url
+        .as_deref()
+        .map(crate::services::secrets_crypto::decrypt_credential_from_env);
+
     // Look up user email if email notifications are enabled
     let email = if notify_email {
         sqlx::query_scalar::<_, String>("SELECT email FROM users WHERE id = $1")

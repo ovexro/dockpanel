@@ -268,7 +268,7 @@ pub async fn get_rules(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<AlertRuleRow>>, ApiError> {
-    let rules: Vec<AlertRuleRow> = sqlx::query_as(
+    let mut rules: Vec<AlertRuleRow> = sqlx::query_as(
         "SELECT id, server_id, cpu_threshold, cpu_duration, memory_threshold, memory_duration, \
          disk_threshold, alert_cpu, alert_memory, alert_disk, alert_offline, \
          alert_backup_failure, alert_ssl_expiry, alert_service_health, \
@@ -282,6 +282,25 @@ pub async fn get_rules(
     .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("get rules", e))?;
+
+    // These four columns are encrypted at rest (encrypt_credential in
+    // upsert_rules below); the caller reading their OWN rule row back to
+    // pre-fill the settings form is the expected, same-account case
+    // `decrypt_credential_or_legacy` exists for.
+    for r in rules.iter_mut() {
+        r.notify_slack_url = r.notify_slack_url.as_deref().map(|v| {
+            crate::services::secrets_crypto::decrypt_credential_or_legacy(v, &state.config.jwt_secret)
+        });
+        r.notify_discord_url = r.notify_discord_url.as_deref().map(|v| {
+            crate::services::secrets_crypto::decrypt_credential_or_legacy(v, &state.config.jwt_secret)
+        });
+        r.notify_pagerduty_key = r.notify_pagerduty_key.as_deref().map(|v| {
+            crate::services::secrets_crypto::decrypt_credential_or_legacy(v, &state.config.jwt_secret)
+        });
+        r.notify_webhook_url = r.notify_webhook_url.as_deref().map(|v| {
+            crate::services::secrets_crypto::decrypt_credential_or_legacy(v, &state.config.jwt_secret)
+        });
+    }
 
     Ok(Json(rules))
 }
@@ -364,6 +383,27 @@ async fn upsert_rules(
             }
         }
     }
+
+    // Encrypt at rest — validated above on PLAINTEXT (SSRF check needs a real
+    // URL), encrypted here before it ever reaches SQL. `None` means "leave the
+    // stored value alone" (the COALESCE below depends on that), `Some("")`
+    // means "clear it", so both are passed through unencrypted; only a
+    // genuine non-empty value is encrypted. Read back via
+    // `decrypt_credential_or_legacy` in `get_rules` above.
+    let jwt_secret = &state.config.jwt_secret;
+    let encrypt_opt = |v: &Option<String>| -> Result<Option<String>, ApiError> {
+        match v {
+            None => Ok(None),
+            Some(s) if s.is_empty() => Ok(Some(String::new())),
+            Some(s) => crate::services::secrets_crypto::encrypt_credential(s, jwt_secret)
+                .map(Some)
+                .map_err(|e| internal_error("encrypt notification credential", e)),
+        }
+    };
+    let enc_slack_url = encrypt_opt(&body.notify_slack_url)?;
+    let enc_discord_url = encrypt_opt(&body.notify_discord_url)?;
+    let enc_pagerduty_key = encrypt_opt(&body.notify_pagerduty_key)?;
+    let enc_webhook_url = encrypt_opt(&body.notify_webhook_url)?;
 
     // A suppression list is matched token-for-token against the alert type on
     // the fan-out, so a token that names nothing suppresses nothing. Stored
@@ -467,11 +507,11 @@ async fn upsert_rules(
     .bind(body.alert_service_health)
     .bind(&body.ssl_warning_days)
     .bind(body.notify_email)
-    .bind(&body.notify_slack_url)
-    .bind(&body.notify_discord_url)
+    .bind(&enc_slack_url)
+    .bind(&enc_discord_url)
     .bind(body.cooldown_minutes)
-    .bind(&body.notify_pagerduty_key)
-    .bind(&body.notify_webhook_url)
+    .bind(&enc_pagerduty_key)
+    .bind(&enc_webhook_url)
     .bind(&body.muted_types)
     .bind(body.gpu_util_threshold)
     .bind(body.gpu_util_duration)

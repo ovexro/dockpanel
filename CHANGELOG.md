@@ -4,6 +4,32 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.186.0]
+
+### Fixed — PagerDuty keys and Slack/Discord/generic webhook URLs were stored in plaintext
+
+`alert_rules.notify_pagerduty_key`/`notify_webhook_url`/`notify_slack_url`/
+`notify_discord_url` and `monitors.alert_slack_url`/`alert_discord_url` were
+plain columns with no reference to this codebase's own credential-encryption
+service anywhere in the files that wrote or read them — flagged in an
+internal audit roughly 180 sessions ago as "the one cleartext credential
+hole left in the panel" and never addressed. A full-database backup or a
+read-only leak of these tables would have exposed real third-party
+credentials in the clear.
+
+Fixed by encrypting all six columns at rest with `secrets_crypto::encrypt_credential`
+(the same primitive already used for DB passwords, DKIM keys, and API
+tokens elsewhere in this codebase) and decrypting on every read path —
+`decrypt_credential_or_legacy` where the caller has the panel's config
+(so a same-account read, e.g. re-opening the settings form, still shows
+the value), `decrypt_credential_from_env` where it doesn't (the
+notification-delivery code paths, which only ever had a database
+connection). `credential_reencrypt.rs`'s existing re-key sweep now covers
+all six columns, so a `SECRETS_ENCRYPTION_KEY` rotation reaches them too.
+Zero adoption on this install prior to the fix (both tables had no rows
+using these columns), so no migration was required for correctness beyond
+the legacy-plaintext fallback already built into `decrypt_credential_or_legacy`.
+
 ## [2.185.0]
 
 ### Fixed — an unauthenticated public status-page route leaked every tenant's monitor data

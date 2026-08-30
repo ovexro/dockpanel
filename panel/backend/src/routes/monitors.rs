@@ -15,6 +15,19 @@ pub struct PaginationQuery {
     pub offset: Option<i64>,
 }
 
+/// `alert_slack_url`/`alert_discord_url` are encrypted at rest (see `create`/
+/// `update` below). The caller reading their own monitor back — to pre-fill
+/// the edit form, or in the list view — is the expected same-account case
+/// `decrypt_credential_or_legacy` exists for.
+fn decrypt_monitor_alert_urls(m: &mut Monitor, jwt_secret: &str) {
+    if let Some(ref v) = m.alert_slack_url {
+        m.alert_slack_url = Some(crate::services::secrets_crypto::decrypt_credential_or_legacy(v, jwt_secret));
+    }
+    if let Some(ref v) = m.alert_discord_url {
+        m.alert_discord_url = Some(crate::services::secrets_crypto::decrypt_credential_or_legacy(v, jwt_secret));
+    }
+}
+
 #[derive(serde::Serialize, sqlx::FromRow)]
 pub struct Monitor {
     pub id: Uuid,
@@ -80,7 +93,7 @@ pub async fn list(
 ) -> Result<Json<Vec<Monitor>>, ApiError> {
     let (limit, offset) = paginate(params.limit, params.offset);
 
-    let monitors: Vec<Monitor> = sqlx::query_as(
+    let mut monitors: Vec<Monitor> = sqlx::query_as(
         "SELECT * FROM monitors WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
     )
     .bind(claims.sub)
@@ -89,6 +102,10 @@ pub async fn list(
     .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("list monitors", e))?;
+
+    for m in monitors.iter_mut() {
+        decrypt_monitor_alert_urls(m, &state.config.jwt_secret);
+    }
 
     Ok(Json(monitors))
 }
@@ -159,6 +176,15 @@ pub async fn create(
         .flatten();
 
         if let Some((global_slack, global_discord)) = global {
+            // `global_slack`/`global_discord` are ciphertext (alert_rules.notify_slack_url/
+            // notify_discord_url are encrypted at rest) — decrypt before the SSRF
+            // check below, which needs a real URL, not base64.
+            let global_slack = global_slack.as_deref().map(|v| {
+                crate::services::secrets_crypto::decrypt_credential_or_legacy(v, &state.config.jwt_secret)
+            });
+            let global_discord = global_discord.as_deref().map(|v| {
+                crate::services::secrets_crypto::decrypt_credential_or_legacy(v, &state.config.jwt_secret)
+            });
             if slack_url.as_ref().map_or(true, |s| s.is_empty()) {
                 slack_url = global_slack;
             }
@@ -197,7 +223,21 @@ pub async fn create(
         return Err(err(StatusCode::BAD_REQUEST, "Monitor limit reached (50)"));
     }
 
-    let monitor: Monitor = sqlx::query_as(
+    // Encrypt at rest, now that SSRF validation above has already run on the
+    // plaintext. Empty stays empty (COALESCE-free INSERT, no "leave alone"
+    // case here — this is a fresh row).
+    let encrypt_opt = |v: &Option<String>| -> Result<Option<String>, ApiError> {
+        match v {
+            Some(s) if !s.is_empty() => crate::services::secrets_crypto::encrypt_credential(s, &state.config.jwt_secret)
+                .map(Some)
+                .map_err(|e| internal_error("encrypt monitor alert URL", e)),
+            other => Ok(other.clone()),
+        }
+    };
+    let enc_slack_url = encrypt_opt(&slack_url)?;
+    let enc_discord_url = encrypt_opt(&discord_url)?;
+
+    let mut monitor: Monitor = sqlx::query_as(
         "INSERT INTO monitors (user_id, site_id, url, name, check_interval, alert_email, alert_slack_url, alert_discord_url, monitor_type, port, keyword, keyword_must_contain, custom_headers) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *",
     )
@@ -207,8 +247,8 @@ pub async fn create(
     .bind(name)
     .bind(interval)
     .bind(body.alert_email.unwrap_or(true))
-    .bind(&slack_url)
-    .bind(&discord_url)
+    .bind(&enc_slack_url)
+    .bind(&enc_discord_url)
     .bind(monitor_type)
     .bind(body.port)
     .bind(&body.keyword)
@@ -217,6 +257,8 @@ pub async fn create(
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("create monitors", e))?;
+
+    decrypt_monitor_alert_urls(&mut monitor, &state.config.jwt_secret);
 
     Ok((StatusCode::CREATED, Json(monitor)))
 }
@@ -302,7 +344,22 @@ pub async fn update(
         }
     }
 
-    let monitor: Monitor = sqlx::query_as(
+    // Encrypt at rest, now that SSRF validation above has already run on the
+    // plaintext body values. `None` means "leave the stored value alone" (the
+    // COALESCE below depends on that), `Some("")` means "clear it".
+    let encrypt_opt = |v: &Option<String>| -> Result<Option<String>, ApiError> {
+        match v {
+            None => Ok(None),
+            Some(s) if s.is_empty() => Ok(Some(String::new())),
+            Some(s) => crate::services::secrets_crypto::encrypt_credential(s, &state.config.jwt_secret)
+                .map(Some)
+                .map_err(|e| internal_error("encrypt monitor alert URL", e)),
+        }
+    };
+    let enc_slack_url = encrypt_opt(&body.alert_slack_url)?;
+    let enc_discord_url = encrypt_opt(&body.alert_discord_url)?;
+
+    let mut monitor: Monitor = sqlx::query_as(
         "UPDATE monitors SET \
          name = COALESCE($2, name), \
          url = COALESCE($3, url), \
@@ -324,8 +381,8 @@ pub async fn update(
     .bind(body.check_interval.map(|i| i.max(30).min(3600)))
     .bind(body.enabled)
     .bind(body.alert_email)
-    .bind(&body.alert_slack_url)
-    .bind(&body.alert_discord_url)
+    .bind(&enc_slack_url)
+    .bind(&enc_discord_url)
     .bind(&body.monitor_type)
     .bind(body.port)
     .bind(&body.keyword)
@@ -334,6 +391,8 @@ pub async fn update(
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("update monitors", e))?;
+
+    decrypt_monitor_alert_urls(&mut monitor, &state.config.jwt_secret);
 
     Ok(Json(monitor))
 }

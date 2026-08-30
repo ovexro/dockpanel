@@ -43,6 +43,12 @@ const SIMPLE_SUBJECTS: &[(&str, &str, &str)] = &[
     ("cdn_zones", "id", "api_key"),
     ("git_deploys", "id", "github_token"),
     ("servers", "id", "agent_token"),
+    ("alert_rules", "id", "notify_pagerduty_key"),
+    ("alert_rules", "id", "notify_webhook_url"),
+    ("alert_rules", "id", "notify_slack_url"),
+    ("alert_rules", "id", "notify_discord_url"),
+    ("monitors", "id", "alert_slack_url"),
+    ("monitors", "id", "alert_discord_url"),
 ];
 
 /// Subjects the sweep visits through a hand-written arm rather than
@@ -85,6 +91,12 @@ pub const COVERED_MODULES: &[(&str, &str)] = &[
     ("git_deploys", "git_deploys.github_token"),
     ("servers", "servers.agent_token"),
     ("agent", "servers.agent_token"),
+    ("alerts", "alert_rules.notify_pagerduty_key"),
+    ("alerts", "alert_rules.notify_webhook_url"),
+    ("alerts", "alert_rules.notify_slack_url"),
+    ("alerts", "alert_rules.notify_discord_url"),
+    ("monitors", "monitors.alert_slack_url"),
+    ("monitors", "monitors.alert_discord_url"),
 ];
 
 /// The module names alone, for the operator-facing settings endpoint.
