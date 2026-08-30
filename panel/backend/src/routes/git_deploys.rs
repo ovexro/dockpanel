@@ -451,9 +451,14 @@ pub async fn list(
     .await
     .map_err(|e| internal_error("list git_deploys", e))?;
 
-    // Mask github_token in responses
+    // Mask github_token in responses; decrypt webhook_secret — GitDeploys.tsx
+    // builds the webhook URL to paste into the git host from it on every load.
     for d in &mut deploys {
         mask_github_token(d);
+        d.webhook_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+            &d.webhook_secret,
+            &state.config.jwt_secret,
+        );
     }
 
     Ok(Json(deploys))
@@ -505,6 +510,11 @@ pub async fn create(
         let bytes: Vec<u8> = (0..32).map(|_| rand::rng().random::<u8>()).collect();
         hex::encode(bytes)
     };
+    let encrypted_webhook_secret = crate::services::secrets_crypto::encrypt_credential(
+        &webhook_secret,
+        &state.config.jwt_secret,
+    )
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
 
     let branch = body.branch.as_deref().unwrap_or("main");
     let dockerfile = body.dockerfile.as_deref().unwrap_or("Dockerfile");
@@ -650,7 +660,7 @@ pub async fn create(
     .bind(&domain)
     .bind(&env_vars)
     .bind(auto_deploy)
-    .bind(&webhook_secret)
+    .bind(&encrypted_webhook_secret)
     .bind(body.memory_mb)
     .bind(body.cpu_percent)
     // The form posts the same object to create and to update, so these arrive
@@ -702,6 +712,10 @@ pub async fn create(
     }
 
     mask_github_token(&mut deploy);
+    deploy.webhook_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+        &deploy.webhook_secret,
+        &state.config.jwt_secret,
+    );
     Ok((StatusCode::CREATED, Json(deploy)))
 }
 
@@ -724,6 +738,10 @@ pub async fn get_one(
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Git deploy not found"))?;
 
     mask_github_token(&mut deploy);
+    deploy.webhook_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+        &deploy.webhook_secret,
+        &state.config.jwt_secret,
+    );
     Ok(Json(deploy))
 }
 
@@ -1114,6 +1132,10 @@ pub async fn update(
     }
 
     mask_github_token(&mut deploy);
+    deploy.webhook_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+        &deploy.webhook_secret,
+        &state.config.jwt_secret,
+    );
     Ok(Json(deploy))
 }
 
@@ -1978,6 +2000,11 @@ pub async fn webhook(
     .map_err(|e| internal_error("webhook", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Invalid webhook"))?;
 
+    let stored_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+        &config.webhook_secret,
+        &state.config.jwt_secret,
+    );
+
     // Constant-time secret comparison via SHA256 hash
     let provided_hash = {
         let mut h = Sha256::new();
@@ -1986,7 +2013,7 @@ pub async fn webhook(
     };
     let stored_hash = {
         let mut h = Sha256::new();
-        h.update(config.webhook_secret.as_bytes());
+        h.update(stored_secret.as_bytes());
         h.finalize()
     };
     if provided_hash != stored_hash {

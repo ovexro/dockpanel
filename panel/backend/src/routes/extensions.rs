@@ -160,6 +160,13 @@ pub async fn create(
         "whsec_{}",
         Uuid::new_v4().to_string().replace('-', "")
     );
+    // Encrypted at rest: `test_webhook` and `services::extensions::emit_event`
+    // both need the plaintext back to sign outbound HMAC deliveries with it.
+    let encrypted_webhook_secret = crate::services::secrets_crypto::encrypt_credential(
+        &webhook_secret,
+        &state.config.jwt_secret,
+    )
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
 
     let ext_id = Uuid::new_v4();
 
@@ -176,7 +183,7 @@ pub async fn create(
     .bind(&body.author)
     .bind(&body.version)
     .bind(body.webhook_url.trim())
-    .bind(&webhook_secret)
+    .bind(&encrypted_webhook_secret)
     .bind(&api_key_hash)
     .bind(&api_key_prefix)
     .bind(&body.event_subscriptions)
@@ -399,6 +406,10 @@ pub async fn test_webhook(
 
     let (name, webhook_url, webhook_secret) =
         ext.ok_or_else(|| err(StatusCode::NOT_FOUND, "Extension not found"))?;
+    let webhook_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+        &webhook_secret,
+        &state.config.jwt_secret,
+    );
 
     let delivery_id = Uuid::new_v4().to_string();
     let timestamp = chrono::Utc::now().to_rfc3339();
@@ -532,9 +543,14 @@ pub async fn rotate_secret(
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Extension not found"))?;
 
     let new_secret = format!("whsec_{}", Uuid::new_v4().to_string().replace('-', ""));
+    let encrypted_new_secret = crate::services::secrets_crypto::encrypt_credential(
+        &new_secret,
+        &state.config.jwt_secret,
+    )
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
 
     sqlx::query("UPDATE extensions SET webhook_secret = $1, updated_at = NOW() WHERE id = $2")
-        .bind(&new_secret)
+        .bind(&encrypted_new_secret)
         .bind(id)
         .execute(&state.db)
         .await

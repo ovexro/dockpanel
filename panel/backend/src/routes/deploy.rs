@@ -95,6 +95,16 @@ pub async fn get_config(
     .await
     .map_err(|e| internal_error("get config", e))?;
 
+    // Deploy.tsx builds the webhook URL to paste into the git host from this
+    // field on every load, so it must decrypt, not stay masked.
+    let config = config.map(|mut c| {
+        c.webhook_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+            &c.webhook_secret,
+            &state.config.jwt_secret,
+        );
+        c
+    });
+
     Ok(Json(config))
 }
 
@@ -121,8 +131,17 @@ pub async fn set_config(
     let atomic_deploy = body.atomic_deploy.unwrap_or(false);
     let keep_releases = body.keep_releases.unwrap_or(5).clamp(2, 20);
     let webhook_secret = Uuid::new_v4().to_string().replace('-', "");
+    // Only used on first INSERT — ON CONFLICT's DO UPDATE never touches this
+    // column, so an existing config keeps its original secret (this mirrors
+    // the pre-encryption behavior exactly; see the decrypt-what-came-back
+    // below rather than trusting this local value for the returned struct).
+    let encrypted_webhook_secret = crate::services::secrets_crypto::encrypt_credential(
+        &webhook_secret,
+        &state.config.jwt_secret,
+    )
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
 
-    let config: DeployConfig = sqlx::query_as(
+    let mut config: DeployConfig = sqlx::query_as(
         "INSERT INTO deploy_configs (site_id, repo_url, branch, deploy_script, auto_deploy, webhook_secret, atomic_deploy, keep_releases) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
          ON CONFLICT (site_id) DO UPDATE SET \
@@ -134,12 +153,20 @@ pub async fn set_config(
     .bind(branch)
     .bind(deploy_script)
     .bind(auto_deploy)
-    .bind(&webhook_secret)
+    .bind(&encrypted_webhook_secret)
     .bind(atomic_deploy)
     .bind(keep_releases)
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("set config", e))?;
+
+    // Decrypt whatever the row actually holds (freshly written on an INSERT,
+    // or the pre-existing secret on an update-conflict) rather than assuming
+    // the freshly-generated value above was ever stored.
+    config.webhook_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+        &config.webhook_secret,
+        &state.config.jwt_secret,
+    );
 
     tracing::info!("Deploy config set for {domain}: {}", body.repo_url);
     activity::log_activity(
@@ -358,9 +385,14 @@ pub async fn webhook(
     .map_err(|e| internal_error("webhook", e))?
     .ok_or_else(|| err(StatusCode::NOT_FOUND, "Invalid webhook"))?;
 
+    let stored_secret = crate::services::secrets_crypto::decrypt_credential_or_legacy(
+        &config.webhook_secret,
+        &state.config.jwt_secret,
+    );
+
     // Constant-time secret comparison using subtle crate
     use subtle::ConstantTimeEq;
-    if secret.as_bytes().ct_eq(config.webhook_secret.as_bytes()).unwrap_u8() != 1 {
+    if secret.as_bytes().ct_eq(stored_secret.as_bytes()).unwrap_u8() != 1 {
         // Record failed attempt
         {
             let mut attempts = state.webhook_attempts.lock().unwrap_or_else(|e| e.into_inner());

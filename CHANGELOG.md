@@ -4,6 +4,33 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.187.0]
+
+### Fixed — five more webhook/verify secrets were stored in plaintext
+
+`deploy_configs.webhook_secret`, `git_deploys.webhook_secret`,
+`extensions.webhook_secret`, `whmcs_config.webhook_secret`, and
+`webhook_endpoints.verify_secret` were plain columns, the sibling gap to
+v2.186.0's notification-secrets fix — flagged in the same audit and
+deferred to this release.
+
+Fixed the same way: encrypted at rest with `secrets_crypto::encrypt_credential`
+and decrypted on every read path that needs the plaintext (HMAC signing for
+`extensions.webhook_secret` and `webhook_endpoints.verify_secret`; a
+constant-time compare for the other three). Three of the five columns
+(`deploy_configs.webhook_secret`, `git_deploys.webhook_secret`,
+`webhook_endpoints.verify_secret`) were sized for the plaintext only —
+base64(nonce + ciphertext + tag) is longer than what it wraps, so encrypting
+in place without first widening them to `TEXT` would have overflowed the
+column and failed every write. `credential_reencrypt.rs`'s re-key sweep now
+covers all five.
+
+`deploy_configs.webhook_secret` and `git_deploys.webhook_secret` are
+displayed to the operator on every page load (the git-host webhook URL to
+paste into GitHub/GitLab), not shown once at creation — so both decrypt on
+every read path (`list`, `get`, `create`) rather than following the
+show-once-then-mask pattern used elsewhere in this codebase.
+
 ## [2.186.0]
 
 ### Fixed — PagerDuty keys and Slack/Discord/generic webhook URLs were stored in plaintext

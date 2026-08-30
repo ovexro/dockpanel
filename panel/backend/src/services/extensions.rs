@@ -52,6 +52,10 @@ pub async fn emit_event(pool: &PgPool, event_type: &str, data: serde_json::Value
     let payload_str = serde_json::to_string(&payload).unwrap_or_default();
 
     for (ext_id, webhook_url, webhook_secret) in extensions {
+        // No AppState here (fire-and-forget delivery path), so the JWT secret
+        // comes from the environment rather than `state.config.jwt_secret` —
+        // same shape as `notifications::get_user_channels`/`uptime::send_alerts`.
+        let webhook_secret = crate::services::secrets_crypto::decrypt_credential_from_env(&webhook_secret);
         let pool = pool.clone();
         let event_type = event_type.to_string();
         let payload_str = payload_str.clone();

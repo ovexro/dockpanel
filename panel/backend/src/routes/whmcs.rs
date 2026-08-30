@@ -47,6 +47,11 @@ pub async fn get_config(
             } else {
                 "*".repeat(ident.len())
             };
+            // Integrations.tsx builds the webhook URL to paste into WHMCS from
+            // this field on every load, so it must decrypt, not stay masked.
+            let webhook = webhook.map(|w| {
+                crate::services::secrets_crypto::decrypt_credential_or_legacy(&w, &state.config.jwt_secret)
+            });
             Ok(Json(serde_json::json!({
                 "configured": true,
                 "api_url": url,
@@ -116,6 +121,11 @@ pub async fn update_config(
         Some((p, s, t, secret)) => (p, s, t, secret),
         None => (true, true, false, None),
     };
+    // The column now holds ciphertext; decrypt what "already have one" reads
+    // back so the preserve-vs-mint decision below compares plaintext, and so
+    // an operator's already-configured WHMCS hook keeps matching.
+    let cur_secret = cur_secret
+        .map(|s| crate::services::secrets_crypto::decrypt_credential_or_legacy(&s, &state.config.jwt_secret));
 
     // Mint a webhook secret only when there is not one already. Regenerating it
     // on every save would silently break the hook the operator had configured in
@@ -124,6 +134,11 @@ pub async fn update_config(
     // secret it never stored.
     let webhook_secret =
         cur_secret.unwrap_or_else(|| uuid::Uuid::new_v4().to_string().replace('-', ""));
+    let encrypted_webhook_secret = crate::services::secrets_crypto::encrypt_credential(
+        &webhook_secret,
+        &state.config.jwt_secret,
+    )
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
 
     sqlx::query(
         "INSERT INTO whmcs_config (id, api_url, api_identifier, api_secret_encrypted, auto_provision, auto_suspend, auto_terminate, webhook_secret) \
@@ -139,7 +154,7 @@ pub async fn update_config(
     .bind(body.auto_provision.unwrap_or(cur_provision))
     .bind(body.auto_suspend.unwrap_or(cur_suspend))
     .bind(body.auto_terminate.unwrap_or(cur_terminate))
-    .bind(&webhook_secret)
+    .bind(&encrypted_webhook_secret)
     .execute(&state.db)
     .await
     .map_err(|e| internal_error("save whmcs config", e))?;
@@ -213,6 +228,9 @@ pub async fn webhook(
 
     let (secret, auto_provision, auto_suspend, auto_terminate) = config
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "WHMCS not configured"))?;
+    let secret = secret.map(|s| {
+        crate::services::secrets_crypto::decrypt_credential_or_legacy(&s, &state.config.jwt_secret)
+    });
 
     match secret {
         Some(ref expected) => {

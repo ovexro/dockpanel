@@ -192,6 +192,15 @@ pub async fn create_endpoint(
         ));
     }
 
+    // Encrypted at rest: this is the HMAC key the panel re-derives a
+    // signature with on every inbound delivery, so it must stay recoverable
+    // rather than hashed — same shape as `alert_rules`/`monitors`'s
+    // notification secrets.
+    let encrypted_verify_secret = verify_secret
+        .map(|s| crate::services::secrets_crypto::encrypt_credential(s, &state.config.jwt_secret))
+        .transpose()
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Encryption failed: {e}")))?;
+
     let mut endpoint: WebhookEndpoint = sqlx::query_as(
         "INSERT INTO webhook_endpoints (user_id, name, description, token, verify_mode, verify_secret, verify_header) \
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *"
@@ -201,7 +210,7 @@ pub async fn create_endpoint(
     .bind(&req.description)
     .bind(&token)
     .bind(verify_mode)
-    .bind(verify_secret)
+    .bind(encrypted_verify_secret)
     .bind(verify_header)
     .fetch_one(&state.db).await
     .map_err(|e| internal_error("create endpoint", e))?;
@@ -521,9 +530,12 @@ pub async fn receive_webhook(
         }
     }
 
+    let decrypted_verify_secret = endpoint.verify_secret.as_deref().map(|v| {
+        crate::services::secrets_crypto::decrypt_credential_or_legacy(v, &state.config.jwt_secret)
+    });
     let verdict = classify_signature(
         &endpoint.verify_mode,
-        endpoint.verify_secret.as_deref(),
+        decrypted_verify_secret.as_deref(),
         endpoint.verify_header.as_deref(),
         &headers_json,
         &body,

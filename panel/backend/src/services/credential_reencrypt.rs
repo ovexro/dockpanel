@@ -49,6 +49,11 @@ const SIMPLE_SUBJECTS: &[(&str, &str, &str)] = &[
     ("alert_rules", "id", "notify_discord_url"),
     ("monitors", "id", "alert_slack_url"),
     ("monitors", "id", "alert_discord_url"),
+    ("webhook_endpoints", "id", "verify_secret"),
+    ("extensions", "id", "webhook_secret"),
+    ("whmcs_config", "id", "webhook_secret"),
+    ("deploy_configs", "id", "webhook_secret"),
+    ("git_deploys", "id", "webhook_secret"),
 ];
 
 /// Subjects the sweep visits through a hand-written arm rather than
@@ -97,6 +102,11 @@ pub const COVERED_MODULES: &[(&str, &str)] = &[
     ("alerts", "alert_rules.notify_discord_url"),
     ("monitors", "monitors.alert_slack_url"),
     ("monitors", "monitors.alert_discord_url"),
+    ("webhook_gateway", "webhook_endpoints.verify_secret"),
+    ("extensions", "extensions.webhook_secret"),
+    ("whmcs", "whmcs_config.webhook_secret"),
+    ("deploy", "deploy_configs.webhook_secret"),
+    ("git_deploys", "git_deploys.webhook_secret"),
 ];
 
 /// The module names alone, for the operator-facing settings endpoint.
