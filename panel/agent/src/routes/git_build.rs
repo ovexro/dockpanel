@@ -582,63 +582,33 @@ async fn run_hook(Json(body): Json<HookRequest>) -> Result<Json<serde_json::Valu
 }
 
 #[derive(Deserialize)]
-struct PreBuildHookRequest {
-    name: String,
-    command: String,
-}
-
-/// POST /git/pre-build-hook — Run a whitelisted command on the host in the git repo directory.
-async fn pre_build_hook(Json(body): Json<PreBuildHookRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
-    if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
-    if body.command.is_empty() { return Err(err(StatusCode::BAD_REQUEST, "Empty command")); }
-
-    // Only allow whitelisted commands — arbitrary shell execution is not permitted.
-    if !ALLOWED_PRE_BUILD.contains(&body.command.as_str()) {
-        return Err(err(StatusCode::BAD_REQUEST, "Command not allowed. Permitted commands: npm install, npm ci, yarn install, pnpm install, composer install, bundle install, pip install -r requirements.txt, pip3 install -r requirements.txt, cargo build --release"));
-    }
-
-    let git_dir = format!("/var/lib/dockpanel/git/{}", body.name);
-    if !std::path::Path::new(&git_dir).exists() {
-        return Err(err(StatusCode::NOT_FOUND, "Git repo not found"));
-    }
-
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
-        safe_command("sh")
-            .args(["-c", &body.command])
-            .current_dir(&git_dir)
-            .env("HOME", &git_dir)
-            .env("NODE_ENV", "production")
-            .output()
-    ).await
-        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Hook timed out (300s)"))?
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}")))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{stdout}{stderr}");
-    let truncated = if combined.len() > 50_000 { format!("{}...\n[truncated]", &combined[..50_000]) } else { combined };
-
-    Ok(Json(serde_json::json!({
-        "success": output.status.success(),
-        "output": truncated,
-    })))
-}
-
-#[derive(Deserialize)]
 struct AutoDetectRequest {
     name: String,
     #[serde(default = "default_dockerfile")]
     dockerfile: String,
     #[serde(default = "default_context")]
     build_context: String,
+    /// Whitelisted install command to fold into the auto-generated Dockerfile's
+    /// RUN line. Replaces the removed /git/pre-build-hook host-exec route —
+    /// this is the only place ALLOWED_PRE_BUILD content still reaches this
+    /// crate, and it never touches a host shell: it only ever becomes text
+    /// written into a Dockerfile that `docker build` later executes.
+    #[serde(default)]
+    pre_build_cmd: Option<String>,
 }
 
-/// POST /git/auto-detect — Auto-detect language and generate Dockerfile if missing.
+/// POST /git/auto-detect — Auto-detect language and generate Dockerfile if missing,
+/// optionally splicing a whitelisted install command into it as a RUN line.
 async fn auto_detect(Json(body): Json<AutoDetectRequest>) -> Result<Json<serde_json::Value>, ApiErr> {
     if !super::is_valid_name(&body.name) { return Err(err(StatusCode::BAD_REQUEST, "Invalid name")); }
     if !is_valid_build_context(&body.build_context) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid build_context path"));
+    }
+    let pre_build_cmd = body.pre_build_cmd.as_deref().filter(|c| !c.trim().is_empty());
+    if let Some(cmd) = pre_build_cmd {
+        if !ALLOWED_PRE_BUILD.contains(&cmd) {
+            return Err(err(StatusCode::BAD_REQUEST, "Command not allowed. Permitted commands: npm install, npm ci, yarn install, pnpm install, composer install, bundle install, pip install -r requirements.txt, pip3 install -r requirements.txt, cargo build --release"));
+        }
     }
 
     // Check if the original Dockerfile exists before calling auto-detect
@@ -646,8 +616,9 @@ async fn auto_detect(Json(body): Json<AutoDetectRequest>) -> Result<Json<serde_j
     let context_dir = if body.build_context == "." { deploy_dir.clone() } else { format!("{deploy_dir}/{}", body.build_context) };
     let original_exists = std::path::Path::new(&context_dir).join(&body.dockerfile).exists();
 
-    let dockerfile = git_build::auto_generate_dockerfile(&body.name, &body.dockerfile, &body.build_context)
-        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
+    let (dockerfile, pre_build_applied, pre_build_note) = git_build::auto_generate_dockerfile(
+        &body.name, &body.dockerfile, &body.build_context, pre_build_cmd,
+    ).map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
 
     // auto_generated is true only if the original didn't exist (meaning the function created one)
     let auto_generated = !original_exists;
@@ -655,6 +626,8 @@ async fn auto_detect(Json(body): Json<AutoDetectRequest>) -> Result<Json<serde_j
     Ok(Json(serde_json::json!({
         "dockerfile": dockerfile,
         "auto_generated": auto_generated,
+        "pre_build_applied": pre_build_applied,
+        "pre_build_note": pre_build_note,
     })))
 }
 
@@ -739,7 +712,6 @@ pub fn router() -> Router<AppState> {
         .route("/git/restart", post(restart_container))
         .route("/git/logs", post(container_logs))
         .route("/git/hook", post(run_hook))
-        .route("/git/pre-build-hook", post(pre_build_hook))
         .route("/git/auto-detect", post(auto_detect))
         .route("/git/compose-check", post(compose_check))
         .route("/git/nixpacks-build", post(nixpacks_build_handler))

@@ -1399,7 +1399,7 @@ export default function GitDeploys() {
                 <label className="block text-sm font-medium text-dark-100 mb-1">Pre-build Command</label>
                 <input type="text" value={formPreBuild} onChange={(e) => setFormPreBuild(e.target.value)}
                   placeholder="npm install, composer install, etc." className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 outline-none" />
-                <p className="text-xs text-dark-300 mt-1">Runs in the git repo directory before docker build</p>
+                <p className="text-xs text-dark-300 mt-1">Only applies when DockPanel generates the Dockerfile for you — becomes an install step inside the built image (add it as a RUN line yourself if you commit your own Dockerfile)</p>
               </div>
 
               {/* Post-deploy Command */}

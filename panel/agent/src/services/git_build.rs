@@ -218,15 +218,24 @@ pub async fn build_image(
     ]);
 
     let build = tokio::time::timeout(
-        std::time::Duration::from_secs(600),
+        // 900s, not 600s: this build now also carries whatever pre-build
+        // install step the operator configured (folded into a RUN line
+        // instead of a separate host-exec step — see auto_generate_dockerfile),
+        // absorbing that step's old, separate 300s budget.
+        std::time::Duration::from_secs(900),
         safe_command("docker")
             .args(&cmd_args)
             .env("DOCKER_BUILDKIT", "1")
             .current_dir(&deploy_dir)
+            // safe_command sets no kill_on_drop, so a timed-out (dropped)
+            // future would otherwise leave `docker build` running in the
+            // background — see database.rs:317, migration.rs:91,
+            // database_backup.rs:424, security_scanner.rs:633 for the same fix.
+            .kill_on_drop(true)
             .output(),
     )
     .await
-    .map_err(|_| "docker build timed out (600s)".to_string())?
+    .map_err(|_| "docker build timed out (900s)".to_string())?
     .map_err(|e| format!("docker build failed: {e}"))?;
 
     let output = format!(
@@ -1051,19 +1060,75 @@ pub async fn prune_images(name: &str, keep: usize) -> Result<Vec<String>, String
     Ok(removed)
 }
 
-/// Auto-detect language and generate a Dockerfile if none exists.
-/// Returns the dockerfile path to use (either the existing one or "Dockerfile" for the generated one).
-pub fn auto_generate_dockerfile(name: &str, dockerfile_path: &str, build_context: &str) -> Result<String, String> {
+/// Whitelisted install command that applies to the detected Node.js project,
+/// spliced in as the RUN line in place of the hardcoded default. npm/npm ci
+/// run as-is; neither yarn nor pnpm is on `node:20-alpine`'s PATH by default,
+/// but corepack is (bundled since Node 16.9+), so those two get a
+/// `corepack enable &&` prefix. Returns (RUN line, whether it was applied).
+fn node_install_run(pre_build_override: Option<&str>, default: &str) -> (String, bool) {
+    if let Some(cmd) = pre_build_override {
+        if cmd == "npm install" || cmd == "npm ci" {
+            return (format!("RUN {cmd}"), true);
+        }
+        if cmd == "yarn install" || cmd == "pnpm install" {
+            return (format!("RUN corepack enable && {cmd}"), true);
+        }
+    }
+    (default.to_string(), false)
+}
+
+/// Whitelisted install command that applies to the detected Python project.
+/// The default's `--no-cache-dir` flag is dropped when the operator's exact
+/// whitelisted string is used, so what they typed is really what runs.
+fn pip_install_run(pre_build_override: Option<&str>, default: &str) -> (String, bool) {
+    if let Some(cmd) = pre_build_override {
+        if cmd == "pip install -r requirements.txt" || cmd == "pip3 install -r requirements.txt" {
+            return (format!("RUN {cmd}"), true);
+        }
+    }
+    (default.to_string(), false)
+}
+
+/// Auto-detect language and generate a Dockerfile if none exists, optionally
+/// splicing a whitelisted install command into it as a RUN line. This is the
+/// only place `pre_build_override` (already validated against
+/// `ALLOWED_PRE_BUILD` by the route) is used — it only ever becomes text
+/// written into a Dockerfile that `docker build` later executes; it never
+/// reaches a host shell.
+///
+/// Returns `(dockerfile_path, pre_build_applied, pre_build_note)`:
+/// - `dockerfile_path` is the path to use (the existing one, or "Dockerfile"
+///   for a generated one) — unchanged in meaning from before this signature
+///   grew a 4th parameter.
+/// - `pre_build_applied` is true only when `pre_build_override` was supplied
+///   AND matched the detected language's install step.
+/// - `pre_build_note` explains a non-applied override (repo already has a
+///   Dockerfile; override doesn't match the detected language; detected
+///   language has no install step at all) — `None` when there was nothing to
+///   explain (no override supplied, or it applied cleanly).
+pub fn auto_generate_dockerfile(
+    name: &str,
+    dockerfile_path: &str,
+    build_context: &str,
+    pre_build_override: Option<&str>,
+) -> Result<(String, bool, Option<String>), String> {
     let deploy_dir = format!("{GIT_BASE_DIR}/{name}");
     let context_dir = if build_context == "." { deploy_dir.clone() } else { format!("{deploy_dir}/{build_context}") };
     let df_path = std::path::Path::new(&context_dir).join(dockerfile_path);
 
-    // If Dockerfile exists, use it as-is
+    // If Dockerfile exists, use it as-is. Never auto-splice a RUN line into a
+    // Dockerfile this function doesn't own — it has no way to know where an
+    // install step belongs relative to that file's own COPY instructions.
     if df_path.exists() {
-        return Ok(dockerfile_path.to_string());
+        let note = pre_build_override
+            .map(|_| "repo already has a Dockerfile — add the install step as a RUN line there".to_string());
+        return Ok((dockerfile_path.to_string(), false, note));
     }
 
     tracing::info!("No Dockerfile found at {dockerfile_path} in {context_dir}, auto-detecting...");
+
+    let mut applied = false;
+    let mut note: Option<String> = None;
 
     let generated = if std::path::Path::new(&context_dir).join("package.json").exists() {
         // Node.js
@@ -1074,16 +1139,24 @@ pub fn auto_generate_dockerfile(name: &str, dockerfile_path: &str, build_context
 
         if has_next {
             // Next.js
-            "FROM node:20-alpine AS builder\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nRUN npm run build\n\nFROM node:20-alpine\nWORKDIR /app\nCOPY --from=builder /app/.next ./.next\nCOPY --from=builder /app/node_modules ./node_modules\nCOPY --from=builder /app/package.json ./\nCOPY --from=builder /app/public ./public\nEXPOSE 3000\nCMD [\"npm\", \"start\"]\n".to_string()
+            let (install, ok) = node_install_run(pre_build_override, "RUN npm install");
+            applied = ok;
+            format!("FROM node:20-alpine AS builder\nWORKDIR /app\nCOPY package*.json ./\n{install}\nCOPY . .\nRUN npm run build\n\nFROM node:20-alpine\nWORKDIR /app\nCOPY --from=builder /app/.next ./.next\nCOPY --from=builder /app/node_modules ./node_modules\nCOPY --from=builder /app/package.json ./\nCOPY --from=builder /app/public ./public\nEXPOSE 3000\nCMD [\"npm\", \"start\"]\n")
         } else if has_nuxt {
             // Nuxt
-            "FROM node:20-alpine AS builder\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nRUN npm run build\n\nFROM node:20-alpine\nWORKDIR /app\nCOPY --from=builder /app/.output ./.output\nEXPOSE 3000\nCMD [\"node\", \".output/server/index.mjs\"]\n".to_string()
+            let (install, ok) = node_install_run(pre_build_override, "RUN npm install");
+            applied = ok;
+            format!("FROM node:20-alpine AS builder\nWORKDIR /app\nCOPY package*.json ./\n{install}\nCOPY . .\nRUN npm run build\n\nFROM node:20-alpine\nWORKDIR /app\nCOPY --from=builder /app/.output ./.output\nEXPOSE 3000\nCMD [\"node\", \".output/server/index.mjs\"]\n")
         } else if has_build {
             // Generic Node.js with build step (SPA/React/Vue)
-            "FROM node:20-alpine AS builder\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nRUN npm run build\n\nFROM nginx:alpine\nCOPY --from=builder /app/dist /usr/share/nginx/html\nEXPOSE 80\n".to_string()
+            let (install, ok) = node_install_run(pre_build_override, "RUN npm install");
+            applied = ok;
+            format!("FROM node:20-alpine AS builder\nWORKDIR /app\nCOPY package*.json ./\n{install}\nCOPY . .\nRUN npm run build\n\nFROM nginx:alpine\nCOPY --from=builder /app/dist /usr/share/nginx/html\nEXPOSE 80\n")
         } else {
             // Plain Node.js server
-            "FROM node:20-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install --omit=dev\nCOPY . .\nEXPOSE 3000\nCMD [\"node\", \"index.js\"]\n".to_string()
+            let (install, ok) = node_install_run(pre_build_override, "RUN npm install --omit=dev");
+            applied = ok;
+            format!("FROM node:20-alpine\nWORKDIR /app\nCOPY package*.json ./\n{install}\nCOPY . .\nEXPOSE 3000\nCMD [\"node\", \"index.js\"]\n")
         }
     } else if std::path::Path::new(&context_dir).join("requirements.txt").exists() {
         // Python
@@ -1091,32 +1164,67 @@ pub fn auto_generate_dockerfile(name: &str, dockerfile_path: &str, build_context
             .unwrap_or_default().to_lowercase();
         let has_django = reqs.contains("django");
         let has_flask = reqs.contains("flask");
+        let (install, ok) = pip_install_run(pre_build_override, "RUN pip install --no-cache-dir -r requirements.txt");
+        applied = ok;
 
         if has_django {
-            "FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install --no-cache-dir -r requirements.txt\nCOPY . .\nRUN python manage.py collectstatic --noinput 2>/dev/null || true\nEXPOSE 8000\nCMD [\"gunicorn\", \"--bind\", \"0.0.0.0:8000\", \"--workers\", \"2\", \"config.wsgi:application\"]\n".to_string()
+            format!("FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\n{install}\nCOPY . .\nRUN python manage.py collectstatic --noinput 2>/dev/null || true\nEXPOSE 8000\nCMD [\"gunicorn\", \"--bind\", \"0.0.0.0:8000\", \"--workers\", \"2\", \"config.wsgi:application\"]\n")
         } else if has_flask {
-            "FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install --no-cache-dir -r requirements.txt\nCOPY . .\nEXPOSE 5000\nCMD [\"gunicorn\", \"--bind\", \"0.0.0.0:5000\", \"--workers\", \"2\", \"app:app\"]\n".to_string()
+            format!("FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\n{install}\nCOPY . .\nEXPOSE 5000\nCMD [\"gunicorn\", \"--bind\", \"0.0.0.0:5000\", \"--workers\", \"2\", \"app:app\"]\n")
         } else {
-            "FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install --no-cache-dir -r requirements.txt\nCOPY . .\nEXPOSE 8000\nCMD [\"python\", \"app.py\"]\n".to_string()
+            format!("FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\n{install}\nCOPY . .\nEXPOSE 8000\nCMD [\"python\", \"app.py\"]\n")
         }
     } else if std::path::Path::new(&context_dir).join("go.mod").exists() {
-        // Go
+        // Go — no ALLOWED_PRE_BUILD entry maps to this toolchain (module
+        // fetch is `go mod download`, not a package-manager install command).
+        if let Some(cmd) = pre_build_override {
+            note = Some(format!("'{cmd}' has no matching install step for a Go project — ignored"));
+        }
         "FROM golang:1.24-alpine AS builder\nWORKDIR /app\nCOPY go.mod go.sum ./\nRUN go mod download\nCOPY . .\nRUN CGO_ENABLED=0 go build -o server .\n\nFROM alpine:3.20\nWORKDIR /app\nCOPY --from=builder /app/server .\nEXPOSE 8080\nCMD [\"./server\"]\n".to_string()
     } else if std::path::Path::new(&context_dir).join("Cargo.toml").exists() {
-        // Rust
+        // Rust — the default already IS the whitelisted command.
+        applied = pre_build_override == Some("cargo build --release");
         "FROM rust:1.94-slim AS builder\nWORKDIR /app\nCOPY . .\nRUN cargo build --release\n\nFROM debian:bookworm-slim\nCOPY --from=builder /app/target/release/* /usr/local/bin/\nEXPOSE 8080\nCMD [\"app\"]\n".to_string()
     } else if std::path::Path::new(&context_dir).join("composer.json").exists() {
-        // PHP/Laravel
-        "FROM php:8.3-fpm-alpine\nRUN apk add --no-cache nginx\nWORKDIR /app\nCOPY . .\nRUN curl -sS https://getcomposer.org/installer | php && php composer.phar install --no-dev --optimize-autoloader\nEXPOSE 80\nCMD [\"php\", \"-S\", \"0.0.0.0:80\", \"-t\", \"public\"]\n".to_string()
+        // PHP/Laravel. The installer bootstraps composer as a global
+        // `/usr/local/bin/composer` binary (not a local composer.phar)
+        // specifically so the whitelisted "composer install" string, when
+        // supplied, is really what the install RUN line runs.
+        let (install, ok) = if pre_build_override == Some("composer install") {
+            ("RUN composer install".to_string(), true)
+        } else {
+            ("RUN composer install --no-dev --optimize-autoloader".to_string(), false)
+        };
+        applied = ok;
+        format!("FROM php:8.3-fpm-alpine\nRUN apk add --no-cache nginx\nWORKDIR /app\nCOPY . .\nRUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer\n{install}\nEXPOSE 80\nCMD [\"php\", \"-S\", \"0.0.0.0:80\", \"-t\", \"public\"]\n")
     } else if std::path::Path::new(&context_dir).join("Gemfile").exists() {
         // Ruby
-        "FROM ruby:3.3-slim\nWORKDIR /app\nCOPY Gemfile Gemfile.lock ./\nRUN bundle install --without development test\nCOPY . .\nEXPOSE 3000\nCMD [\"bundle\", \"exec\", \"rails\", \"server\", \"-b\", \"0.0.0.0\"]\n".to_string()
+        let (install, ok) = if pre_build_override == Some("bundle install") {
+            ("RUN bundle install".to_string(), true)
+        } else {
+            ("RUN bundle install --without development test".to_string(), false)
+        };
+        applied = ok;
+        format!("FROM ruby:3.3-slim\nWORKDIR /app\nCOPY Gemfile Gemfile.lock ./\n{install}\nCOPY . .\nEXPOSE 3000\nCMD [\"bundle\", \"exec\", \"rails\", \"server\", \"-b\", \"0.0.0.0\"]\n")
     } else if std::path::Path::new(&context_dir).join("index.html").exists() {
-        // Static site
+        // Static site — nginx just serves files, no install step exists.
+        if let Some(cmd) = pre_build_override {
+            note = Some(format!("'{cmd}' has no matching install step for a static site — ignored"));
+        }
         "FROM nginx:alpine\nCOPY . /usr/share/nginx/html\nEXPOSE 80\n".to_string()
     } else {
         return Err("No Dockerfile found and could not auto-detect project type. Supported: Node.js (package.json), Python (requirements.txt), Go (go.mod), Rust (Cargo.toml), PHP (composer.json), Ruby (Gemfile), Static (index.html)".into());
     };
+
+    // A supplied override that didn't apply because it doesn't match the
+    // detected language (e.g. "bundle install" against a Node repo) gets a
+    // note too, unless a no-install-step branch above already set a more
+    // specific one.
+    if let Some(cmd) = pre_build_override {
+        if !applied && note.is_none() {
+            note = Some(format!("'{cmd}' doesn't apply to this project type — using the default install step"));
+        }
+    }
 
     // Write generated Dockerfile
     let generated_path = std::path::Path::new(&context_dir).join("Dockerfile");
@@ -1124,7 +1232,7 @@ pub fn auto_generate_dockerfile(name: &str, dockerfile_path: &str, build_context
         .map_err(|e| format!("Failed to write generated Dockerfile: {e}"))?;
 
     tracing::info!("Auto-generated Dockerfile for {name} in {context_dir}");
-    Ok("Dockerfile".to_string())
+    Ok(("Dockerfile".to_string(), applied, note))
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,30 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.182.0]
+
+### Fixed — Git Deploy's pre-build command ran as root on the host, not inside the build container
+
+`POST /git/pre-build-hook` ran a whitelisted install command (`npm install`,
+`pip install -r requirements.txt`, `cargo build --release`, etc.) via a host
+shell in the repo's checkout directory, and the agent runs unsandboxed as
+root. The whitelist blocked shell-injection into the command string, but not
+the named commands themselves being standard supply-chain-RCE vectors —
+`npm`/`pip`/`composer`/`bundle`/`cargo` all run installer or build-script
+hooks (`package.json` postinstall, `setup.py`, `build.rs`, ...) that execute
+arbitrary code. Arming any one of them for a git deploy meant every
+subsequent repo push, and every transitive dependency, ran as root on the
+panel host, unattended. The route is now deleted: the same whitelisted
+command is instead spliced into the auto-generated Dockerfile's install `RUN`
+line, so it only ever executes inside the `docker build` sandbox every other
+git deploy on this platform already trusts, never a host shell. A pre-build
+command now also skips Nixpacks entirely (previously the host-exec step ran
+unconditionally even after a successful Nixpacks build, silently discarding
+its effect); an agent older than this release refuses a configured pre-build
+command outright rather than silently ignoring it. `build_image`'s Docker
+build also gained `kill_on_drop`, so a timed-out build is actually killed
+instead of orphaned.
+
 ## [2.181.0]
 
 ### Fixed — a terminal share was readable and revocable by any admin, not just the one who created it

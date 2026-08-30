@@ -26,6 +26,14 @@ use crate::services::expected_stops;
 use crate::services::notifications;
 use crate::AppState;
 
+/// An agent older than this still has the vulnerable `/git/pre-build-hook`
+/// host-exec route compiled in (and no `pre_build_cmd` handling in
+/// `/git/auto-detect`), so a pre-build command configured against it would
+/// either silently do nothing or hit a route that no longer exists on the
+/// panel side. Refused up front via `require_agent_at_least`, mirroring
+/// `PROVIDED_TLS_MIN_AGENT` — same reasoning, same failure shape.
+pub(crate) const PRE_BUILD_SPLICE_MIN_AGENT: &str = "2.182.0";
+
 /// The row plus the alias of the certificate it references, if any — mirrors
 /// `stacks::STACK_SELECT`: a LEFT JOIN because most deploys reference none,
 /// and the alias is what the API and the deploy body speak; the id never
@@ -2411,16 +2419,57 @@ fn spawn_deploy_task(
             return; // Skip single-container deployment path
         }
 
-        // Try Nixpacks first, then fall back to auto-detect
+        // A pre-build command skips Nixpacks entirely and goes straight to
+        // auto-detect, so the command always gets spliced into the Dockerfile
+        // DockPanel controls — never silently discarded on a Nixpacks-success
+        // path the way the old host-exec pre-build-hook was (it used to fire
+        // unconditionally after this block, with no check on whether
+        // Nixpacks had already built the image and made its filesystem
+        // mutation moot).
+        let pre_build_cmd = config.pre_build_cmd.as_deref().filter(|c| !c.trim().is_empty());
+
+        if pre_build_cmd.is_some() {
+            if let Err(e) = require_agent_at_least(
+                &agent,
+                PRE_BUILD_SPLICE_MIN_AGENT,
+                "Pre-build commands (now built into the Docker image, not run on the host)",
+            )
+            .await
+            {
+                let msg = api_error_message(e);
+                emit("detect", "Detecting build method", "error", Some(msg.clone()));
+                emit("complete", "Deploy failed", "error", None);
+                record_failed_history(&db, git_deploy_id, &commit_hash, commit_message.as_deref().unwrap_or(""), &msg, &triggered).await;
+                if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                    .bind(git_deploy_id)
+                    .execute(&db)
+                    .await
+                {
+                    tracing::warn!("Failed to update git deploy status: {db_err}");
+                }
+                tracing::error!("Git deploy refused: {deploy_name}: {msg}");
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
+                return;
+            }
+        }
+
+        // Try Nixpacks first (skipped when a pre-build command is configured
+        // — see above), then fall back to auto-detect.
         let mut nixpacks_image: Option<String> = None;
         emit("detect", "Detecting build method", "in_progress", None);
-        match agent.post_long("/git/nixpacks-build", Some(serde_json::json!({
-            "name": config.name,
-            "commit_hash": commit_hash,
-            "build_context": &config.build_context,
-            "env_vars": config.env_vars,
-        })), 660).await {
-            Ok(result) => {
+        let nixpacks_result = if pre_build_cmd.is_some() {
+            None
+        } else {
+            agent.post_long("/git/nixpacks-build", Some(serde_json::json!({
+                "name": config.name,
+                "commit_hash": commit_hash,
+                "build_context": &config.build_context,
+                "env_vars": config.env_vars,
+            })), 660).await.ok()
+        };
+        match nixpacks_result {
+            Some(result) => {
                 nixpacks_image = result.get("image_tag").and_then(|v| v.as_str()).map(|s| s.to_string());
                 emit("detect", "Built with Nixpacks", "done", None);
                 if let Err(db_err) = sqlx::query("UPDATE git_deploys SET build_method = 'nixpacks', updated_at = NOW() WHERE id = $1")
@@ -2429,10 +2478,12 @@ fn spawn_deploy_task(
                     tracing::warn!("Failed to update git deploy build method: {db_err}");
                 }
             }
-            Err(_) => {
-                // Nixpacks failed or not available — fall back to auto-detect
+            None => {
+                // Nixpacks failed/unavailable, or was skipped for a pre-build
+                // command — either way, fall through to auto-detect.
                 match agent.post("/git/auto-detect", Some(serde_json::json!({
                     "name": config.name, "dockerfile": config.dockerfile, "build_context": config.build_context,
+                    "pre_build_cmd": pre_build_cmd,
                 }))).await {
                     Ok(result) => {
                         let auto = result.get("auto_generated").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -2449,6 +2500,15 @@ fn spawn_deploy_task(
                                 .bind(git_deploy_id).execute(&db).await
                             {
                                 tracing::warn!("Failed to update git deploy build method: {db_err}");
+                            }
+                        }
+                        if pre_build_cmd.is_some() {
+                            let applied = result.get("pre_build_applied").and_then(|v| v.as_bool()).unwrap_or(false);
+                            let note = result.get("pre_build_note").and_then(|v| v.as_str());
+                            if applied {
+                                emit("pre_build", "Pre-build command folded into Docker build", "done", None);
+                            } else {
+                                emit("pre_build", "Pre-build command not applied", "error", note.map(String::from));
                             }
                         }
                     }
@@ -2471,27 +2531,6 @@ fn spawn_deploy_task(
                         tokio::time::sleep(Duration::from_secs(60)).await;
                         logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
                         return;
-                    }
-                }
-            }
-        }
-
-        // Pre-build hook (runs in git dir on host, before docker build)
-        if let Some(ref cmd) = config.pre_build_cmd {
-            if !cmd.trim().is_empty() {
-                emit("pre_build", "Running pre-build hook", "in_progress", None);
-                match agent.post_long("/git/pre-build-hook", Some(serde_json::json!({ "name": config.name, "command": cmd })), 330).await {
-                    Ok(result) => {
-                        let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
-                        if success {
-                            emit("pre_build", "Running pre-build hook", "done", None);
-                        } else {
-                            let output = result.get("output").and_then(|v| v.as_str()).unwrap_or("");
-                            emit("pre_build", "Pre-build hook failed", "error", Some(output.to_string()));
-                        }
-                    }
-                    Err(e) => {
-                        emit("pre_build", "Pre-build hook failed", "error", Some(format!("{e}")));
                     }
                 }
             }
@@ -3475,14 +3514,43 @@ pub async fn trigger_deploy_task(
         }
     }
 
-    // Try Nixpacks first, then fall back to auto-detect + docker build
+    // A pre-build command skips Nixpacks entirely and goes straight to
+    // auto-detect, so the command always gets spliced into the Dockerfile
+    // DockPanel controls — mirrors spawn_deploy_task's twin block.
+    let pre_build_cmd = config.pre_build_cmd.as_deref().filter(|c| !c.trim().is_empty());
+
+    if pre_build_cmd.is_some() {
+        if let Err(e) = require_agent_at_least(
+            &agent,
+            PRE_BUILD_SPLICE_MIN_AGENT,
+            "Pre-build commands (now built into the Docker image, not run on the host)",
+        ).await {
+            let msg = api_error_message(e);
+            record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &msg, &triggered_by).await;
+            if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                .bind(git_deploy_id).execute(&db).await
+            {
+                tracing::warn!("Failed to update git deploy status: {db_err}");
+            }
+            tracing::error!("Scheduled deploy refused ({}): {}: {msg}", triggered_by, config.name);
+            return;
+        }
+    }
+
+    // Try Nixpacks first (skipped when a pre-build command is configured —
+    // see above), then fall back to auto-detect + docker build.
     let mut nixpacks_image: Option<String> = None;
-    if let Ok(result) = agent.post_long("/git/nixpacks-build", Some(serde_json::json!({
-        "name": config.name,
-        "commit_hash": commit_hash,
-        "build_context": &config.build_context,
-        "env_vars": config.env_vars,
-    })), 660).await {
+    let nixpacks_result = if pre_build_cmd.is_some() {
+        None
+    } else {
+        agent.post_long("/git/nixpacks-build", Some(serde_json::json!({
+            "name": config.name,
+            "commit_hash": commit_hash,
+            "build_context": &config.build_context,
+            "env_vars": config.env_vars,
+        })), 660).await.ok()
+    };
+    if let Some(result) = nixpacks_result {
         nixpacks_image = result.get("image_tag").and_then(|v| v.as_str()).map(|s| s.to_string());
         tracing::info!("Nixpacks build succeeded for {}", config.name);
         if let Err(db_err) = sqlx::query("UPDATE git_deploys SET build_method = 'nixpacks', updated_at = NOW() WHERE id = $1")
@@ -3491,20 +3559,34 @@ pub async fn trigger_deploy_task(
             tracing::warn!("Failed to update git deploy build method: {db_err}");
         }
     } else {
-        // Nixpacks unavailable — try auto-detect
-        if let Err(e) = agent.post("/git/auto-detect", Some(serde_json::json!({
+        // Nixpacks unavailable, or skipped for a pre-build command — try auto-detect.
+        let auto_detect_result = agent.post("/git/auto-detect", Some(serde_json::json!({
             "name": config.name, "dockerfile": config.dockerfile, "build_context": config.build_context,
-        }))).await {
-            tracing::error!("Auto-detect failed ({}): {}: {e}", triggered_by, config.name);
-            record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Auto-detect failed: {e}"), &triggered_by).await;
-            if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
-                .bind(git_deploy_id).execute(&db).await
-            {
-                tracing::warn!("Failed to update git deploy status: {db_err}");
+            "pre_build_cmd": pre_build_cmd,
+        }))).await;
+        let result = match auto_detect_result {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Auto-detect failed ({}): {}: {e}", triggered_by, config.name);
+                record_failed_history(&db, git_deploy_id, &commit_hash, &commit_message, &format!("Auto-detect failed: {e}"), &triggered_by).await;
+                if let Err(db_err) = sqlx::query("UPDATE git_deploys SET status = 'failed', updated_at = NOW() WHERE id = $1")
+                    .bind(git_deploy_id).execute(&db).await
+                {
+                    tracing::warn!("Failed to update git deploy status: {db_err}");
+                }
+                return;
             }
-            return;
+        };
+        if pre_build_cmd.is_some() {
+            let applied = result.get("pre_build_applied").and_then(|v| v.as_bool()).unwrap_or(false);
+            let note = result.get("pre_build_note").and_then(|v| v.as_str()).unwrap_or("");
+            if applied {
+                tracing::info!("Pre-build command folded into Docker build for {}", config.name);
+            } else {
+                tracing::warn!("Pre-build command not applied for {}: {note}", config.name);
+            }
         }
-        // Refresh the lock's self-heal clock before the (up to ~16 min) pre-build+build:
+        // Refresh the lock's self-heal clock before the (up to 900s) install+build:
         // this fallthrough path has no updated_at bump since lock acquisition, so a
         // legitimately long Dockerfile build could otherwise cross the 30-min window and
         // let a concurrent trigger self-release the lock (mirrors spawn_deploy_task 1466/1473).
@@ -3512,15 +3594,6 @@ pub async fn trigger_deploy_task(
             .bind(git_deploy_id).execute(&db).await
         {
             tracing::warn!("Failed to update git deploy build method: {db_err}");
-        }
-    }
-
-    // Pre-build hook
-    if let Some(ref cmd) = config.pre_build_cmd {
-        if !cmd.trim().is_empty() {
-            let _ = agent.post_long("/git/pre-build-hook", Some(serde_json::json!({
-                "name": config.name, "command": cmd,
-            })), 330).await;
         }
     }
 
