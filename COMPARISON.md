@@ -27,7 +27,7 @@ An honest comparison. We're not shy about where DockPanel leads — and we're up
 
 ## Where DockPanel Wins — Massively
 
-**7x lighter, stack against stack** — The panel binaries are ~46MB on disk. At runtime the panel services themselves idle around ~49MB of RAM (cgroup accounting: agent ~35MB + API ~14MB), or about ~109MB counting the bundled PostgreSQL. That last figure is the one to compare, because cPanel's 800MB+ and CloudPanel's 250MB+ include their databases too — measuring our services against their whole stacks would flatter us by a factor nobody could reproduce. On a $5 VPS with 1GB of RAM, the honest gap is still the difference between running your apps and running out of memory.
+**7x lighter, stack against stack** — The panel binaries are ~47MB on disk. At runtime the panel services themselves idle around ~49MB of RAM (cgroup accounting: agent ~35MB + API ~14MB), or about ~109MB counting the bundled PostgreSQL. That last figure is the one to compare, because cPanel's 800MB+ and CloudPanel's 250MB+ include their databases too — measuring our services against their whole stacks would flatter us by a factor nobody could reproduce. On a $5 VPS with 1GB of RAM, the honest gap is still the difference between running your apps and running out of memory.
 
 **Docker integration that no other free panel has** — 147 one-click app templates across 14 categories. Docker Compose stack management. Container logs, shell, stats, resource limits, health checks. Blue-green zero-downtime updates. This is a full container management platform built into a hosting panel. HestiaCP, CloudPanel, and CyberPanel have nothing close to this.
 
