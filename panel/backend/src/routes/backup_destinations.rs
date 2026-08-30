@@ -612,7 +612,12 @@ fn carry_unmentioned_keys(cfg: &mut serde_json::Value, existing: &serde_json::Va
 }
 
 /// Sensitive keys within the backup destination config JSON.
-const CONFIG_SENSITIVE_KEYS: &[&str] = &["secret_key", "password"];
+///
+/// `pub(crate)` so `services::credential_reencrypt` can import this directly
+/// instead of hand-duplicating the list — a duplicate the re-encryption sweep
+/// used to carry had no test tying it back here, so a third secret key added
+/// to this list alone would have silently stopped being re-keyed on rotation.
+pub(crate) const CONFIG_SENSITIVE_KEYS: &[&str] = &["secret_key", "password"];
 
 /// The sentinel the list endpoint substitutes for a stored secret, and the only
 /// value that means "keep what is already there".

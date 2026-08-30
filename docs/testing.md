@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.180.0.** The version stamp, the template count and every
+> **Reflects v2.181.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -402,7 +402,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. Ninety-nine suites, **3560 assertions**, all green at the current commit:
+survivable. Ninety-nine suites, **3578 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -420,7 +420,7 @@ survivable. Ninety-nine suites, **3560 assertions**, all green at the current co
 | `rpm-install-pin-e2e.sh` | 71 |
 | `mail-rpm-pin-e2e.sh` | 22 |
 | `cpu-metric-pin-e2e.sh` | 17 |
-| `credentials-at-rest-pin-e2e.sh` | 36 |
+| `credentials-at-rest-pin-e2e.sh` | 49 |
 | `canary-arm-pin-e2e.sh` | 20 |
 | `notifications-pin-e2e.sh` | 35 |
 | `sandbox-paths-pin-e2e.sh` | 94 |
@@ -452,7 +452,7 @@ survivable. Ninety-nine suites, **3560 assertions**, all green at the current co
 | `site-transfer-visibility-pin-e2e.sh` | 21 |
 | `suspend-restore-pin-e2e.sh` | 18 |
 | `site-disabled-stays-offline-pin-e2e.sh` | 19 |
-| `terminal-scope-signed-pin-e2e.sh` | 10 |
+| `terminal-scope-signed-pin-e2e.sh` | 15 |
 | `logs-scope-signed-pin-e2e.sh` | 10 |
 | `client-role-honesty-pin-e2e.sh` | 28 |
 | `wrong-host-dispatch-pin-e2e.sh` | 23 |

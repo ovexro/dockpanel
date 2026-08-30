@@ -3668,12 +3668,14 @@ interface ReencryptSubject {
   rewritten: number;
   already_current: number;
   unreadable: number;
+  raced: number;
 }
 
 interface ReencryptResult {
   examined: number;
   rewritten: number;
   unreadable: number;
+  raced: number;
   subjects: ReencryptSubject[];
   covered_modules: string[];
 }
@@ -3698,6 +3700,11 @@ function CredentialEncryptionCard({ setMessage }: { setMessage: (m: { text: stri
       if (r.unreadable > 0) {
         setMessage({
           text: `${r.rewritten} re-encrypted, but ${r.unreadable} value(s) could not be read and were left untouched`,
+          type: "error",
+        });
+      } else if (r.raced > 0) {
+        setMessage({
+          text: `${r.rewritten} re-encrypted, but ${r.raced} value(s) changed while this ran and were safely skipped — run it again to pick them up`,
           type: "error",
         });
       } else if (r.rewritten === 0) {
@@ -3770,6 +3777,7 @@ function CredentialEncryptionCard({ setMessage }: { setMessage: (m: { text: stri
                   <th className="text-right px-3 py-2 font-medium">Rewritten</th>
                   <th className="text-right px-3 py-2 font-medium">Already current</th>
                   <th className="text-right px-3 py-2 font-medium">Unreadable</th>
+                  <th className="text-right px-3 py-2 font-medium">Raced</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-dark-700">
@@ -3781,6 +3789,9 @@ function CredentialEncryptionCard({ setMessage }: { setMessage: (m: { text: stri
                     <td className="px-3 py-2 text-right text-dark-400">{s.already_current}</td>
                     <td className={`px-3 py-2 text-right ${s.unreadable > 0 ? "text-danger-400" : "text-dark-400"}`}>
                       {s.unreadable}
+                    </td>
+                    <td className={`px-3 py-2 text-right ${s.raced > 0 ? "text-warn-400" : "text-dark-400"}`}>
+                      {s.raced}
                     </td>
                   </tr>
                 ))}

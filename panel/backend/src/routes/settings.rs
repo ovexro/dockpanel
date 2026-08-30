@@ -73,6 +73,15 @@ pub const ALLOWED_KEYS: &[&str] = &[
     "base_url",
 ];
 
+/// Settings keys masked in the GET response and encrypted at rest, alongside
+/// every key ending `_client_secret`. Used to be declared separately, once
+/// inside `update` and once inside `import_config` — the two happened to
+/// still match, but nothing tied them together, the exact severed-pair shape
+/// `services::credential_reencrypt`'s own header warns about. `pub(crate)` so
+/// that module can also assert its `SENSITIVE_SETTINGS_SQL` predicate covers
+/// every key here, rather than hand-duplicating this list a third time.
+pub(crate) const SENSITIVE_KEYS: &[&str] = &["smtp_password", "pdns_api_key"];
+
 /// GET /api/settings — Returns all settings as a key/value map (admin only).
 pub async fn list(
     State(state): State<AppState>,
@@ -179,9 +188,8 @@ pub async fn update(
     let mut tx = state.db.begin().await
         .map_err(|e| internal_error("update settings", e))?;
 
-    // Sensitive keys that are masked in the GET response — skip if value is the mask sentinel
-    const SENSITIVE_KEYS: &[&str] = &["smtp_password", "pdns_api_key"];
-
+    // Sensitive keys that are masked in the GET response — skip if value is the mask sentinel.
+    // `SENSITIVE_KEYS` is the module-level const above, not a local copy.
     for (key, value) in &body {
         // Don't overwrite real secrets with the mask placeholder
         if SENSITIVE_KEYS.contains(&key.as_str()) && value == "********" {
@@ -776,8 +784,7 @@ pub async fn import_config(
     // the same list now, not a second copy that drifts away from it.
     let allowed_keys = ALLOWED_KEYS;
 
-    const SENSITIVE_KEYS: &[&str] = &["smtp_password", "pdns_api_key"];
-
+    // `SENSITIVE_KEYS` is the module-level const above, not a local copy.
     let mut imported = 0;
     let mut skipped = 0;
     for (key, value) in settings_obj {
@@ -1172,6 +1179,7 @@ pub async fn reencrypt_credentials(
     let rewritten: i64 = reports.iter().map(|r| r.rewritten).sum();
     let unreadable: i64 = reports.iter().map(|r| r.unreadable).sum();
     let examined: i64 = reports.iter().map(|r| r.examined).sum();
+    let raced: i64 = reports.iter().map(|r| r.raced).sum();
 
     activity::log_activity(
         &state.db,
@@ -1181,7 +1189,7 @@ pub async fn reencrypt_credentials(
         Some("settings"),
         None,
         Some(&format!(
-            "examined {examined}, rewritten {rewritten}, unreadable {unreadable}"
+            "examined {examined}, rewritten {rewritten}, unreadable {unreadable}, raced {raced}"
         )),
         None,
     )
@@ -1195,11 +1203,21 @@ pub async fn reencrypt_credentials(
             crate::services::secrets_crypto::ENCRYPTION_KEY_ENV
         );
     }
+    if raced > 0 {
+        // Not an error: a normal write beat the sweep to a row and the CAS
+        // guard correctly skipped it rather than clobbering the newer value.
+        // Re-running the sweep re-keys it once nothing races it.
+        tracing::warn!(
+            "credential re-encryption skipped {raced} row(s) that changed concurrently — \
+             run it again to pick them up"
+        );
+    }
 
     Ok(Json(serde_json::json!({
         "examined": examined,
         "rewritten": rewritten,
         "unreadable": unreadable,
+        "raced": raced,
         "subjects": reports,
         // Which surfaces this sweep claims to cover, so the answer to "did it
         // touch my X?" is in the response rather than in someone's memory.

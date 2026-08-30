@@ -243,8 +243,8 @@ fn valid_share_id(id: &str) -> bool {
     id.len() == 12 && id.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Split a stored share into `(created_at, seconds_left, content)`, or `None`
-/// when it is expired or carries no usable timestamp.
+/// Split a stored share into `(created_at, seconds_left, owner_id, content)`,
+/// or `None` when it is expired or carries no usable timestamp.
 ///
 /// **Both readers must go through here.** Until this was written they disagreed:
 /// the operator's own share list skipped anything past its hour, while the public
@@ -254,10 +254,24 @@ fn valid_share_id(id: &str) -> bool {
 /// thing that eventually removed the row was a retention sweep that runs once a
 /// day. A daily sweep is a housekeeper, not an access control; expiry has to be
 /// decided by whoever answers the request.
-fn share_lifetime(raw: &str, now: i64) -> Option<(i64, i64, &str)> {
-    let (created_ts, content) = match raw.find('|') {
+///
+/// `owner_id` is the creating admin's `claims.sub`, added so `list_shares` and
+/// `revoke_share` can scope to it — a multi-admin/reseller install must not let
+/// one admin enumerate (and, via the share_id, read) another admin's root
+/// terminal output. A row written before this field existed has no second `|`,
+/// so it parses with `owner_id == ""` — matching no real admin, it simply
+/// becomes invisible to `list_shares`/`revoke_share` until it expires within
+/// `SHARE_TTL_SECS`, which is the correct fail-closed behavior for a value this
+/// short-lived. `view_shared` never reads `owner_id` — its link-based access
+/// is unauthenticated by design and unaffected by this scoping.
+fn share_lifetime(raw: &str, now: i64) -> Option<(i64, i64, &str, &str)> {
+    let (created_ts, rest) = match raw.find('|') {
         Some(pos) => (raw[..pos].parse::<i64>().unwrap_or(0), &raw[pos + 1..]),
         None => (0, raw),
+    };
+    let (owner, content) = match rest.find('|') {
+        Some(pos) => (&rest[..pos], &rest[pos + 1..]),
+        None => ("", rest),
     };
 
     // A row whose timestamp will not parse cannot be shown to have life left,
@@ -271,7 +285,7 @@ fn share_lifetime(raw: &str, now: i64) -> Option<(i64, i64, &str)> {
         return None;
     }
 
-    Some((created_ts, remaining, content))
+    Some((created_ts, remaining, owner, content))
 }
 
 /// POST /api/terminal/share — Save terminal output for sharing (temporary, 1 hour expiry).
@@ -315,8 +329,9 @@ pub async fn share_output(
         .take(12)
         .collect::<String>();
 
-    // Store in settings table with timestamp prefix for crash-resilient cleanup
-    let value = format!("{}|{}", chrono::Utc::now().timestamp(), content);
+    // Store in settings table with timestamp + owner prefix for crash-resilient
+    // cleanup and per-admin scoping (see share_lifetime).
+    let value = format!("{}|{}|{}", chrono::Utc::now().timestamp(), claims.sub, content);
     sqlx::query(
         "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2",
     )
@@ -346,8 +361,15 @@ pub async fn revoke_share(
     }
 
     let key = format!("terminal_share_{id}");
-    let result = sqlx::query("DELETE FROM settings WHERE key = $1")
+    // Scoped to the calling admin's own share (see share_lifetime). 0 rows
+    // affected covers "doesn't exist", "already expired", AND "belongs to a
+    // different admin" — this file's own established pattern is to never let
+    // a response distinguish those cases (see view_shared's identical choice).
+    let result = sqlx::query(
+        "DELETE FROM settings WHERE key = $1 AND split_part(value, '|', 2) = $2",
+    )
         .bind(&key)
+        .bind(claims.sub.to_string())
         .execute(&state.db)
         .await
         .map_err(|e| internal_error("revoke share", e))?;
@@ -374,6 +396,7 @@ pub async fn list_shares(
     .map_err(|e| internal_error("list shares", e))?;
 
     let now = chrono::Utc::now().timestamp();
+    let my_id = claims.sub.to_string();
     let mut shares = Vec::new();
 
     for (key, value) in &rows {
@@ -381,9 +404,16 @@ pub async fn list_shares(
 
         // Already expired, or unparsable: retention will collect the row. The
         // public viewer applies this same rule, so the two answers agree.
-        let Some((created_ts, remaining, _)) = share_lifetime(value, now) else {
+        let Some((created_ts, remaining, owner, _content)) = share_lifetime(value, now) else {
             continue;
         };
+        // Scope to the calling admin's own shares (see share_lifetime) — a
+        // multi-admin/reseller install must not let one admin enumerate (and
+        // then, via the exposed share_id, read) another admin's root
+        // terminal output.
+        if owner != my_id {
+            continue;
+        }
 
         shares.push(serde_json::json!({
             "share_id": share_id,
@@ -440,7 +470,7 @@ pub async fn view_shared(
     // existed — same status, same wording, so the response cannot be used to
     // tell an expired share apart from an unknown id.
     let now = chrono::Utc::now().timestamp();
-    let (_created_ts, remaining, content) = share_lifetime(&raw, now)
+    let (_created_ts, remaining, _owner, content) = share_lifetime(&raw, now)
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Share expired or not found"))?;
 
     let escaped = content.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");

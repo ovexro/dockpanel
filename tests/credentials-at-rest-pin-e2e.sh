@@ -39,8 +39,10 @@ SERVERS=panel/backend/src/routes/servers.rs
 AGENT=panel/backend/src/services/agent.rs
 HELPERS=panel/backend/src/helpers.rs
 REENC=panel/backend/src/services/credential_reencrypt.rs
+SETTINGS=panel/backend/src/routes/settings.rs
+BACKUP_DEST=panel/backend/src/routes/backup_destinations.rs
 
-for f in "$CDN" "$GITD" "$SERVERS" "$AGENT" "$HELPERS" "$REENC" README.md SECURITY.md; do
+for f in "$CDN" "$GITD" "$SERVERS" "$AGENT" "$HELPERS" "$REENC" "$SETTINGS" "$BACKUP_DEST" README.md SECURITY.md; do
   [ -f "$f" ] || { bad "SETUP" "$f missing"; exit 1; }
 done
 
@@ -199,6 +201,71 @@ eq "E2b each new column's module names it in COVERED_MODULES" \
 eq "E3 the writer census walks the crate root, not a directory list" \
    "$($G -c 'join("src");' "$REENC")" "1"
 eq "E3b it descends" "$($G -c 'stack.push(path);' "$REENC")" "1"
+
+echo "── F. The re-encryption sweep does not lose a race, or its own history ──"
+#
+# s428's first-ever audit of this sweep found a real lost-update race: every
+# UPDATE below was keyed on id alone, no transaction/lock/CAS, so a normal
+# write (a password reset, a token rotation, a settings save) landing between
+# the sweep's SELECT and its UPDATE got silently reverted to the STALE value
+# the sweep read — worst on `databases` (the panel's stored password stops
+# matching the live DB) and `servers` (the panel loses its own dial-out token).
+# It also found the vault arm bumping `secrets.version` on EVERY successful
+# re-key with no paired `secret_versions` row — not race-dependent, deterministic
+# on every non-racing run — desyncing the two the same way `routes::secrets`'
+# real edit path never does.
+
+eq "F1 reencrypt_column's UPDATE is CAS-guarded on the value it read" \
+   "$($G -c 'WHERE {id_col}::text = \$2 AND {value_col} = \$3' "$REENC")" "1"
+eq "F2 reencrypt_settings's UPDATE is CAS-guarded" \
+   "$($G -c 'WHERE key = \$2 AND value = \$3' "$REENC")" "1"
+eq "F3 reencrypt_destinations's UPDATE is CAS-guarded" \
+   "$($G -c 'WHERE id::text = \$2 AND config = \$3' "$REENC")" "1"
+eq "F4 reencrypt_vault_secrets's UPDATE is CAS-guarded" \
+   "$($G -c 'WHERE id::text = \$2 AND encrypted_value = \$3' "$REENC")" "1"
+
+# F5/F6: the guard is CHECKED, not merely present — a CAS clause nobody reads
+# the result of protects nothing. Four sweep functions, four counts each.
+eq "F5 every sweep function checks rows_affected before counting a rewrite" \
+   "$($G -c 'rows_affected() > 0' "$REENC")" "4"
+eq "F6 every sweep function counts a raced row instead of silently dropping it" \
+   "$($G -cF 'report.raced += 1;' "$REENC")" "4"
+
+VERSION_BUMP=$($G -cF 'version = version + 1' "$REENC")
+if [ "$VERSION_BUMP" = "0" ]; then
+  ok "F7 reencrypt_vault_secrets no longer bumps secrets.version on every re-key"
+else
+  bad "F7 reencrypt_vault_secrets no longer bumps secrets.version on every re-key" \
+      "found $VERSION_BUMP occurrence(s) — re-keying desyncs version from secret_versions again"
+fi
+
+echo "── G. The two duplicated, unenforced secret-key lists ───────────────────"
+#
+# Both currently matched their source of truth, but neither had a test tying
+# them together — the exact severed-pair shape this file's own header says the
+# module-level COVERED_MODULES registry already got burned by once, unfixed
+# one layer down. `DESTINATION_SECRET_KEYS` is now a direct import (single
+# source of truth, nothing left to drift); `SENSITIVE_SETTINGS_SQL`'s literal
+# stays hand-copied (it's SQL text, not Rust) but is now pinned by a test.
+
+eq "G1 DESTINATION_SECRET_KEYS imports backup_destinations::CONFIG_SENSITIVE_KEYS directly" \
+   "$($G -cF 'use crate::routes::backup_destinations::CONFIG_SENSITIVE_KEYS as DESTINATION_SECRET_KEYS;' "$REENC")" "1"
+DUP=$($G -cE 'const DESTINATION_SECRET_KEYS: &\[&str\]' "$REENC")
+if [ "$DUP" = "0" ]; then
+  ok "G1b no hand-duplicated DESTINATION_SECRET_KEYS literal remains in credential_reencrypt.rs"
+else
+  bad "G1b no hand-duplicated DESTINATION_SECRET_KEYS literal remains" \
+      "found $DUP — the two lists can drift again"
+fi
+eq "G1c CONFIG_SENSITIVE_KEYS is pub(crate) so credential_reencrypt can import it" \
+   "$($G -cF 'pub(crate) const CONFIG_SENSITIVE_KEYS' "$BACKUP_DEST")" "1"
+
+eq "G2 settings::SENSITIVE_KEYS is declared exactly once, at module level" \
+   "$($G -cE 'const SENSITIVE_KEYS: &\[&str\]' "$SETTINGS")" "1"
+eq "G2b it's pub(crate) so credential_reencrypt's test can see it" \
+   "$($G -cF 'pub(crate) const SENSITIVE_KEYS' "$SETTINGS")" "1"
+eq "G3 a test ties SENSITIVE_SETTINGS_SQL to settings::SENSITIVE_KEYS" \
+   "$($G -cF 'fn sensitive_settings_sql_covers_settings_sensitive_keys' "$REENC")" "1"
 
 echo
 echo "PASS $PASS · FAIL $FAIL"

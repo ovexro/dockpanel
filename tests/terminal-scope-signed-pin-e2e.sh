@@ -231,6 +231,92 @@ else
   fi
 fi
 
+echo "§D  a terminal share is scoped to the admin who created it (s428)"
+#
+# THE DEFECT THIS SECTION CLOSES. `list_shares` (GET /api/terminal/shares) ran
+# `SELECT key, value FROM settings WHERE key LIKE 'terminal_share_%'` with no
+# owner filter at all — on a multi-admin/reseller install, any admin could
+# enumerate every OTHER admin's shares and, via the exposed share_id, read
+# their root terminal output through the unauthenticated public viewer.
+# `revoke_share` had the same gap: any admin could DELETE any admin's share by
+# id alone. Both are settings-table rows (no dedicated owner column), so the
+# fix threads the creating admin's id through the existing pipe-delimited
+# value string share_lifetime already parses.
+
+# D1 — share_output stores the CREATING ADMIN's id alongside the timestamp,
+# not just content. Three pipe-delimited fields, the middle one bound from
+# claims — not two.
+if [ -z "$BE_S" ]; then
+  bad "D1 SKIPPED: $BE did not yield source"
+else
+  SO=$(fn_body 'async fn share_output' "$BE_S")
+  if [ -n "$SO" ] && has "$SO" 'format!\("\{\}\|\{\}\|\{\}"' && has "$SO" 'claims\.sub'; then
+    ok "D1 share_output stores the creating admin's id in the share value"
+  else
+    bad "D1 share_output does not store an owner — every admin's shares are indistinguishable"
+  fi
+fi
+
+# D2 — share_lifetime parses out an owner field alongside timestamp/content,
+# so the two readers below can actually scope on it.
+if [ -z "$BE_S" ]; then
+  bad "D2 SKIPPED: $BE did not yield source"
+else
+  LIFETIME=$(fn_body 'fn share_lifetime' "$BE_S")
+  if [ -n "$LIFETIME" ] && has "$LIFETIME" 'Option<\(i64, i64, &str, &str\)>'; then
+    ok "D2 share_lifetime returns an owner field, not just (created_at, remaining, content)"
+  else
+    bad "D2 share_lifetime's signature lost the owner field — list_shares/revoke_share cannot scope"
+  fi
+fi
+
+# D3 — THE ARM THAT MATTERS. list_shares skips any share whose owner is not
+# the calling admin's own id.
+if [ -z "$BE_S" ]; then
+  bad "D3 SKIPPED: $BE did not yield source"
+else
+  LIST=$(fn_body 'async fn list_shares' "$BE_S")
+  LIST_FLAT=$(tr '\n' ' ' <<< "$LIST" | tr -s ' ')
+  if [ -n "$LIST" ] && has "$LIST" 'claims\.sub\.to_string\(\)' \
+    && has "$LIST_FLAT" 'if owner != my_id \{ continue; \}'; then
+    ok "D3 list_shares skips any share not owned by the calling admin"
+  else
+    bad "D3 list_shares returns every admin's shares — any admin can enumerate another's root terminal output"
+  fi
+fi
+
+# D4 — revoke_share's DELETE is scoped to the calling admin's own share, not
+# just the share id. A key match alone lets any admin revoke — or, paired with
+# a D3 regression, first enumerate then read via the share_id — another
+# admin's share.
+if [ -z "$BE_S" ]; then
+  bad "D4 SKIPPED: $BE did not yield source"
+else
+  REVOKE=$(fn_body 'async fn revoke_share' "$BE_S")
+  if [ -n "$REVOKE" ] && has "$REVOKE" 'split_part\(value, .\|., 2\) = \$2' \
+    && has "$REVOKE" 'claims\.sub\.to_string\(\)'; then
+    ok "D4 revoke_share's DELETE is scoped to the calling admin's own share"
+  else
+    bad "D4 revoke_share can delete any admin's share by id alone — no ownership check"
+  fi
+fi
+
+# D5 — view_shared (the public, unauthenticated link) must NOT gain an owner
+# check — its whole design is "the id is the credential." Bounded on the
+# signature alone: fn_body's closing-brace-at-column-0 heuristic cannot bound
+# this function (its body is a raw HTML/JS template with braces starting at
+# column 0), so this confirms the fix didn't overcorrect without relying on it.
+if [ -z "$BE_S" ]; then
+  bad "D5 SKIPPED: $BE did not yield source"
+else
+  VIEW_SIG=$(awk '/pub async fn view_shared\(/{f=1} f{print} f && /-> Result</{exit}' <<< "$BE_S")
+  if [ -n "$VIEW_SIG" ] && ! has "$VIEW_SIG" 'AuthUser'; then
+    ok "D5 view_shared stays unauthenticated — the link itself remains the only credential"
+  else
+    bad "D5 view_shared gained an auth requirement, or its signature could not be found — legitimate share links would break"
+  fi
+fi
+
 echo
 echo "PASS $PASS / FAIL $FAIL"
 [ "$FAIL" -eq 0 ]

@@ -4,6 +4,41 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.181.0]
+
+### Fixed — a terminal share was readable and revocable by any admin, not just the one who created it
+
+`GET /api/terminal/shares` had no owner scoping at all — on a multi-admin/
+reseller install, any admin could enumerate every OTHER admin's shared
+terminal output and, via the exposed `share_id`, read it through the
+unauthenticated public viewer; `DELETE /api/terminal/share/{id}` had the same
+gap, so any admin could revoke any admin's share by id alone. Both routes are
+`settings`-table rows with no dedicated owner column, so the fix threads the
+creating admin's id through the existing pipe-delimited share value
+(`share_lifetime` now parses `timestamp|owner|content`) and scopes
+`list_shares`/`revoke_share` to the calling admin. The unauthenticated public
+viewer (`GET /api/terminal/shared/{id}`) is unchanged — its link-based access
+was never the gap.
+
+### Fixed — the credential re-encryption sweep could lose a race, and its own history
+
+First-ever audit of `services/credential_reencrypt.rs`. Every subject's
+`SELECT`-then-`UPDATE` had no transaction, lock, or compare-and-swap, so a
+normal write (a database password reset, an agent token rotation, a settings
+save) landing between the sweep's read and its write got silently reverted to
+the stale value the sweep read — worst on `databases` (the panel's stored
+password stops matching the live database) and `servers` (the panel loses its
+own agent dial-out token). Every `UPDATE` now carries a CAS guard on the value
+it read; a row that raced is skipped (not clobbered) and reported in a new
+`raced` count, surfaced in the Settings UI. Separately, `reencrypt_vault_secrets`
+bumped `secrets.version` on every successful re-key with no paired
+`secret_versions` row — deterministic, not race-dependent, desyncing the two
+on every non-racing run — removed, since a pure re-encryption changes no
+content. Also closed: two secret-key lists (`credential_reencrypt.rs`'s
+`DESTINATION_SECRET_KEYS` and `SENSITIVE_SETTINGS_SQL`) were hand-duplicated
+from their real source of truth with nothing tying them together; the former
+is now a direct import, the latter is pinned by a new test.
+
 ## [2.180.0]
 
 ### Fixed — status-page subscribers had no tenant, so every install's fan-out and admin list were install-wide

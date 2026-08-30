@@ -27,6 +27,7 @@
 
 use sqlx::{PgPool, Row};
 
+use crate::routes::backup_destinations::CONFIG_SENSITIVE_KEYS as DESTINATION_SECRET_KEYS;
 use crate::services::secrets_crypto;
 
 /// A credential column this sweep rewrites: (table, id column, value column).
@@ -109,14 +110,15 @@ pub fn swept_subjects() -> Vec<String> {
 /// `settings` rows whose `value` is ciphertext. Mirrors the predicate the two
 /// writers in `routes::settings` apply (`SENSITIVE_KEYS` plus the
 /// `_client_secret` suffix) and the `pdns_api_key` written by `routes::system`.
+///
+/// The `IN (...)` list is a hand-copied literal — SQL text, not Rust — so it
+/// cannot `use` `SETTINGS_SENSITIVE_KEYS` directly the way `DESTINATION_SECRET_KEYS`
+/// below now imports its source of truth. `sensitive_settings_sql_covers_settings_keys`
+/// in this file's own test module asserts the two haven't drifted instead.
 const SENSITIVE_SETTINGS_SQL: &str =
     "SELECT key::text AS id, value FROM settings \
      WHERE (key IN ('smtp_password', 'pdns_api_key') OR key LIKE '%\\_client\\_secret') \
        AND value IS NOT NULL AND value <> ''";
-
-/// JSON keys inside `backup_destinations.config` that hold ciphertext. Mirrors
-/// `routes::backup_destinations::CONFIG_SENSITIVE_KEYS`.
-const DESTINATION_SECRET_KEYS: &[&str] = &["secret_key", "password"];
 
 #[derive(Debug, serde::Serialize)]
 pub struct SubjectReport {
@@ -130,6 +132,12 @@ pub struct SubjectReport {
     /// Rows no candidate key could open. These are NOT rewritten; a failed
     /// re-encrypt must never overwrite the only copy of the ciphertext.
     pub unreadable: i64,
+    /// Rows a normal write (a password reset, a token rotation, a settings
+    /// save) changed between our SELECT and our UPDATE. The CAS guard on every
+    /// UPDATE in this file catches this and skips rather than overwrites the
+    /// newer value with a re-encrypted copy of the stale one we read — these
+    /// are correctly re-keyed on the NEXT run, once nothing races them.
+    pub raced: i64,
 }
 
 impl SubjectReport {
@@ -139,6 +147,7 @@ impl SubjectReport {
             examined: 0,
             rewritten: 0,
             already_current: 0,
+            raced: 0,
             unreadable: 0,
         }
     }
@@ -182,7 +191,13 @@ async fn reencrypt_column(
         }
     };
 
-    let update = format!("UPDATE {table} SET {value_col} = $1 WHERE {id_col}::text = $2");
+    // CAS on the value read below: the guard means a normal write landing
+    // between our SELECT and this UPDATE makes the UPDATE affect 0 rows
+    // instead of clobbering the newer plaintext's ciphertext with a
+    // re-encrypted copy of what we read.
+    let update = format!(
+        "UPDATE {table} SET {value_col} = $1 WHERE {id_col}::text = $2 AND {value_col} = $3"
+    );
     for row in rows {
         let id: String = row.get("id");
         let value: String = row.get("value");
@@ -194,10 +209,18 @@ async fn reencrypt_column(
                 match sqlx::query(&update)
                     .bind(&fresh)
                     .bind(&id)
+                    .bind(&value)
                     .execute(pool)
                     .await
                 {
-                    Ok(_) => report.rewritten += 1,
+                    Ok(res) if res.rows_affected() > 0 => report.rewritten += 1,
+                    Ok(_) => {
+                        report.raced += 1;
+                        tracing::warn!(
+                            "re-encrypt: {table}.{value_col} id={id} changed concurrently — \
+                             skipped this run, will be picked up by the next one"
+                        );
+                    }
                     Err(e) => {
                         report.unreadable += 1;
                         tracing::error!("re-encrypt: {table}.{value_col} id={id} write failed: {e}");
@@ -234,13 +257,23 @@ async fn reencrypt_settings(pool: &PgPool, jwt_secret: &str) -> SubjectReport {
         match secrets_crypto::reencrypt_credential(&value, jwt_secret) {
             Ok(None) => report.already_current += 1,
             Ok(Some(fresh)) => {
-                let res = sqlx::query("UPDATE settings SET value = $1, updated_at = NOW() WHERE key = $2")
+                let res = sqlx::query(
+                    "UPDATE settings SET value = $1, updated_at = NOW() \
+                     WHERE key = $2 AND value = $3",
+                )
                     .bind(&fresh)
                     .bind(&key)
+                    .bind(&value)
                     .execute(pool)
                     .await;
                 match res {
-                    Ok(_) => report.rewritten += 1,
+                    Ok(r) if r.rows_affected() > 0 => report.rewritten += 1,
+                    Ok(_) => {
+                        report.raced += 1;
+                        tracing::warn!(
+                            "re-encrypt: settings[{key}] changed concurrently — skipped this run"
+                        );
+                    }
                     Err(e) => {
                         report.unreadable += 1;
                         tracing::error!("re-encrypt: settings[{key}] write failed: {e}");
@@ -275,7 +308,8 @@ async fn reencrypt_destinations(pool: &PgPool, jwt_secret: &str) -> SubjectRepor
 
     for row in rows {
         let id: String = row.get("id");
-        let mut config: serde_json::Value = row.get("config");
+        let original_config: serde_json::Value = row.get("config");
+        let mut config = original_config.clone();
         let mut changed = false;
         let mut row_failed = false;
         let mut row_examined = false;
@@ -317,13 +351,26 @@ async fn reencrypt_destinations(pool: &PgPool, jwt_secret: &str) -> SubjectRepor
             continue;
         }
 
-        match sqlx::query("UPDATE backup_destinations SET config = $1 WHERE id::text = $2")
+        // CAS on the config we read at the top of this iteration, before any
+        // key was rewritten — a concurrent edit to this destination (e.g.
+        // renaming it or changing an unrelated field) between our SELECT and
+        // this UPDATE makes the guard fail instead of clobbering it.
+        match sqlx::query(
+            "UPDATE backup_destinations SET config = $1 WHERE id::text = $2 AND config = $3",
+        )
             .bind(&config)
             .bind(&id)
+            .bind(&original_config)
             .execute(pool)
             .await
         {
-            Ok(_) => report.rewritten += 1,
+            Ok(res) if res.rows_affected() > 0 => report.rewritten += 1,
+            Ok(_) => {
+                report.raced += 1;
+                tracing::warn!(
+                    "re-encrypt: backup_destinations[{id}] changed concurrently — skipped this run"
+                );
+            }
             Err(e) => {
                 report.unreadable += 1;
                 tracing::error!("re-encrypt: backup_destinations[{id}] write failed: {e}");
@@ -362,16 +409,31 @@ async fn reencrypt_vault_secrets(pool: &PgPool, jwt_secret: &str) -> SubjectRepo
         match secrets_crypto::reencrypt_vault(&value, jwt_secret) {
             Ok(None) => report.already_current += 1,
             Ok(Some(fresh)) => {
+                // No `version` bump here: the plaintext is unchanged, only its
+                // encryption wrapper is. `routes::secrets`' real edit path
+                // pairs every `version` increment with an INSERT into
+                // `secret_versions` under that same version number — bumping
+                // `version` here without one would desync the two on every
+                // successful re-key, not only a raced one. CAS on the
+                // ciphertext read above catches the race the same way the
+                // other three sweeps do.
                 let res = sqlx::query(
-                    "UPDATE secrets SET encrypted_value = $1, version = version + 1, \
-                     updated_at = NOW() WHERE id::text = $2",
+                    "UPDATE secrets SET encrypted_value = $1, updated_at = NOW() \
+                     WHERE id::text = $2 AND encrypted_value = $3",
                 )
                 .bind(&fresh)
                 .bind(&id)
+                .bind(&value)
                 .execute(pool)
                 .await;
                 match res {
-                    Ok(_) => report.rewritten += 1,
+                    Ok(r) if r.rows_affected() > 0 => report.rewritten += 1,
+                    Ok(_) => {
+                        report.raced += 1;
+                        tracing::warn!(
+                            "re-encrypt: secrets[{id}] changed concurrently — skipped this run"
+                        );
+                    }
                     Err(e) => {
                         report.unreadable += 1;
                         tracing::error!("re-encrypt: secrets[{id}] write failed: {e}");
@@ -555,6 +617,33 @@ mod tests {
             assert!(
                 src.contains(&format!("SubjectReport::new(\"{subject}\")")),
                 "SPECIAL_SUBJECTS names `{subject}` but no arm in this file reports it"
+            );
+        }
+    }
+
+    /// `SENSITIVE_SETTINGS_SQL`'s `IN (...)` list is SQL text, so it cannot
+    /// `use` `SETTINGS_SENSITIVE_KEYS` the way `DESTINATION_SECRET_KEYS` above
+    /// now imports its source of truth directly. This test keeps the two from
+    /// drifting instead: this file used to carry a hand-copied SQL literal
+    /// with nothing tying it back to `routes::settings::SENSITIVE_KEYS` — a
+    /// settings key that module encrypts, added there alone, would have
+    /// passed CI while never being re-keyed by this sweep.
+    #[test]
+    fn sensitive_settings_sql_covers_settings_sensitive_keys() {
+        use crate::routes::settings::SENSITIVE_KEYS as SETTINGS_SENSITIVE_KEYS;
+        // Floor: an empty or broken import must not make the loop below pass
+        // vacuously, the same reasoning `scanned >= 90` and `writers.len() >=
+        // 8` apply above.
+        assert!(
+            SETTINGS_SENSITIVE_KEYS.len() >= 2,
+            "SETTINGS_SENSITIVE_KEYS is empty or unexpectedly small — the import from \
+             routes::settings is broken, not the tree"
+        );
+        for key in SETTINGS_SENSITIVE_KEYS {
+            assert!(
+                SENSITIVE_SETTINGS_SQL.contains(&format!("'{key}'")),
+                "routes::settings::SENSITIVE_KEYS contains `{key}` but SENSITIVE_SETTINGS_SQL's \
+                 IN(...) list does not — add it there too"
             );
         }
     }
