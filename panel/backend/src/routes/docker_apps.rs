@@ -610,6 +610,68 @@ pub async fn deploy(
                     }
                 }
 
+                // Password-protect any TEMPLATE_SIDECAR-backed app once it's
+                // live on a domain. The sidecar's docker-socket-proxy
+                // correctly restricts WHAT the app can do to the shared
+                // host's Docker daemon (deny-by-default ACL), but nothing
+                // ever gated WHO can reach the app itself — Dozzle's own
+                // real auth needs either a mounted users.yml (bcrypt hash
+                // inside, no pure-env-var equivalent — verified against
+                // Dozzle's own docs before relying on it) or a forward-proxy
+                // header scheme, neither achievable through this template's
+                // env_vars alone. nginx auth_basic in front of the domain
+                // closes it at the layer DockPanel already controls, reusing
+                // the same htpasswd mechanism Sites' own password-protect
+                // feature uses (routes/sites.rs::add_password_protect) —
+                // called here directly against the agent since a docker app
+                // never gets a `sites` row to key that route on.
+                //
+                // Currently only Dozzle carries a sidecar; extend
+                // SIDECAR_TEMPLATES if a future template adds one (see
+                // TEMPLATE_SIDECAR in panel/agent/src/services/docker_apps.rs).
+                //
+                // KNOWN GAP: the generated password is shown once (emitted
+                // here + logged to system_logs as a durable backup) with no
+                // self-service view/reset UI yet — that's a tracked fast-follow,
+                // not a blocker for closing the actual leak.
+                const SIDECAR_TEMPLATES: &[&str] = &["dozzle"];
+                if SIDECAR_TEMPLATES.contains(&template.as_str()) {
+                    if let Some(ref domain) = deploy_domain {
+                        let auth_username = "admin";
+                        let auth_password: String = {
+                            use rand::Rng;
+                            let bytes: Vec<u8> = (0..16).map(|_| rand::rng().random::<u8>()).collect();
+                            hex::encode(bytes)
+                        };
+                        match agent.post("/nginx/password-protect", Some(serde_json::json!({
+                            "domain": domain, "path": "/",
+                            "username": auth_username, "password": auth_password,
+                        }))).await {
+                            Ok(_) => {
+                                let msg = format!(
+                                    "Username: {auth_username} — Password: {auth_password} \
+                                     (shown once here and logged to System Logs — save it now)"
+                                );
+                                emit("auth", "Password-protecting the app", "done", Some(msg.clone()));
+                                crate::services::system_log::log_event(
+                                    &db, "warning", "api",
+                                    &format!("Auto-generated password protection for {app_name} ({domain})"),
+                                    Some(&msg),
+                                ).await;
+                            }
+                            Err(e) => {
+                                emit("auth", "Password-protecting the app", "error", Some(format!(
+                                    "Could not password-protect this app: {e} — it is reachable \
+                                     with NO login until this is fixed by hand"
+                                )));
+                                tracing::error!(
+                                    "Failed to password-protect sidecar app {app_name} ({domain}): {e}"
+                                );
+                            }
+                        }
+                    }
+                }
+
                 emit("complete", "App deployed", "done", None);
 
                 tracing::info!("App deployed: {} ({}){}", app_name, template,

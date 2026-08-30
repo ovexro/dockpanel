@@ -208,7 +208,13 @@ else
            seventy-nine eighty eighty-one eighty-two eighty-three eighty-four
            eighty-five eighty-six eighty-seven eighty-eight eighty-nine ninety
            ninety-one ninety-two ninety-three ninety-four ninety-five
-           ninety-six ninety-seven ninety-eight ninety-nine one-hundred"
+           ninety-six ninety-seven ninety-eight ninety-nine one-hundred
+           one-hundred-one one-hundred-two one-hundred-three one-hundred-four
+           one-hundred-five one-hundred-six one-hundred-seven one-hundred-eight
+           one-hundred-nine one-hundred-ten one-hundred-eleven one-hundred-twelve
+           one-hundred-thirteen one-hundred-fourteen one-hundred-fifteen
+           one-hundred-sixteen one-hundred-seventeen one-hundred-eighteen
+           one-hundred-nineteen one-hundred-twenty"
     n=0; want_word=""
     for w in $words; do n=$((n+1)); [ "$n" -eq "$rows" ] && want_word="$w"; done
     if [ "$p_assert" != "$sum" ]; then

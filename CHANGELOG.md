@@ -4,6 +4,44 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.183.0]
+
+### Fixed — a cron/pre-build/post-deploy command could chain a second command past the safety filter, as root
+
+`is_safe_cron_command` (agent) and `is_safe_shell_command` (backend, shared by
+cron, pre_build_cmd, and post_deploy_cmd validation) only rejected `"; "`
+(semicolon *plus a trailing space*) and verb-anchored `"|sh"`/`"|bash"`
+patterns — a bare `;` or bare `|` with nothing after it (`"id;whoami"`,
+`"id|whoami"`) passed both filters untouched. A cron command reaches root's
+real crontab (`crontab -u root -`) and can also be run immediately via
+`POST /crons/run` (`bash -c`, unsandboxed, as the agent), reachable by the
+non-admin owner of the site the cron belongs to — not just an admin. Fixed by
+rejecting any bare `;` outright and scanning runs of `|`, rejecting anything
+that isn't exactly a paired `||` — the documented `&&`/`||` legitimate-chaining
+case keeps working. Found by an audit-coverage fan-out, independently
+re-verified against live source (including the exact PoC strings) before
+shipping, and mutation-tested (new unit tests on both sides confirmed red
+against the pre-fix code, green against the fix).
+
+### Fixed — the Dozzle sidecar had no authentication in front of it
+
+The v2.179.0 docker-socket-proxy sidecar correctly restricted *what* Dozzle
+could ask the shared Docker daemon (deny-by-default ACL — list/inspect/events
+only, no exec, no writes) but nothing restricted *who* could reach Dozzle
+itself. Deploying the template with a domain — the panel's own advertised
+one-click way to use it — produced a fully public page listing and
+inspecting every container on the shared host, including plaintext
+environment variables (database passwords, JWT secrets, ...) for every other
+project sharing that box. Dozzle's own authentication needs either a mounted
+`users.yml` (bcrypt hash inside) or a forward-proxy header scheme — verified
+against Dozzle's own documentation; no plain-env-var auth exists, so a
+required template env var could not have closed this. Fixed by forcing nginx
+`auth_basic` on the domain at deploy time for any sidecar-backed template,
+reusing the same htpasswd mechanism Sites' own password-protection feature
+already uses; the generated one-time credentials are surfaced in the deploy
+log and logged to System Logs as a durable backup. Known gap, tracked as a
+fast-follow: no self-service UI yet to view or rotate the generated password.
+
 ## [2.182.0]
 
 ### Fixed — Git Deploy's pre-build command ran as root on the host, not inside the build container
