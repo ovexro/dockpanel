@@ -565,7 +565,21 @@ pub async fn status_page(
     // The one gate every unauthenticated status-page route passes through.
     crate::services::public_status::require_enabled(&state.db).await?;
 
-    // Get all enabled monitors (no user filter — this is public)
+    // ⚠ SECURITY (s430): this handler is unauthenticated, and the query below
+    // MUST be scoped to the status page's owner. Created at v2.173.0, TWO
+    // releases after the identical bug was found and fixed in the sibling
+    // `incidents::public_status_page` (v2.171.0, s418) — that fix scopes every
+    // query to `owner_id` resolved from `status_page_config`; this route
+    // instead put an unscoped `WHERE enabled = true` behind a comment saying
+    // "no user filter — this is public," which on any multi-tenant install
+    // serves every OTHER tenant's monitor names/statuses to an anonymous
+    // caller of the FIRST tenant's status page. No UI ever calls this route
+    // (dead to the frontend), which is exactly why it sat unnoticed while its
+    // twin got fixed. Reuse the same owner resolution as the sibling route
+    // rather than duplicating the query.
+    let owner_id = crate::services::public_status::resolve_current_status_page_owner(&state.db).await;
+
+    // Get all enabled monitors belonging to the status page's owner.
     //
     // ⚠ The error is propagated, and on THIS route that is the whole point. An
     // empty list renders as a status page with nothing wrong on it, which is the
@@ -574,9 +588,12 @@ pub async fn status_page(
     // returns on a dead pool, so what reached this line was a failure of this
     // query alone — a statement timeout, a type mismatch — and the honest answer
     // to "I could not read the monitors" is never "there are no monitors".
-    let monitors: Vec<(String, String, String, Option<i32>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        "SELECT name, url, status, last_response_time, last_checked_at FROM monitors WHERE enabled = true ORDER BY name"
-    ).fetch_all(&state.db).await.map_err(|e| internal_error("status page monitors", e))?;
+    let monitors: Vec<(String, String, String, Option<i32>, Option<chrono::DateTime<chrono::Utc>>)> = match owner_id {
+        Some(uid) => sqlx::query_as(
+            "SELECT name, url, status, last_response_time, last_checked_at FROM monitors WHERE enabled = true AND user_id = $1 ORDER BY name"
+        ).bind(uid).fetch_all(&state.db).await.map_err(|e| internal_error("status page monitors", e))?,
+        None => Vec::new(),
+    };
 
     let items: Vec<serde_json::Value> = monitors.iter().map(|(name, _url, status, rt, checked)| {
         serde_json::json!({

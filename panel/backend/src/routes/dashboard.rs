@@ -589,10 +589,23 @@ pub async fn timeline(
 
 /// GET /api/dashboard/fleet — Unified health across all servers (admin only).
 /// Aggregates firing alerts, active incidents, sites, databases, and latest
-/// metrics for every server the admin owns.
+/// metrics for EVERY server on the install — not just the ones the calling
+/// admin happens to have registered.
+///
+/// ⚠ SECURITY (s430): was `WHERE s.user_id = $1`, the same bug class
+/// `servers::list` documents and fixes at the top of this crate ("An
+/// administrator sees every machine; anybody else sees the ones they hold").
+/// `servers.user_id` names whoever REGISTERED the row, not a tenant boundary
+/// — so a second admin opened the Fleet dashboard to zero servers, zero
+/// sites, zero alerts, despite being a full admin who can reach every one of
+/// those servers through every OTHER route. This handler only ever takes
+/// `AdminUser`, so unlike `intelligence` above (which also serves non-admin
+/// callers and needs the `$2::uuid IS NULL OR` widen) there is no narrower
+/// case to preserve — every caller here is an admin, so the fleet is simply
+/// the whole fleet.
 pub async fn fleet_overview(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AdminUser(_claims): AdminUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Single query replaces N+1 pattern (was: 5 queries per server in a loop).
     // Uses LEFT JOIN with subqueries to aggregate all data in one round trip.
@@ -607,19 +620,16 @@ pub async fn fleet_overview(
          LEFT JOIN LATERAL (SELECT COUNT(*) AS cnt FROM sites WHERE server_id = s.id AND status = 'active') si ON true \
          LEFT JOIN LATERAL (SELECT COUNT(*) AS cnt FROM databases WHERE site_id IN (SELECT id FROM sites WHERE server_id = s.id)) d ON true \
          LEFT JOIN LATERAL (SELECT cpu_pct, mem_pct, disk_pct FROM metrics_history WHERE server_id = s.id ORDER BY created_at DESC LIMIT 1) m ON true \
-         WHERE s.user_id = $1 \
          ORDER BY s.name",
     )
-    .bind(claims.sub)
     .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("fleet overview", e))?;
 
-    // Active incidents (global for user, not per-server)
+    // Active incidents — fleet-wide, same reasoning as the server list above.
     let active_incidents: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM managed_incidents WHERE user_id = $1 AND status NOT IN ('resolved', 'postmortem')",
+        "SELECT COUNT(*) FROM managed_incidents WHERE status NOT IN ('resolved', 'postmortem')",
     )
-    .bind(claims.sub)
     .fetch_one(&state.db)
     .await
     .unwrap_or((0,));

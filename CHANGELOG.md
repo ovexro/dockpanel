@@ -4,6 +4,36 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.185.0]
+
+### Fixed — an unauthenticated public status-page route leaked every tenant's monitor data
+
+`monitors::status_page` (`GET /api/status-page`) was created from scratch at
+v2.173.0 — two releases after the *identical* bug was found and fixed in the
+sibling `incidents::public_status_page` (v2.171.0) — with the same unscoped
+query the earlier fix had just closed one file over: `SELECT ... FROM
+monitors WHERE enabled = true`, no owner filter, behind a comment reading
+"no user filter — this is public." On any multi-tenant install, a bare,
+anonymous request to this route returned every OTHER tenant's monitor
+names, up/down status, response times, and last-checked timestamps — no
+authentication, no privilege of any kind required. No frontend caller ever
+reaches this route, which is exactly why it went unnoticed while its twin
+got fixed and pinned. Fixed by resolving the status page's owner the same
+way the sibling route already does (`public_status::resolve_current_status_page_owner`)
+and requiring it before the query can run at all.
+
+### Fixed — the Fleet dashboard was empty for every admin except whoever registered the servers
+
+`dashboard::fleet_overview` (`GET /api/dashboard/fleet`, admin-only)
+filtered `WHERE s.user_id = $1` — the same bug class `servers::list` was
+fixed for previously ("An administrator sees every machine; anybody else
+sees the ones they hold"). `servers.user_id` names whoever registered the
+row, not a tenant boundary, so a second administrator opened the Fleet
+dashboard to zero servers, zero sites, zero alerts, despite being a full
+admin who could reach every one of those servers through every other route.
+Fixed by widening both queries in the handler to be fleet-wide, matching
+the established convention elsewhere in this codebase.
+
 ## [2.184.0]
 
 ### Fixed — the cron/shell-command chaining fix in v2.183.0 was itself incomplete: bare `&` still bypassed it

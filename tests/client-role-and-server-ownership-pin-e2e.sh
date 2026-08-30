@@ -100,6 +100,7 @@ fnbody() {
 USERS=panel/backend/src/routes/users.rs
 SERVERS=panel/backend/src/routes/servers.rs
 SITES=panel/backend/src/routes/sites.rs
+DASH=panel/backend/src/routes/dashboard.rs
 FILTER=panel/agent/src/services/command_filter.rs
 MONITORS=panel/backend/src/routes/monitors.rs
 RESELLER=panel/backend/src/routes/reseller_dashboard.rs
@@ -447,6 +448,43 @@ if has "$(flat "$(fnbody "$(code "$AUTH")" "twofa_status")")" 'enforced'; then
   ok "G5 twofa_status serves the enforcement flag it is read from"
 else
   bad "G5 twofa_status does not return 'enforced' — G4's reader has no writer"
+fi
+
+# ── §I  fleet_overview is one of §B's own named siblings, now widened (s430) ──
+# `servers::list` (§B) documented seven sibling reads still resolving a machine
+# through `servers.user_id` — `routes/dashboard.rs`'s four fleet aggregations
+# among them, though its cited line numbers had drifted by s430. A completeness
+# critic re-derived the live one: `fleet_overview` (`GET /api/dashboard/fleet`,
+# `AdminUser`-gated) filtered `WHERE s.user_id = $1` — the exact §B bug, on the
+# ONE dashboard route whose entire purpose is showing an admin every server.
+
+DASH_SRC=$(code "$DASH")
+FLEET=$(flat "$(fnbody "$DASH_SRC" "fleet_overview")")
+
+if [ -z "$FLEET" ]; then
+  bad "I0 could not extract dashboard::fleet_overview"
+else
+  ok "I0 dashboard::fleet_overview extracted"
+  if has "$FLEET" 'FROM servers s.*WHERE s\.user_id = \$1'; then
+    bad "I1 fleet_overview still filters WHERE s.user_id = \$1 — a second admin sees an empty fleet"
+  elif ! has "$FLEET" 'WHERE s\.user_id'; then
+    ok "I1 fleet_overview's server query is fleet-wide, not owner-scoped"
+  else
+    bad "I1 fleet_overview's WHERE clause is neither the old shape nor fleet-wide — re-read it"
+  fi
+  if has "$FLEET" 'FROM managed_incidents WHERE user_id = \$1'; then
+    bad "I2 active_incidents is still scoped to the calling admin, not the whole fleet"
+  else
+    ok "I2 active_incidents counts fleet-wide, matching the server query's own widening"
+  fi
+  # Negative control: this route takes ONLY AdminUser (unlike servers::list,
+  # which serves both roles and needs the bound `$2 OR` widening) — so a
+  # correct fix has no reason to bind claims.sub into either query at all.
+  if has "$FLEET" '\.bind\(claims\.sub\)'; then
+    bad "I3 fleet_overview still binds claims.sub into a query — the widening is incomplete"
+  else
+    ok "I3 no query in fleet_overview binds claims.sub — genuinely fleet-wide, not a hidden per-admin filter"
+  fi
 fi
 
 # ── §H  context: green at BOTH tags ───────────────────────────────────────────

@@ -595,6 +595,58 @@ else
   bad "J3 drops the old UNIQUE(email) constraint"
 fi
 
+echo "== §K  monitors.rs's OWN public status-page route is ALSO scoped (s430) =="
+
+# v2.185.0. §G scoped incidents.rs::public_status_page's four queries at
+# v2.171.0 (s418) — but a SIBLING public, unauthenticated status-page route
+# lives in monitors.rs, created FROM SCRATCH two releases later (v2.173.0),
+# with the identical unscoped shape §G had just fixed one file over:
+# `SELECT ... FROM monitors WHERE enabled = true` with no owner filter,
+# behind a comment reading "no user filter — this is public." No frontend
+# caller ever reaches it, which is exactly why it went unnoticed while its
+# twin got fixed and pinned. Same failure shape as §G, same remedy: resolve
+# the status page's owner and require it before the query can run at all.
+
+if S=$(subj "$MON"); then
+  SPBODY=$(fnbody "$S" status_page)
+  if [ "${#SPBODY}" -ge 200 ]; then
+    if grep -qE 'let owner_id = crate::services::public_status::resolve_current_status_page_owner' <<< "$SPBODY"; then
+      ok "K1 status_page resolves the same owner_id the incidents.rs sibling uses"
+    else
+      bad "K1 status_page resolves owner_id via resolve_current_status_page_owner"
+    fi
+
+    if grep -qE 'FROM monitors WHERE enabled = true AND user_id = \$1' <<< "$SPBODY"; then
+      ok "K2 the monitors read is scoped to owner_id, not a flat enabled-only filter"
+    else
+      bad "K2 the monitors read is scoped to owner_id"
+    fi
+
+    # Negative control matching §G6: the query must be structurally
+    # unreachable with no owner_id in hand, not merely filtered after an
+    # unscoped fetch already ran.
+    if grep -qE 'match owner_id \{' <<< "$SPBODY" && grep -qE 'None => Vec::new\(\)' <<< "$SPBODY"; then
+      ok "K3 the monitors query is structurally UNREACHABLE without an owner_id"
+    else
+      bad "K3 the monitors query is structurally gated on owner_id"
+    fi
+
+    # Regression control: the OLD unscoped query text must be gone, not just
+    # supplemented by a new scoped one sitting alongside it.
+    if ! grep -qE 'FROM monitors WHERE enabled = true ORDER BY name"$' <<< "$SPBODY"; then
+      ok "K4 the old unscoped query string is gone, not left as a second live path"
+    else
+      bad "K4 the old unscoped query string is gone"
+    fi
+  else
+    bad "K1 status_page subject resolved (${#SPBODY}c) — K1-K4 would be vacuous"
+    bad "K2 monitors read scoped"; bad "K3 query structurally gated"; bad "K4 old query removed"
+  fi
+else
+  bad "K1 monitors.rs resolved as a subject"; bad "K2 monitors read scoped"
+  bad "K3 query structurally gated"; bad "K4 old query removed"
+fi
+
 echo
 printf 'status-page-gate: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
