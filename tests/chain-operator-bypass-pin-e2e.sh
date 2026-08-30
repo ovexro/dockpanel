@@ -37,6 +37,21 @@
 #    htpasswd mechanism Sites' own password-protect feature already uses.
 #
 # These are SOURCE pins and need no running panel.
+#
+# 3. THE #1 FIX WAS ITSELF INCOMPLETE (s430 dockpanel-fanout completeness
+#    critic, CRITICAL, found HOURS after the fix above shipped). `;` and `|`
+#    were closed but the third POSIX chaining operator, bare `&`, was never
+#    checked by either function — "id&whoami" passed both gates clean, with
+#    the identical reachability (non-admin site owner -> save cron -> run now
+#    -> `bash -c` as the agent). Proven by compiling and executing standalone
+#    copies of both functions outside the repo, with the `;`/`|` REJECT
+#    behavior kept as controls to prove the reproduction was faithful to the
+#    patched source. Same remedy shape: reject any run of `&` whose length
+#    isn't exactly 2 (`&&` stays legitimate). Mutation-tested the same way as
+#    fix #1: a targeted in-place revert (not a whole-file git stash, since the
+#    new tests live in the same two files as the fix) confirmed both new
+#    tests red against the disabled guard, then green against the restored one.
+#
 #   run: bash tests/chain-operator-bypass-pin-e2e.sh
 set -u
 
@@ -69,6 +84,18 @@ hasE "$BACKEND_MOD" 'if cmd.contains\(.;.\) \{' \
 has "$BACKEND_MOD" 'if i - start != 2' \
   "is_safe_shell_command scans runs of | the same way as the agent-side fix"
 has "$BACKEND_MOD" 'fn shell_command_rejects_bare_chain_operators_keeps_paired_operators' \
+  "a dedicated regression test exists on the backend side too"
+
+echo
+echo "== B2. the & bypass the first fix missed: bare & is now rejected, && kept =="
+
+has "$CMDFILTER" "if bytes\[i\] == b'&'" \
+  "is_safe_cron_command scans runs of & the same way it scans runs of |"
+has "$CMDFILTER" 'fn test_cron_bare_ampersand_rejected_paired_kept' \
+  "a dedicated regression test exists for the & bypass PoC strings + the && legitimate case"
+has "$BACKEND_MOD" "if bytes\[i\] == b'&'" \
+  "is_safe_shell_command scans runs of & the same way it scans runs of |"
+has "$BACKEND_MOD" 'fn shell_command_rejects_bare_ampersand_keeps_paired' \
   "a dedicated regression test exists on the backend side too"
 
 echo

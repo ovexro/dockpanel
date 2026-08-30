@@ -143,6 +143,33 @@ pub fn is_safe_cron_command(cmd: &str) -> bool {
             }
         }
     }
+    // A bare `&` backgrounds a command and, mid-string, acts as a chain
+    // separator exactly like `;`/`|` — `id&whoami` runs both. Only a PAIRED
+    // `&&` is the legitimate operator; the same run-length scan used for `|`
+    // above applies here, and for the identical reason it was needed there:
+    // this codebase had no check on `&` at all until this fix.
+    // A bare `&` backgrounds a command and, mid-string, acts as a chain
+    // separator exactly like `;`/`|` — `id&whoami` runs both. Only a PAIRED
+    // `&&` is the legitimate operator; the same run-length scan used for `|`
+    // above applies here, and for the identical reason it was needed there:
+    // this codebase had no check on `&` at all until this fix.
+    {
+        let bytes = cmd.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'&' {
+                let start = i;
+                while i < bytes.len() && bytes[i] == b'&' {
+                    i += 1;
+                }
+                if i - start != 2 {
+                    return false;
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
 
     let lower = cmd.to_lowercase();
     !BLOCKED_PATTERNS.iter().any(|b| lower.contains(b))
@@ -319,6 +346,19 @@ mod tests {
         assert!(is_safe_cron_command("cd /var/www/mysite && php artisan schedule:run"));
         assert!(is_safe_cron_command("backup.sh || notify-fail.sh"));
         assert!(is_safe_cron_command("a && b || c"));
+    }
+
+    #[test]
+    fn test_cron_bare_ampersand_rejected_paired_kept() {
+        // The completeness-critic's executed PoC strings: `;` and `|` were fixed,
+        // `&` was not — a bare `&` chains just as effectively (background + continue).
+        assert!(!is_safe_cron_command("id&whoami"));
+        assert!(!is_safe_cron_command("id & whoami"));
+        assert!(!is_safe_cron_command("echo hi & whoami > /tmp/pwned"));
+        assert!(!is_safe_cron_command("a&&&b")); // not valid `&&` syntax either; must not slip through
+        // The documented legitimate case must still work.
+        assert!(is_safe_cron_command("backup.sh && verify.sh"));
+        assert!(is_safe_cron_command("a && b && c"));
     }
 
     #[test]

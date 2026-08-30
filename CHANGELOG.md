@@ -4,6 +4,57 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.184.0]
+
+### Fixed — the cron/shell-command chaining fix in v2.183.0 was itself incomplete: bare `&` still bypassed it
+
+v2.183.0 closed a chaining bypass in `is_safe_cron_command` (agent) and
+`is_safe_shell_command` (backend, shared by cron, `pre_build_cmd`, and
+`post_deploy_cmd` validation) for bare `;` and bare `|`, but never checked the
+third POSIX chaining operator: a bare `&` (`"id&whoami"`) passed both filters
+untouched, with the identical reachability and severity as the bug that had
+just been fixed — a non-admin site owner could save a cron command, hit "run
+now," and have it executed by `bash -c` as the agent's root-equivalent
+process. Found hours after v2.183.0 shipped by a completeness critic that
+compiled and ran standalone copies of both functions outside the repo,
+proving the bypass with an executed PoC (with the `;`/`|` REJECT behavior
+kept as controls). Fixed with the same remedy shape already used for `|`:
+scan runs of `&` and reject anything that isn't exactly a paired `&&` — the
+documented `&&`/`||` legitimate-chaining case keeps working. Mutation-tested:
+a targeted in-place revert (not a whole-file stash, since the new tests live
+in the same two files as the fix) confirmed both new unit tests red against
+the disabled guard, then green against the restored one.
+
+### Fixed — `list_volume_backups` leaked every admin's volume-backup metadata to every other admin
+
+The endpoint was a flat, unscoped `SELECT * FROM volume_backups` gated only
+by `AdminUser` — no `server_id`/`user_id` filter at all — unlike its sibling
+`list_db_backups`, which has always scoped by the caller's own sites. Any
+admin account (DockPanel supports more than one; any admin can promote
+another user to `role='admin'`, a routine action) could see every other
+admin's container/volume names, filenames, sizes, sha256 hashes, timestamps,
+and server IDs on their own dashboard. Confidentiality-only — the restore
+endpoint was already correctly scoped, so a leaked backup id could not be
+used to trigger someone else's restore. Fixed by scoping the list query the
+same way restore already scopes its own lookup: `server_id` joined against
+`servers` with `is_local OR user_id = caller`. Found and independently
+skeptic-confirmed (including a live production-DB check distinguishing
+realized from prospective exposure) by an audit-coverage fan-out.
+
+### Fixed — a valid-but-empty backup archive could silently wipe a live Docker volume with no rollback
+
+`restore_volume`'s existing corruption guard (`tar tzf ... || exit 3`) caught
+a truncated or corrupt `.tar.gz` but not a syntactically valid, zero-member
+one — `tar tzf` exits 0 on an empty archive, so the wipe (`rm -rf
+/volume/*...`) still ran, leaving the volume empty with no way back. Fixed
+with a second, separate archive-member count (`tar tzf | wc -l`, kept apart
+from the corruption check so a short-circuiting match can never mask a
+mid-listing failure as success) that must be greater than zero before the
+wipe proceeds. Verified with real `docker run` executions against scratch
+Docker volumes: an empty archive is now rejected with the volume untouched, a
+real archive still restores correctly, and a truncated archive is still
+caught by the original guard (regression control).
+
 ## [2.183.0]
 
 ### Fixed — a cron/pre-build/post-deploy command could chain a second command past the safety filter, as root

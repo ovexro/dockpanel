@@ -302,6 +302,33 @@ pub fn is_safe_shell_command(cmd: &str) -> Result<(), &'static str> {
             }
         }
     }
+    // A bare `&` backgrounds a command and, mid-string, acts as a chain
+    // separator exactly like `;`/`|` — "id&whoami" runs both, unpatched by
+    // either the `;` check or the `|` scan above. Only a PAIRED `&&` is the
+    // legitimate operator; scan runs of `&` the same way runs of `|` are
+    // scanned above.
+    // A bare `&` backgrounds a command and, mid-string, acts as a chain
+    // separator exactly like `;`/`|` — "id&whoami" runs both, unpatched by
+    // either the `;` check or the `|` scan above. Only a PAIRED `&&` is the
+    // legitimate operator; scan runs of `&` the same way runs of `|` are
+    // scanned above.
+    {
+        let bytes = cmd.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'&' {
+                let start = i;
+                while i < bytes.len() && bytes[i] == b'&' {
+                    i += 1;
+                }
+                if i - start != 2 {
+                    return Err("Command must not contain a bare & (use && to chain)");
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
 
     let lower = cmd.to_lowercase();
 
@@ -629,6 +656,18 @@ mod tests {
         assert!(is_safe_shell_command("php artisan migrate && php artisan cache:clear").is_ok());
         assert!(is_safe_shell_command("backup.sh || notify-fail.sh").is_ok());
         assert!(is_safe_shell_command("npm install").is_ok());
+    }
+
+    #[test]
+    fn shell_command_rejects_bare_ampersand_keeps_paired() {
+        // The completeness-critic's executed PoC strings: `;` and `|` were fixed,
+        // `&` was not — a bare `&` chains just as effectively (background + continue).
+        assert!(is_safe_shell_command("id&whoami").is_err());
+        assert!(is_safe_shell_command("id & whoami").is_err());
+        assert!(is_safe_shell_command("echo hi & id > /tmp/pwned").is_err());
+        assert!(is_safe_shell_command("a&&&b").is_err());
+        assert!(is_safe_shell_command("backup.sh && verify.sh").is_ok());
+        assert!(is_safe_shell_command("a && b && c").is_ok());
     }
 
     // ── Compose image extraction (the deploy gate's input) ──────────────

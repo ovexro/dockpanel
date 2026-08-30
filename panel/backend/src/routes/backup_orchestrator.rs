@@ -1231,15 +1231,26 @@ pub async fn create_volume_backup(
 /// GET /api/backup-orchestrator/volume-backups — List volume backups.
 pub async fn list_volume_backups(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Query(params): Query<PaginationQuery>,
 ) -> Result<Json<Vec<VolumeBackup>>, ApiError> {
     let (limit, offset) = paginate(params.limit, params.offset);
 
+    // Scoped the same way `restore_volume_backup` below scopes its own lookup:
+    // this machine, or a server this operator added. Before this fix the query
+    // was a flat, unfiltered `SELECT *` — every admin account's volume-backup
+    // metadata (container/volume names, filenames, sizes, hashes, server_id)
+    // was visible to every OTHER admin account, unlike the sibling
+    // `list_db_backups` above, which has always scoped by `s.user_id`. A row
+    // whose `server_id` predates the fleet backfill (NULL) is excluded by the
+    // JOIN rather than shown to nobody-in-particular, matching how the restore
+    // path below refuses it outright.
     let backups: Vec<VolumeBackup> = sqlx::query_as(
-        "SELECT * FROM volume_backups ORDER BY created_at DESC LIMIT $1 OFFSET $2"
+        "SELECT vb.* FROM volume_backups vb \
+         JOIN servers sv ON sv.id = vb.server_id AND (sv.is_local OR sv.user_id = $1) \
+         ORDER BY vb.created_at DESC LIMIT $2 OFFSET $3"
     )
-    .bind(limit).bind(offset)
+    .bind(claims.sub).bind(limit).bind(offset)
     .fetch_all(&state.db).await
     .map_err(|e| internal_error("list volume backups", e))?;
 
