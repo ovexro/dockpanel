@@ -4,6 +4,31 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.191.0]
+
+### Fixed — passkey RP-ID/origin derivation now fails closed instead of defaulting to "localhost"
+
+`get_rp_id_from_headers`/`get_rp_origin_from_headers` prefer the operator's
+`BASE_URL` config when set, falling back to the request's `Origin` (then
+`Host`) header when it isn't — a legitimate, common configuration for
+IP-based access, not a misconfiguration. Their own doc comment claimed this
+"prevent[s] RP ID manipulation by attackers," which overstated the guarantee:
+if a request had neither header at all, both functions silently defaulted to
+a hardcoded `"localhost"`/`"https://localhost"` rather than refusing. Flagged
+by a completeness critic at s429 as non-exploitable as reported —
+`register_complete`/`auth_complete` independently compare the browser's own
+signed `clientDataJSON.origin` against whatever these functions return, and
+that comparison is bound to the page's real origin via the authenticator's
+signature, not to anything a header-only attacker controls — but the code
+should fail closed to match what its comment already claimed.
+
+Fixed: both functions now return `Result<String, ApiError>`; the one
+remaining fallback (neither `Origin` nor `Host` present, which no real
+browser-driven WebAuthn ceremony produces) refuses the request instead of
+substituting a value that satisfied nothing. The comment now states the
+actual trust model instead of overstating it. No behavior change for any
+real client.
+
 ## [2.190.0]
 
 ### Fixed — the backup-encryption passphrase was a literal substring of the auth signing secret

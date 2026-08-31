@@ -336,6 +336,60 @@ else
 fi
 
 echo
+echo "── §H the RP ID/origin derivation fails closed instead of defaulting to localhost (s435) ──"
+#
+# s429's completeness critic found get_rp_id_from_headers/get_rp_origin_from_headers's
+# OWN doc comment overstated what they did: when BASE_URL is unset (a legitimate,
+# common "IP-based access" configuration, not a misconfiguration), both fell
+# through Origin -> Host -> a hardcoded "localhost"/"https://localhost" literal
+# that satisfied nothing but let the ceremony proceed anyway. Non-exploitable as
+# reported (register_complete/auth_complete's cd_origin != rp_origin check is
+# bound to the browser's OWN signed clientDataJSON.origin, not to anything a
+# header-only attacker controls — §D below already pins that comparison exists)
+# — but "fail closed to match what the comment claims" was still owed. Fixed:
+# the ONLY remaining fallback (neither Origin nor Host present, which no real
+# browser-driven ceremony produces) now refuses instead of defaulting.
+
+RPID_BODY=$(fnbody "$PK_C" "get_rp_id_from_headers")
+RPORIGIN_BODY=$(fnbody "$PK_C" "get_rp_origin_from_headers")
+
+if [ -n "$RPID_BODY" ] && [ -n "$RPORIGIN_BODY" ]; then
+  ok "H0 both header-derivation functions extracted"
+else
+  bad "H0 could not extract get_rp_id_from_headers and/or get_rp_origin_from_headers — every arm below is vacuous"
+fi
+
+if hasf "$PK_C" 'fn get_rp_id_from_headers(headers: &axum::http::HeaderMap, state: &AppState) -> Result<String, ApiError>' \
+   && hasf "$PK_C" 'fn get_rp_origin_from_headers(headers: &axum::http::HeaderMap, state: &AppState) -> Result<String, ApiError>'; then
+  ok "H1 both functions are fallible (Result<String, ApiError>), not an infallible String that must always produce SOME value"
+else
+  bad "H1 one or both header-derivation functions no longer return Result<String, ApiError> — a fallible signature is what makes 'refuse' expressible at all"
+fi
+
+if hasf "$RPID_BODY" '"localhost"' || hasf "$RPORIGIN_BODY" '"localhost"'; then
+  bad "H2 a literal 'localhost' string is back in one of the derivation functions — the fail-closed fix this section pins has regressed"
+else
+  ok "H2 neither derivation function contains a 'localhost' literal"
+fi
+
+if hasf "$RPID_BODY" 'Err(err(StatusCode::BAD_REQUEST' && hasf "$RPORIGIN_BODY" 'Err(err(StatusCode::BAD_REQUEST'; then
+  ok "H3 both functions' final fallback is an explicit Err(...), not a default value"
+else
+  bad "H3 one or both functions' final fallback is not an explicit Err(...) — re-read them, a silent default may have come back"
+fi
+
+# H4 — every CALL SITE must actually propagate the failure. A function turned
+# fallible but called with `.unwrap_or_default()` or similar at the call site
+# would satisfy H0-H3 while still never refusing anything in practice.
+RPID_CALLS=$(cnt "$PK_C" 'get_rp_id_from_headers(&headers, &state)?')
+RPORIGIN_CALLS=$(cnt "$PK_C" 'get_rp_origin_from_headers(&headers, &state)?')
+if [ "$RPID_CALLS" -eq 4 ] && [ "$RPORIGIN_CALLS" -eq 2 ]; then
+  ok "H4 all 6 call sites propagate the Result with ? (4 x rp_id, 2 x rp_origin) — a refusal actually reaches the caller"
+else
+  bad "H4 expected 4 rp_id + 2 rp_origin call sites propagating with '?', found $RPID_CALLS + $RPORIGIN_CALLS — a call site may be swallowing the error instead of refusing"
+fi
+
+echo
 echo "=============================================="
 printf '  PASS %d   FAIL %d\n' "$PASS" "$FAIL"
 echo "=============================================="

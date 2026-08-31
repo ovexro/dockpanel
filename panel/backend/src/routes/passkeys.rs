@@ -156,14 +156,37 @@ fn generate_challenge() -> Vec<u8> {
     challenge
 }
 
-/// Extract the RP ID for WebAuthn. Prefers server-side BASE_URL config (trusted) over
-/// client-controlled headers to prevent RP ID manipulation by attackers.
-fn get_rp_id_from_headers(headers: &axum::http::HeaderMap, state: &AppState) -> String {
+/// Extract the RP ID for WebAuthn.
+///
+/// ⚠ SECURITY (s435, closing the s429 finding): prefers server-side BASE_URL
+/// config (trusted) — but when it's unset (a legitimate, common
+/// configuration: `config.rs` deliberately defaults it to empty for
+/// "IP-based access", not a misconfiguration to guard against), this falls
+/// back to the client-supplied `Origin` header. That fallback is honest to
+/// say out loud: it does NOT, by itself, "prevent RP ID manipulation by
+/// attackers" — the comment here used to claim exactly that, which s429's
+/// completeness critic correctly flagged as overstating what the code does.
+/// What actually prevents exploitation is downstream and unconditional,
+/// regardless of how `rp_id`/`rp_origin` were derived: `register_complete`/
+/// `auth_complete` compare the CLIENT's signed `clientDataJSON.origin` —
+/// which a browser sets from the page's real origin, not from any header,
+/// and which is covered by the authenticator's own signature — against
+/// whatever this function returned. An attacker who can only forge HTTP
+/// headers (not actually serve a page at a spoofed origin) fails that
+/// comparison every time, which is why this was assessed non-exploitable
+/// as reported rather than fixed as an emergency.
+///
+/// What DOES fail closed now, and didn't before: if a request has NEITHER
+/// an `Origin` NOR a `Host` header, there is no signal left to derive
+/// anything from — no legitimate browser-driven WebAuthn ceremony omits
+/// both — so this refuses outright instead of falling back to a hardcoded
+/// `"localhost"` that satisfied nothing but let the ceremony proceed anyway.
+fn get_rp_id_from_headers(headers: &axum::http::HeaderMap, state: &AppState) -> Result<String, ApiError> {
     // Prefer server-side BASE_URL (trusted, not client-controlled)
     if !state.config.base_url.is_empty() {
         if let Ok(parsed) = url::Url::parse(&state.config.base_url) {
             if let Some(host) = parsed.host_str() {
-                return host.to_string();
+                return Ok(host.to_string());
             }
         }
     }
@@ -171,32 +194,33 @@ fn get_rp_id_from_headers(headers: &axum::http::HeaderMap, state: &AppState) -> 
     if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
         if let Ok(parsed) = url::Url::parse(origin) {
             if let Some(host) = parsed.host_str() {
-                return host.to_string();
+                return Ok(host.to_string());
             }
         }
     }
     // Last resort: Host header
     if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok()) {
-        return host.split(':').next().unwrap_or(host).to_string();
+        return Ok(host.split(':').next().unwrap_or(host).to_string());
     }
-    "localhost".to_string()
+    Err(err(StatusCode::BAD_REQUEST, "Cannot determine relying party — request has neither an Origin nor a Host header"))
 }
 
-/// Extract the origin URL from the request's Origin header.
-/// Extract the origin URL. Prefers server-side BASE_URL over client headers.
-fn get_rp_origin_from_headers(headers: &axum::http::HeaderMap, state: &AppState) -> String {
+/// Extract the origin URL for WebAuthn's `clientDataJSON.origin` comparison.
+/// Same trust model and the same s435 fail-closed fix as
+/// [`get_rp_id_from_headers`] — read that function's doc for the full account.
+fn get_rp_origin_from_headers(headers: &axum::http::HeaderMap, state: &AppState) -> Result<String, ApiError> {
     // Prefer server-side BASE_URL (trusted)
     if !state.config.base_url.is_empty() {
-        return state.config.base_url.trim_end_matches('/').to_string();
+        return Ok(state.config.base_url.trim_end_matches('/').to_string());
     }
     // Fall back to Origin header only if BASE_URL not configured
     if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-        return origin.trim_end_matches('/').to_string();
+        return Ok(origin.trim_end_matches('/').to_string());
     }
     if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok()) {
-        return format!("https://{}", host.split(':').next().unwrap_or(host));
+        return Ok(format!("https://{}", host.split(':').next().unwrap_or(host)));
     }
-    "https://localhost".to_string()
+    Err(err(StatusCode::BAD_REQUEST, "Cannot determine relying party — request has neither an Origin nor a Host header"))
 }
 
 /// Parse the COSE public key from attestation authData.
@@ -367,7 +391,7 @@ pub async fn register_begin(
         return Err(e);
     }
 
-    let rp_id = get_rp_id_from_headers(&headers, &state);
+    let rp_id = get_rp_id_from_headers(&headers, &state)?;
 
     // Get existing passkeys to exclude
     let existing: Vec<(String, Option<String>)> = sqlx::query_as(
@@ -438,8 +462,8 @@ pub async fn register_complete(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     purge_expired(&state.passkey_challenges);
 
-    let rp_id = get_rp_id_from_headers(&headers, &state);
-    let rp_origin = get_rp_origin_from_headers(&headers, &state);
+    let rp_id = get_rp_id_from_headers(&headers, &state)?;
+    let rp_origin = get_rp_origin_from_headers(&headers, &state)?;
 
     // Decode clientDataJSON
     let client_data_bytes = URL_SAFE_NO_PAD.decode(&body.response.client_data_json)
@@ -609,7 +633,7 @@ pub async fn auth_begin(
 
     purge_expired(&state.passkey_challenges);
 
-    let rp_id = get_rp_id_from_headers(&headers, &state);
+    let rp_id = get_rp_id_from_headers(&headers, &state)?;
 
     let challenge = generate_challenge();
     let challenge_b64 = URL_SAFE_NO_PAD.encode(&challenge);
@@ -643,8 +667,8 @@ pub async fn auth_complete(
     // same session cookie as the password door, so it owes the same check.
     super::auth::enforce_panel_ip_allowlist(&state.db, &headers).await?;
 
-    let rp_id = get_rp_id_from_headers(&headers, &state);
-    let rp_origin = get_rp_origin_from_headers(&headers, &state);
+    let rp_id = get_rp_id_from_headers(&headers, &state)?;
+    let rp_origin = get_rp_origin_from_headers(&headers, &state)?;
 
     // Rate limit passkey auth: reuse login_attempts (same IP-based)
     let ip = headers
