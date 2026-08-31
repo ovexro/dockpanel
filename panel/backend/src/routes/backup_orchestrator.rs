@@ -110,6 +110,12 @@ pub struct DatabaseBackup {
     pub db_type: String,
     pub db_name: String,
     pub encrypted: bool,
+    /// Which `derive_backup_encryption_key_for_version` derivation actually
+    /// produced this file's passphrase — restore MUST use this, not
+    /// `CURRENT_BACKUP_KEY_VERSION`, or a backup written under an older
+    /// derivation becomes permanently unrestorable the moment the
+    /// derivation changes again.
+    pub encryption_key_version: i16,
     pub uploaded: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub sha256_hash: Option<String>,
@@ -1107,9 +1113,21 @@ pub async fn restore_db_backup(
     // backup_policy_executor with a key derived from the process JWT secret; the restore MUST
     // use the SAME derivation. The previous code read backup_destinations.encryption_key — a
     // column nothing ever writes — so every encrypted-backup restore 400'd and DR was silently
-    // broken in encrypted mode (lesson #70). Use the shared single-source-of-truth derivation.
+    // broken in encrypted mode (lesson #70).
+    //
+    // ⚠ s434: uses the row's OWN `encryption_key_version`, not
+    // `derive_backup_encryption_key` (== always-current). The derivation
+    // changed once already (a leaky v1 → a safe v2, see
+    // `secrets_crypto::derive_backup_encryption_key_v2`'s doc), and a backup
+    // written under v1 stays restorable only if restore reproduces v1 for
+    // THAT row specifically — reading `CURRENT_BACKUP_KEY_VERSION` here would
+    // silently derive the WRONG passphrase for every backup older than
+    // whatever the derivation happens to be today.
     let encryption_key: Option<String> = if backup.encrypted {
-        Some(crate::services::backup_policy_executor::derive_backup_encryption_key(&state.config.jwt_secret))
+        Some(crate::services::backup_policy_executor::derive_backup_encryption_key_for_version(
+            backup.encryption_key_version,
+            &state.config.jwt_secret,
+        ))
     } else {
         None
     };

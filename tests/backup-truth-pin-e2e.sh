@@ -33,8 +33,10 @@ BACKUPS=panel/backend/src/routes/backups.rs
 PREREQ=panel/backend/src/services/prerequisites/backups.rs
 UI=panel/frontend/src/pages/BackupOrchestrator.tsx
 GUIDE=docs/guides/backup-orchestrator.md
+CRYPTO=panel/backend/src/services/secrets_crypto.rs
+KEYVER_MIG=panel/backend/migrations/20260831000000_backup_encryption_key_version.sql
 
-for f in "$ORCH" "$EXEC" "$SCHED" "$DEST" "$BACKUPS" "$PREREQ" "$UI" "$GUIDE"; do
+for f in "$ORCH" "$EXEC" "$SCHED" "$DEST" "$BACKUPS" "$PREREQ" "$UI" "$GUIDE" "$CRYPTO" "$KEYVER_MIG"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
 
@@ -568,6 +570,112 @@ if [ "$ENC_ENABLED_HITS" -gt 0 ]; then
   bad "§12 encryption_enabled is referenced outside $DEST ($ENC_ENABLED_HITS hit(s)) — the dead-column claim in the tombstone is stale"
 else
   ok "§12 encryption_enabled has no reader or writer anywhere else in the tree"
+fi
+
+echo "== §13  the backup-encryption passphrase is versioned, not a raw JWT_SECRET substring (s434) =="
+#
+# v1 (format!("backup-enc-{}", &jwt_secret[..32])) handed anyone who learned a
+# backup passphrase 32 bytes of the SAME secret every session token is
+# HMAC-signed with. v2 derives it via HKDF instead — a one-way PRF, so the
+# passphrase reveals nothing about jwt_secret. Restore must reproduce
+# whichever version actually wrote a given file (database_backups.encryption_key_version,
+# written at encrypt time), never assume "the current one".
+
+EXEC_SRC=$(code "$EXEC")
+CRYPTO_SRC=$(code "$CRYPTO")
+ORCH_SRC=$(code "$ORCH")
+if [ -z "$EXEC_SRC" ] || [ -z "$CRYPTO_SRC" ] || [ -z "$ORCH_SRC" ]; then
+  bad "§13 one of EXEC/CRYPTO/ORCH extracted empty — the extractor is broken, not the tree"
+fi
+
+# Every arm below extracts the SPECIFIC function's own body (sed range,
+# anchored on its exact signature) and checks what that body actually DOES —
+# never "does this name/text appear somewhere in the file", which an
+# adversarial review proved is satisfiable by a same-named stub, a decoy
+# reference elsewhere in the file, or renaming the parameter before using it.
+# A name/signature existing is necessary; it is never sufficient.
+
+V1_FN=$(sed -n '/^fn derive_backup_encryption_key_v1(jwt_secret: &str) -> String {/,/^}/p' <<< "$EXEC_SRC")
+if [ -z "$V1_FN" ]; then
+  bad "§13a could not extract derive_backup_encryption_key_v1's own body — signature changed or function is gone; a pre-s434 encrypted backup can no longer be restored"
+elif has "$V1_FN" 'format!\("backup-enc-\{\}", &jwt_secret\[\.\.32\.min\(jwt_secret\.len\(\)\)\]\)'; then
+  ok "§13a derive_backup_encryption_key_v1's own body still performs the exact legacy derivation (needed to decrypt pre-existing backups)"
+else
+  bad "§13a derive_backup_encryption_key_v1 exists but its BODY no longer performs the legacy derivation — a same-named stub would satisfy a name-only check while making every pre-s434 encrypted backup permanently unrestorable"
+fi
+
+V2_FN=$(sed -n '/^pub fn derive_backup_encryption_key_v2(jwt_secret: &str) -> String {/,/^}/p' <<< "$CRYPTO_SRC")
+if [ -z "$V2_FN" ]; then
+  bad "§13b could not extract derive_backup_encryption_key_v2's own body — signature changed or function is gone"
+elif has "$V2_FN" 'hex::encode\(derive_key_with_salt\(jwt_secret, BACKUP_ENCRYPTION_SALT\)\)'; then
+  ok "§13b derive_backup_encryption_key_v2's own body derives via HKDF (derive_key_with_salt), not a raw secret slice or the legacy SHA-256-only path"
+else
+  bad "§13b derive_backup_encryption_key_v2's body no longer calls derive_key_with_salt — it may have regressed to derive_key_legacy (plain SHA-256, the pre-HKDF weakness) or something else entirely, even if that call text still appears elsewhere in the file as a decoy"
+fi
+
+# §13c — the REGRESSION this whole section exists to catch: if a future edit
+# inlines v1's raw-slice pattern back into the CURRENT-version function
+# (derive_backup_encryption_key, not the deliberately-kept-legacy _v1), new
+# backups go back to leaking JWT_SECRET bytes.
+#
+# ⚠ Two prior drafts of this arm were each defeated in review before ship:
+# (1) a bare file-wide COUNT of the slice pattern can't tell "correctly
+# isolated in v1" from "still in the current function" (pre-fix code also
+# shows exactly 1 occurrence); (2) a body-scoped grep for the LITERAL
+# identifier `jwt_secret[..` is defeated by aliasing the parameter first
+# (`let s = jwt_secret; ...&s[..32]...`) — same leak, different spelling. The
+# fix for both: require the CURRENT function's body to be EXACTLY a
+# delegation call to derive_backup_encryption_key_for_version — a positive
+# match on the one correct shape, not a negative match on the many ways to
+# spell the wrong one. A delegation call has no `[` at all; any hand-rolled
+# derivation (v1's, or a renamed-variable variant of it) does.
+CURRENT_FN=$(sed -n '/^pub fn derive_backup_encryption_key(jwt_secret: &str) -> String {/,/^}/p' <<< "$EXEC_SRC")
+if [ -z "$CURRENT_FN" ]; then
+  bad "§13c could not extract derive_backup_encryption_key's own body — signature changed, re-read it"
+elif ! has "$CURRENT_FN" 'derive_backup_encryption_key_for_version\(CURRENT_BACKUP_KEY_VERSION, jwt_secret\)'; then
+  bad "§13c derive_backup_encryption_key's body is no longer a plain delegation to derive_backup_encryption_key_for_version(CURRENT_BACKUP_KEY_VERSION, jwt_secret) — it may be computing a key itself again, under any variable name"
+elif has "$CURRENT_FN" '\['; then
+  bad "§13c derive_backup_encryption_key's body contains '[' (indexing/slicing) alongside the delegation call — a hand-rolled derivation may have been added back in, even if the delegation call is also still present"
+else
+  ok "§13c derive_backup_encryption_key's body is exactly a delegation to derive_backup_encryption_key_for_version — no slicing under any spelling"
+fi
+
+# §13d — not just that the COLUMN NAME appears in the INSERT text, but that
+# the value bound to it is the CURRENT_BACKUP_KEY_VERSION constant specifically
+# (not a hardcoded literal that happens to equal today's value, which would
+# silently stop tracking future version bumps). Extract the substring between
+# the two adjacent, invariant anchors around it in the actual bind() chain.
+BIND_GAP=$(sed -n 's/.*\.bind(encrypted)\(.*\)\.bind(policy\.id).*/\1/p' <<< "$EXEC_SRC")
+if [ -z "$BIND_GAP" ]; then
+  bad "§13d could not isolate the bind() call between .bind(encrypted) and .bind(policy.id) — the INSERT's bind chain shape changed, re-read it"
+elif [ "$(tr -d ' ' <<< "$BIND_GAP")" = ".bind(CURRENT_BACKUP_KEY_VERSION)" ]; then
+  ok "§13d the INSERT binds encryption_key_version to CURRENT_BACKUP_KEY_VERSION specifically, not a hardcoded literal"
+else
+  bad "§13d the bind() between encrypted and policy.id is '$BIND_GAP', not .bind(CURRENT_BACKUP_KEY_VERSION) — every new encrypted backup could be recorded under the wrong (e.g. hardcoded, stale) version, making restore derive the wrong passphrase for it"
+fi
+
+# §13e — restore must pass the ROW'S OWN recorded version as the FIRST
+# ARGUMENT specifically, not merely have both the function name and
+# `backup.encryption_key_version` appear SOMEWHERE in the same function (a
+# decoy log line referencing the field elsewhere satisfies that weaker
+# check while the real call still hardcodes CURRENT_BACKUP_KEY_VERSION).
+RESTORE_FN=$(sed -n '/pub async fn restore_db_backup/,/^}/p' <<< "$ORCH_SRC" | tr '\n' ' ' | tr -s ' ')
+if [ -z "$RESTORE_FN" ]; then
+  bad "§13e could not extract restore_db_backup from $ORCH"
+elif has "$RESTORE_FN" 'derive_backup_encryption_key_for_version\( *backup\.encryption_key_version *,'; then
+  ok "§13e restore_db_backup passes the row's own encryption_key_version as the version argument, adjacent to the call"
+elif has "$RESTORE_FN" 'derive_backup_encryption_key_for_version\('; then
+  bad "§13e restore_db_backup calls derive_backup_encryption_key_for_version, but NOT with backup.encryption_key_version as the first argument — it may be hardcoding CURRENT_BACKUP_KEY_VERSION instead, silently deriving the wrong passphrase for any backup written under an older version"
+elif has "$RESTORE_FN" 'derive_backup_encryption_key\(&state\.config\.jwt_secret\)'; then
+  bad "§13e restore_db_backup calls the version-LESS derive_backup_encryption_key (always current) — a backup written under an older derivation would silently get the wrong passphrase"
+else
+  bad "§13e restore_db_backup's key derivation matches none of the known shapes — re-read it"
+fi
+
+if grep -qE 'ADD COLUMN IF NOT EXISTS encryption_key_version SMALLINT NOT NULL DEFAULT 1' "$KEYVER_MIG"; then
+  ok "§13f the migration adds encryption_key_version, defaulting existing rows to 1 (the legacy scheme every pre-existing row actually used)"
+else
+  bad "§13f the migration file does not add encryption_key_version with the expected default — re-read it"
 fi
 
 echo

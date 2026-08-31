@@ -27,6 +27,7 @@ const VAULT_SALT: &[u8] = b"dockpanel-secrets-v1:";
 const CREDENTIAL_JWT_SALT: &[u8] = b"dockpanel-credential-v1:";
 const CREDENTIAL_ENV_SALT: &[u8] = b"dockpanel-credential-encryption-v1:";
 const VAULT_SOURCE_SALT: &[u8] = b"dockpanel-secrets-encryption:";
+const BACKUP_ENCRYPTION_SALT: &[u8] = b"dockpanel-backup-encryption-v2:";
 
 /// Read `SECRETS_ENCRYPTION_KEY`, treating **set-but-empty as unset**.
 ///
@@ -136,6 +137,23 @@ pub fn vault_key_primary(jwt_secret: &str) -> String {
         .into_iter()
         .next()
         .expect("vault_key_sources always yields the unconditional derivation")
+}
+
+/// The v2 backup-encryption PASSPHRASE: `hex(HKDF(jwt_secret, BACKUP_ENCRYPTION_SALT))`.
+///
+/// Callers pass this to `openssl enc -pass stdin`, which runs its own PBKDF2
+/// (100k iterations, random salt per file) to turn a passphrase into an
+/// AES-256 key — that stretching step was always fine. What v1
+/// (`services::backup_policy_executor::derive_backup_encryption_key_v1`) got
+/// wrong was the passphrase's VALUE: a literal substring of `JWT_SECRET`, the
+/// same secret every session token is HMAC-signed with. Learning a v1 backup
+/// passphrase handed an attacker 32 bytes of the panel's auth signing key —
+/// coupling the blast radius of "one old backup file leaked" to "every
+/// session on this install can be forged." HKDF is a one-way PRF: this
+/// string reveals nothing about `jwt_secret`, and `jwt_secret` reveals
+/// nothing about this string without redoing the derivation.
+pub fn derive_backup_encryption_key_v2(jwt_secret: &str) -> String {
+    hex::encode(derive_key_with_salt(jwt_secret, BACKUP_ENCRYPTION_SALT))
 }
 
 /// Does this stored value look like something we wrote, rather than a legacy
@@ -463,6 +481,48 @@ mod tests {
         // Cross-decryption must fail
         assert!(decrypt_credential(&vault_enc, secret).is_err());
         assert!(decrypt(&cred_enc, secret).is_err());
+    }
+
+    #[test]
+    fn backup_key_v2_is_deterministic_and_hex() {
+        let secret = "production-jwt-secret-value";
+        let k1 = derive_backup_encryption_key_v2(secret);
+        let k2 = derive_backup_encryption_key_v2(secret);
+        assert_eq!(k1, k2, "the same jwt_secret must derive the same v2 backup key every time");
+        assert_eq!(k1.len(), 64, "hex(32 bytes) is 64 hex characters");
+        assert!(k1.chars().all(|c| c.is_ascii_hexdigit()), "must be plain hex, safe on an openssl stdin pipe");
+    }
+
+    #[test]
+    fn backup_key_v2_differs_from_vault_and_credential_keys() {
+        // Same domain-separation property as credential_key_differs_from_vault_key,
+        // extended to the backup key — three subsystems, three keys, one jwt_secret.
+        let secret = "same-jwt-secret";
+        let vault = derive_key(secret);
+        let cred = derive_key_with_salt(secret, CREDENTIAL_JWT_SALT);
+        let backup_hex = derive_backup_encryption_key_v2(secret);
+        let backup_bytes = hex::decode(&backup_hex).unwrap();
+        assert_ne!(vault.to_vec(), backup_bytes, "vault and backup keys must differ");
+        assert_ne!(cred.to_vec(), backup_bytes, "credential and backup keys must differ");
+    }
+
+    #[test]
+    fn backup_key_v2_does_not_leak_the_jwt_secret() {
+        // THE regression this function exists to fix: v1 was
+        // format!("backup-enc-{}", &jwt_secret[..32]) — a literal substring of
+        // the auth signing secret. v2 must contain no substring of jwt_secret
+        // at all (HKDF is one-way), so a leaked backup passphrase reveals
+        // nothing about the key every session token is signed with.
+        let secret = "SuperSecretJwtSigningKeyThatMustNeverAppearInABackupPassphrase123";
+        let key = derive_backup_encryption_key_v2(secret);
+        assert!(
+            !key.contains(&secret[..16]),
+            "the v2 backup key must not contain any substring of jwt_secret — got {key}"
+        );
+        assert!(
+            !key.to_lowercase().contains(&secret.to_lowercase()[..16]),
+            "case-insensitive check too, since hex output is lowercase"
+        );
     }
 
     #[test]

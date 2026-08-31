@@ -4,6 +4,48 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.190.0]
+
+### Fixed — the backup-encryption passphrase was a literal substring of the auth signing secret
+
+`derive_backup_encryption_key` (policy-driven database backups, when
+"Encrypt" is enabled) derived its passphrase as
+`format!("backup-enc-{}", &jwt_secret[..32])` — 32 raw bytes of `JWT_SECRET`,
+the same secret every session token on the install is HMAC-signed with.
+Anyone who learned a backup passphrase (a leaked backup file's metadata, a
+log, a debug dump) learned enough of `JWT_SECRET` to forge sessions for
+every user, coupling the blast radius of "one old backup leaked" to "every
+account on this install is compromised". The passphrase-stretching step
+itself (`openssl enc -aes-256-cbc -pbkdf2 -iter 100000`) was always fine;
+the defect was the passphrase's *value*, not how it was stretched.
+
+Fixed by deriving the passphrase via HKDF-SHA256 instead
+(`secrets_crypto::derive_backup_encryption_key_v2`, its own domain-separated
+salt, hex-encoded) — a one-way PRF, so the passphrase reveals nothing about
+`JWT_SECRET` and vice versa. Migration-safe: a new
+`database_backups.encryption_key_version` column records which derivation
+actually encrypted a given file at write time (existing rows default to `1`,
+the legacy scheme every one of them actually used), and restore looks up
+that row's own version rather than assuming "whatever the current
+derivation is" — so a backup encrypted before this release stays restorable
+after it ships, and a future re-derivation (should one ever be needed) can
+follow the same versioned pattern without stranding anything encrypted
+under an earlier scheme.
+
+An adversarial review of the new regression pin (`backup-truth-pin-e2e.sh`
+§13), run twice, found and this release fixed five separate ways a
+text-presence-only check could be satisfied by broken code: a same-named
+stub for the legacy function, a decoy reference elsewhere in the file
+satisfying an unrelated `grep`, aliasing a variable before slicing it
+(reproducing the exact leak under a different spelling), a hardcoded bind
+value that happened to match today's version number, and a hardcoded
+"current version" argument sitting next to an unrelated log line that
+merely *mentioned* the correct field. Every arm now checks the specific
+function's own body and, where a value is bound, the actual value bound —
+never "does this text appear somewhere in the file" — and each was
+re-verified by planting the exact defeating mutation and confirming red,
+then restoring and confirming green.
+
 ## [2.189.0]
 
 ### Fixed — any authenticated user could write alert rules for a server they don't own

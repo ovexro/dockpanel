@@ -27,7 +27,31 @@ struct PolicyRow {
     last_run: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Derive the symmetric key used to encrypt AND decrypt policy-driven DB backups.
+/// v1 backup-encryption passphrase: a literal substring of `JWT_SECRET`.
+///
+/// ⚠ SECURITY (s434): weak by construction — it hands anyone who learns a
+/// backup passphrase 32 bytes of the same secret every session token is
+/// HMAC-signed with, coupling "one old backup file leaked" to "every session
+/// on this install can be forged." Kept ONLY so `derive_backup_encryption_key_for_version`
+/// can still decrypt a backup written before v2 existed. Never call this
+/// directly and never use it for a new encrypt — see
+/// [`crate::services::secrets_crypto::derive_backup_encryption_key_v2`] for
+/// the current derivation and the full account of what was wrong with this one.
+fn derive_backup_encryption_key_v1(jwt_secret: &str) -> String {
+    format!("backup-enc-{}", &jwt_secret[..32.min(jwt_secret.len())])
+}
+
+/// The backup-encryption key version every NEW encrypted backup is written
+/// with. Bump this — and add a new `vN` derivation plus a match arm in
+/// [`derive_backup_encryption_key_for_version`] — if the derivation ever
+/// needs to change again. Never repurpose an existing version number: a
+/// `database_backups.encryption_key_version` row is a permanent record of
+/// which derivation actually produced that file, and reusing a number would
+/// make a past backup silently unrestorable rather than restorable-by-version.
+pub const CURRENT_BACKUP_KEY_VERSION: i16 = 2;
+
+/// Derive the symmetric passphrase used to encrypt AND decrypt policy-driven
+/// DB backups, for a SPECIFIC recorded version.
 ///
 /// This is the SINGLE SOURCE OF TRUTH for the derivation. The encrypt side
 /// (`execute_policy`) and the decrypt side (`routes::backup_orchestrator::restore_db_backup`)
@@ -36,9 +60,27 @@ struct PolicyRow {
 /// encrypted DB backup was permanently unrestorable and DR was silently broken in encrypted
 /// mode (lesson #70: resolve by the value that actually produced the artifact, not a
 /// re-derived phantom). Keyed on the process JWT secret (`config.jwt_secret`, == the
-/// `JWT_SECRET` env the executor is handed), so both sides agree byte-for-byte.
+/// `JWT_SECRET` env the executor is handed), so both sides agree byte-for-byte — PROVIDED
+/// both sides ask for the same `version`. Restore reads `database_backups.encryption_key_version`
+/// (written at encrypt time) rather than assuming [`CURRENT_BACKUP_KEY_VERSION`], so a backup
+/// written under an older derivation stays restorable after the derivation changes.
+pub fn derive_backup_encryption_key_for_version(version: i16, jwt_secret: &str) -> String {
+    match version {
+        1 => derive_backup_encryption_key_v1(jwt_secret),
+        // Unknown/future version numbers fall through to the current
+        // derivation rather than panicking — a corrupt or downgraded-reader
+        // scenario then fails LOUDLY (openssl rejects the wrong passphrase)
+        // instead of crashing the executor.
+        _ => crate::services::secrets_crypto::derive_backup_encryption_key_v2(jwt_secret),
+    }
+}
+
+/// The passphrase a NEW encrypted backup is written with — always
+/// [`CURRENT_BACKUP_KEY_VERSION`]. Restoring an EXISTING backup must call
+/// [`derive_backup_encryption_key_for_version`] with that row's own recorded
+/// version instead of this function.
 pub fn derive_backup_encryption_key(jwt_secret: &str) -> String {
-    format!("backup-enc-{}", &jwt_secret[..32.min(jwt_secret.len())])
+    derive_backup_encryption_key_for_version(CURRENT_BACKUP_KEY_VERSION, jwt_secret)
 }
 
 /// A policy's off-site destination, resolved once per run.
@@ -530,11 +572,11 @@ async fn execute_policy(db: &PgPool, agents: &AgentRegistry, policy: &PolicyRow,
                     }
 
                     match sqlx::query(
-                        "INSERT INTO database_backups (database_id, server_id, filename, size_bytes, db_type, db_name, encrypted, policy_id, destination_id, uploaded, sha256_hash, previous_hash, chain_valid) \
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, TRUE)"
+                        "INSERT INTO database_backups (database_id, server_id, filename, size_bytes, db_type, db_name, encrypted, encryption_key_version, policy_id, destination_id, uploaded, sha256_hash, previous_hash, chain_valid) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, TRUE)"
                     )
                     .bind(db_id).bind(*db_server_id).bind(&filename).bind(size_bytes)
-                    .bind(engine).bind(db_name).bind(encrypted).bind(policy.id)
+                    .bind(engine).bind(db_name).bind(encrypted).bind(CURRENT_BACKUP_KEY_VERSION).bind(policy.id)
                     .bind(destination.as_ref().map(|d| d.id)).bind(uploaded)
                     .bind(if sha256_hash.is_empty() { None } else { Some(&sha256_hash) })
                     .bind(previous_hash.as_deref())
@@ -834,18 +876,18 @@ mod tests {
     // the backup key from the same single source of truth. These pin that derivation so the two
     // sides can never drift back into the incompatible-key bug that made encrypted restores 400.
     #[test]
-    fn backup_key_derivation_is_stable_and_prefixed() {
+    fn backup_key_derivation_is_stable() {
         let jwt = "abcdefghijklmnopqrstuvwxyz0123456789EXTRA";
         let k = derive_backup_encryption_key(jwt);
-        // Deterministic + uses only the first 32 bytes of the secret.
-        assert_eq!(k, "backup-enc-abcdefghijklmnopqrstuvwxyz012345");
-        assert_eq!(derive_backup_encryption_key(jwt), k);
+        assert_eq!(derive_backup_encryption_key(jwt), k, "same jwt_secret must derive the same key every time");
     }
 
     #[test]
     fn backup_key_derivation_handles_short_secret() {
-        // Must not panic on a secret shorter than 32 bytes (32.min(len)).
-        assert_eq!(derive_backup_encryption_key("short"), "backup-enc-short");
+        // Must not panic on a secret shorter than 32 bytes — v1's own
+        // 32.min(len) guard existed for exactly this; HKDF has no such limit,
+        // but the guard against a panic on short input still matters.
+        let _ = derive_backup_encryption_key("short");
     }
 
     #[test]
@@ -857,5 +899,56 @@ mod tests {
             derive_backup_encryption_key(secret),
             derive_backup_encryption_key(secret),
         );
+    }
+
+    // ── s434: versioned derivation, migration safety ───────────────────────
+
+    #[test]
+    fn version_1_reproduces_the_exact_legacy_format() {
+        // A backup written before s434 has encryption_key_version = 1 (the
+        // migration's DEFAULT). Restore must reproduce EXACTLY what v1 wrote,
+        // byte for byte, or every pre-existing encrypted backup becomes
+        // permanently unrestorable the moment this ships.
+        let jwt = "abcdefghijklmnopqrstuvwxyz0123456789EXTRA";
+        assert_eq!(
+            derive_backup_encryption_key_for_version(1, jwt),
+            "backup-enc-abcdefghijklmnopqrstuvwxyz012345",
+        );
+        // And the short-secret shape v1's own 32.min(len) guard existed for.
+        assert_eq!(derive_backup_encryption_key_for_version(1, "short"), "backup-enc-short");
+    }
+
+    #[test]
+    fn current_version_constant_matches_the_default_derivation() {
+        let jwt = "some-jwt-secret";
+        assert_eq!(
+            derive_backup_encryption_key_for_version(CURRENT_BACKUP_KEY_VERSION, jwt),
+            derive_backup_encryption_key(jwt),
+            "derive_backup_encryption_key must always mean 'the CURRENT version', \
+             or a new encrypt and a version-aware restore of that same backup would disagree",
+        );
+    }
+
+    #[test]
+    fn version_1_and_version_2_derive_different_keys() {
+        // THE property this whole migration exists for: the old (leaky) and
+        // new (safe) derivations must not collide, or restore could silently
+        // decrypt with the wrong-but-matching key.
+        let jwt = "same-jwt-secret-both-versions";
+        assert_ne!(
+            derive_backup_encryption_key_for_version(1, jwt),
+            derive_backup_encryption_key_for_version(2, jwt),
+        );
+    }
+
+    #[test]
+    fn unknown_version_falls_through_to_current_not_a_panic() {
+        // A row from a future/downgraded reader naming a version this build
+        // doesn't recognise must not crash the executor — it should derive
+        // SOME key (which will then correctly fail to decrypt, a loud and
+        // recoverable failure) rather than panic and take the whole run down.
+        let jwt = "some-jwt-secret";
+        let result = std::panic::catch_unwind(|| derive_backup_encryption_key_for_version(99, jwt));
+        assert!(result.is_ok(), "an unrecognised version must not panic");
     }
 }
