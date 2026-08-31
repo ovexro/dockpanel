@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The most feature-packed free server panel ever built.</strong><br>
-  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 839 HTTP routes. 147 app templates. 3773 regression assertions. ~47MB binaries. Zero subscriptions.
+  Self-hosted. Docker-native. Written in Rust. Panel services run on <strong>~49MB of RAM</strong>. 839 HTTP routes. 147 app templates. 3802 regression assertions. ~47MB binaries. Zero subscriptions.
 </p>
 
 <p align="center">

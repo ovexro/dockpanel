@@ -801,6 +801,241 @@ else
   bad "M8 alerts::get_rules no longer matches its known shape — re-read it, this fix should not have touched it"
 fi
 
+# ── §N  on_call.rs: on_call_schedules carried ZERO tenant scoping (s437) ──────
+# Every route here gated on AdminUser (role) alone — any admin on the install
+# could read/write/delete every OTHER tenant's on-call rotations. Same shape
+# as §M: a single resource resolved by a caller-supplied ID never widens for
+# admin, admin included.
+
+ON_CALL=panel/backend/src/routes/on_call.rs
+[ -f "$ON_CALL" ] || bad "SETUP subject missing: $ON_CALL"
+ON_CALL_SRC=$(code "$ON_CALL")
+
+NLIST=$(flat "$(fnbody "$ON_CALL_SRC" "list_schedules")")
+if has "$NLIST" 'FROM on_call_schedules WHERE user_id = \$1 ORDER BY name ASC' && has "$NLIST" '\.bind\(claims\.sub\)'; then
+  ok "N0 on_call::list_schedules is scoped to the caller's own rows"
+else
+  bad "N0 on_call::list_schedules no longer matches its known scoped shape"
+fi
+
+NGET=$(flat "$(fnbody "$ON_CALL_SRC" "get_schedule")")
+if has "$NGET" 'FROM on_call_schedules WHERE id = \$1 AND user_id = \$2'; then
+  ok "N1 on_call::get_schedule checks the caller owns the schedule"
+else
+  bad "N1 on_call::get_schedule has no ownership check — any admin could fetch any tenant's schedule"
+fi
+BID_AT=$(grep -boF -- '.bind(id)' <<< "$NGET" | head -1 | cut -d: -f1)
+BCS_AT=$(grep -boF -- '.bind(claims.sub)' <<< "$NGET" | head -1 | cut -d: -f1)
+if [ -n "$BID_AT" ] && [ -n "$BCS_AT" ] && [ "$BID_AT" -lt "$BCS_AT" ]; then
+  ok "N1b bind order is id then claims.sub, matching \$1=id \$2=user_id"
+else
+  bad "N1b bind order is wrong or missing (id@${BID_AT:-none} claims.sub@${BCS_AT:-none})"
+fi
+
+NCREATE=$(flat "$(fnbody "$ON_CALL_SRC" "create_schedule")")
+if has "$NCREATE" 'INSERT INTO on_call_schedules \(user_id, name, members, cadence_days, anchor_at\)' \
+   && has "$NCREATE" '\.bind\(claims\.sub\)\s*\.bind\(input\.name\.trim\(\)\)'; then
+  ok "N2 on_call::create_schedule stamps the creating admin's own user_id, bound first"
+else
+  bad "N2 on_call::create_schedule no longer inserts/binds user_id as \$1"
+fi
+
+NUPDATE=$(flat "$(fnbody "$ON_CALL_SRC" "update_schedule")")
+if has "$NUPDATE" 'WHERE id = \$1 AND user_id = \$6' && has "$NUPDATE" 'WHERE id = \$1 AND user_id = \$5'; then
+  ok "N3 on_call::update_schedule scopes BOTH the with-anchor and no-anchor branches"
+else
+  bad "N3 on_call::update_schedule is missing the ownership scope on one or both branches"
+fi
+CS_COUNT=$(grep -o '\.bind(claims\.sub)' <<< "$NUPDATE" | wc -l)
+if [ "$CS_COUNT" -eq 2 ]; then
+  ok "N3b claims.sub is bound in BOTH update_schedule branches (found $CS_COUNT)"
+else
+  bad "N3b expected claims.sub bound exactly twice in update_schedule, found $CS_COUNT — a branch may have lost its scope"
+fi
+
+NDELETE=$(flat "$(fnbody "$ON_CALL_SRC" "delete_schedule")")
+if has "$NDELETE" 'DELETE FROM on_call_schedules WHERE id = \$1 AND user_id = \$2'; then
+  ok "N4 on_call::delete_schedule checks the caller owns the schedule before deleting"
+else
+  bad "N4 on_call::delete_schedule has no ownership check on the delete itself"
+fi
+if has "$NDELETE" 'FROM escalation_policies WHERE user_id = \$1 FOR UPDATE'; then
+  ok "N5 the orphan-route sweep is scoped to the SAME tenant as the deleted schedule"
+else
+  bad "N5 the orphan-route sweep scans every tenant's escalation_policies — a delete could rewrite another tenant's policy"
+fi
+BID2_AT=$(grep -boF -- '.bind(id)' <<< "$NDELETE" | head -1 | cut -d: -f1)
+BCS2_AT=$(grep -boF -- '.bind(claims.sub)' <<< "$NDELETE" | head -1 | cut -d: -f1)
+if [ -n "$BID2_AT" ] && [ -n "$BCS2_AT" ] && [ "$BID2_AT" -lt "$BCS2_AT" ]; then
+  ok "N4b bind order is id then claims.sub for the delete's ownership check"
+else
+  bad "N4b bind order is wrong or missing (id@${BID2_AT:-none} claims.sub@${BCS2_AT:-none})"
+fi
+
+# N6 — negative control: `whoami` stays intentionally UNSCOPED (a caller
+# checking their OWN membership, not reading another tenant's rotation
+# layout) — this fix must not have widened it into a leak, or narrowed it
+# into a false negative for a legitimate on-call operator.
+NWHOAMI=$(flat "$(fnbody "$ON_CALL_SRC" "whoami")")
+if has "$NWHOAMI" 'SELECT id, name, members, cadence_days, anchor_at FROM on_call_schedules "' \
+   || has "$NWHOAMI" "SELECT id, name, members, cadence_days, anchor_at FROM on_call_schedules"; then
+  if has "$NWHOAMI" 'FROM on_call_schedules WHERE user_id'; then
+    bad "N6 on_call::whoami now scopes by user_id — it must scan every tenant's schedules to answer 'am I on call anywhere', not just the caller's own"
+  else
+    ok "N6 on_call::whoami is unchanged — still scans every schedule, matching self-membership semantics"
+  fi
+else
+  bad "N6 on_call::whoami no longer matches its known shape — re-read it, this fix should not have touched it"
+fi
+
+# ── §O  escalation_policies.rs: same ZERO-scoping defect, same fix shape (s437) ─
+
+ESCALATION=panel/backend/src/routes/escalation_policies.rs
+[ -f "$ESCALATION" ] || bad "SETUP subject missing: $ESCALATION"
+ESCALATION_SRC=$(code "$ESCALATION")
+
+OLIST=$(flat "$(fnbody "$ESCALATION_SRC" "list_policies")")
+if has "$OLIST" 'FROM escalation_policies p WHERE p\.user_id = \$1 ORDER BY p\.name ASC'; then
+  ok "O0 escalation_policies::list_policies is scoped to the caller's own rows"
+else
+  bad "O0 escalation_policies::list_policies no longer matches its known scoped shape"
+fi
+
+OGET=$(flat "$(fnbody "$ESCALATION_SRC" "get_policy")")
+if has "$OGET" 'FROM escalation_policies p WHERE p\.id = \$1 AND p\.user_id = \$2'; then
+  ok "O1 escalation_policies::get_policy checks the caller owns the policy"
+else
+  bad "O1 escalation_policies::get_policy has no ownership check"
+fi
+
+OCREATE=$(flat "$(fnbody "$ESCALATION_SRC" "create_policy")")
+if has "$OCREATE" 'INSERT INTO escalation_policies \(user_id, name, steps\)' \
+   && has "$OCREATE" 'validate_schedule_routes\(&state\.db, &input, claims\.sub\)'; then
+  ok "O2 escalation_policies::create_policy stamps user_id AND checks schedule-route ownership"
+else
+  bad "O2 escalation_policies::create_policy no longer inserts user_id or passes claims.sub to validate_schedule_routes"
+fi
+
+OUPDATE=$(flat "$(fnbody "$ESCALATION_SRC" "update_policy")")
+if has "$OUPDATE" 'WHERE id = \$1 AND user_id = \$4' \
+   && has "$OUPDATE" 'validate_schedule_routes\(&state\.db, &input, claims\.sub\)'; then
+  ok "O3 escalation_policies::update_policy is scoped AND checks schedule-route ownership"
+else
+  bad "O3 escalation_policies::update_policy is missing its ownership scope or the schedule-route check"
+fi
+
+ODELETE=$(flat "$(fnbody "$ESCALATION_SRC" "delete_policy")")
+if has "$ODELETE" 'DELETE FROM escalation_policies WHERE id = \$1 AND user_id = \$2'; then
+  ok "O4 escalation_policies::delete_policy checks the caller owns the policy before deleting"
+else
+  bad "O4 escalation_policies::delete_policy has no ownership check on the delete itself"
+fi
+
+# O5 — the Finding-3 closer: a policy's `on_call_schedule:<uuid>` step must
+# not be storable pointing at a schedule owned by a DIFFERENT tenant. Before
+# s437 this only checked EXISTENCE, so a policy could legitimately reference
+# — and therefore page — another tenant's on-call rotation.
+OVALIDATE=$(flat "$(fnbody "$ESCALATION_SRC" "validate_schedule_routes")")
+if has "$OVALIDATE" 'FROM on_call_schedules WHERE id = \$1 AND user_id = \$2'; then
+  ok "O5 validate_schedule_routes checks the referenced schedule is owned by the SAME tenant, not just that it exists"
+else
+  bad "O5 validate_schedule_routes only checks existence — a policy could still reference another tenant's schedule"
+fi
+BSID_AT=$(grep -boF -- '.bind(schedule_id)' <<< "$OVALIDATE" | head -1 | cut -d: -f1)
+BOWN_AT=$(grep -boF -- '.bind(owner_id)' <<< "$OVALIDATE" | head -1 | cut -d: -f1)
+if [ -n "$BSID_AT" ] && [ -n "$BOWN_AT" ] && [ "$BSID_AT" -lt "$BOWN_AT" ]; then
+  ok "O5b bind order is schedule_id then owner_id, matching \$1=id \$2=user_id"
+else
+  bad "O5b bind order is wrong or missing (schedule_id@${BSID_AT:-none} owner_id@${BOWN_AT:-none})"
+fi
+
+# ── §P  alerts.rs::attach_escalation_policy had NO ownership check at all (s437) ─
+# The one write path that COUPLES alert_rules to escalation_policies took
+# rule_id from the URL under plain AdminUser (role only) — any admin could
+# re-point ANY tenant's alert rule at ANY policy. Same check-then-act shape
+# §M proved defeatable two ways (dead-code wrap, bind-order swap), so this
+# gets the same full treatment: liveness AND bind-order, not just presence.
+
+PATTACH=$(flat "$(fnbody "$ALERTS_SRC" "attach_escalation_policy")")
+
+if [ -z "$PATTACH" ]; then
+  bad "P0 could not extract alerts::attach_escalation_policy"
+else
+  ok "P0 alerts::attach_escalation_policy extracted"
+
+  if has "$PATTACH" 'FROM alert_rules WHERE id = \$1 AND user_id = \$2'; then
+    ok "P1 attach_escalation_policy checks the caller owns rule_id"
+  else
+    bad "P1 attach_escalation_policy has no ownership check on rule_id — any admin can re-point any tenant's alert rule"
+  fi
+  if has "$PATTACH" '\.bind\(rule_id\)\s*\.bind\(claims\.sub\)'; then
+    ok "P1b bind order is rule_id then claims.sub for the rule-ownership check"
+  else
+    bad "P1b the rule-ownership check's bind order is wrong or missing"
+  fi
+  D_RULE=$(depth_before "$PATTACH" 'FROM alert_rules WHERE id = $1 AND user_id = $2')
+  if [ "$D_RULE" = "1" ]; then
+    ok "P1c the rule-ownership check is live (depth 1 — not wrapped in a dead branch)"
+  else
+    bad "P1c the rule-ownership check is at depth $D_RULE, not 1 — may be wrapped in unreachable code"
+  fi
+  if has "$PATTACH" 'owns_rule\.is_none\(\)' && has "$PATTACH" 'NOT_FOUND'; then
+    ok "P2 a non-owned/nonexistent rule_id is rejected"
+  else
+    bad "P2 attach_escalation_policy performs the rule-ownership lookup but never rejects on failure"
+  fi
+
+  if has "$PATTACH" 'FROM escalation_policies WHERE id = \$1 AND user_id = \$2'; then
+    ok "P3 attach_escalation_policy checks the target policy is owned by the SAME tenant, not just that it exists"
+  else
+    bad "P3 the policy-existence check is unscoped — a rule could still be attached to another tenant's policy"
+  fi
+  if has "$PATTACH" '\.bind\(pid\)\s*\.bind\(claims\.sub\)'; then
+    ok "P3b bind order is pid then claims.sub for the policy-ownership check"
+  else
+    bad "P3b the policy-ownership check's bind order is wrong or missing"
+  fi
+
+  if has "$PATTACH" 'UPDATE alert_rules SET escalation_policy_id' && has "$PATTACH" 'WHERE id = \$1 AND user_id = \$3'; then
+    ok "P4 the final UPDATE itself is ALSO scoped to the caller's own tenant (defense-in-depth)"
+  else
+    bad "P4 the final UPDATE lost its own ownership scope"
+  fi
+
+  CHK_R_AT=$(grep -bo 'FROM alert_rules WHERE id = \$1 AND user_id = \$2' <<< "$PATTACH" | head -1 | cut -d: -f1)
+  CHK_P_AT=$(grep -bo 'FROM escalation_policies WHERE id = \$1 AND user_id = \$2' <<< "$PATTACH" | head -1 | cut -d: -f1)
+  UPD_AT=$(grep -bo 'UPDATE alert_rules SET escalation_policy_id' <<< "$PATTACH" | head -1 | cut -d: -f1)
+  if [ -n "$CHK_R_AT" ] && [ -n "$CHK_P_AT" ] && [ -n "$UPD_AT" ] \
+     && [ "$CHK_R_AT" -lt "$CHK_P_AT" ] && [ "$CHK_P_AT" -lt "$UPD_AT" ]; then
+    ok "P5 both ownership checks precede the write, in order: rule, then policy, then update"
+  else
+    bad "P5 the checks are missing or out of order (rule@${CHK_R_AT:-none} policy@${CHK_P_AT:-none} update@${UPD_AT:-none})"
+  fi
+fi
+
+# ── §Q  schema backstop: the migration actually adds and enforces both columns (s437) ─
+
+if [ "$(grep -c 'ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE' <<< "$MIG")" -eq 2 ]; then
+  ok "Q0 exactly 2 tables gain a user_id column via the s437 migration (escalation_policies + on_call_schedules)"
+else
+  bad "Q0 expected exactly 2 ADD COLUMN user_id lines from the s437 migration, found a different count"
+fi
+if grep -qF 'ALTER TABLE escalation_policies ALTER COLUMN user_id SET NOT NULL' <<< "$MIG"; then
+  ok "Q1 escalation_policies.user_id is enforced NOT NULL (guarded on a clean backfill)"
+else
+  bad "Q1 escalation_policies.user_id is never set NOT NULL — a future row could ship ownerless"
+fi
+if grep -qF 'ALTER TABLE on_call_schedules ALTER COLUMN user_id SET NOT NULL' <<< "$MIG"; then
+  ok "Q2 on_call_schedules.user_id is enforced NOT NULL (guarded on a clean backfill)"
+else
+  bad "Q2 on_call_schedules.user_id is never set NOT NULL — a future row could ship ownerless"
+fi
+if grep -qF 'idx_escalation_policies_user' <<< "$MIG" && grep -qF 'idx_on_call_schedules_user' <<< "$MIG"; then
+  ok "Q3 both new user_id columns are indexed"
+else
+  bad "Q3 one or both new user_id columns are missing their index"
+fi
+
 # ── §H  context: green at BOTH tags ───────────────────────────────────────────
 # Without these, a harness that has stopped reading real bytes prints an all-green
 # §A-§G and looks exactly like a clean tree.

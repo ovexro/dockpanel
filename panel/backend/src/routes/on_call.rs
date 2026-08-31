@@ -159,16 +159,23 @@ async fn validate_members_exist(
     Ok(())
 }
 
-/// GET /api/on-call/schedules — Admin: list all rotation schedules.
+/// GET /api/on-call/schedules — Admin: list this tenant's rotation schedules.
+///
+/// ⚠ SECURITY (s437): this table carried no `user_id` at all until this
+/// release — every route here gated on `AdminUser` (role) alone, so any
+/// admin on the install could list, read, write or delete every OTHER
+/// tenant's on-call rotations. Scoped the same way `alerts.rs`/`servers.rs`
+/// scope a caller-supplied resource: never widens for admin, admin included.
 pub async fn list_schedules(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    AdminUser(claims): AdminUser,
 ) -> Result<Json<Vec<OnCallScheduleDto>>, ApiError> {
     let rows: Vec<(Uuid, String, Vec<Uuid>, i32, DateTime<Utc>, DateTime<Utc>, DateTime<Utc>)> =
         sqlx::query_as(
             "SELECT id, name, members, cadence_days, anchor_at, created_at, updated_at \
-             FROM on_call_schedules ORDER BY name ASC",
+             FROM on_call_schedules WHERE user_id = $1 ORDER BY name ASC",
         )
+        .bind(claims.sub)
         .fetch_all(&state.db)
         .await
         .map_err(|e| internal_error("list schedules", e))?;
@@ -183,18 +190,20 @@ pub async fn list_schedules(
     Ok(Json(out))
 }
 
-/// GET /api/on-call/schedules/{id} — Admin: fetch one rotation by id.
+/// GET /api/on-call/schedules/{id} — Admin: fetch one rotation by id, scoped
+/// to the caller's own tenant.
 pub async fn get_schedule(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<OnCallScheduleDto>, ApiError> {
     let row: Option<(Uuid, String, Vec<Uuid>, i32, DateTime<Utc>, DateTime<Utc>, DateTime<Utc>)> =
         sqlx::query_as(
             "SELECT id, name, members, cadence_days, anchor_at, created_at, updated_at \
-             FROM on_call_schedules WHERE id = $1",
+             FROM on_call_schedules WHERE id = $1 AND user_id = $2",
         )
         .bind(id)
+        .bind(claims.sub)
         .fetch_optional(&state.db)
         .await
         .map_err(|e| internal_error("get schedule", e))?;
@@ -208,10 +217,11 @@ pub async fn get_schedule(
     ))
 }
 
-/// POST /api/on-call/schedules — Admin: create a rotation.
+/// POST /api/on-call/schedules — Admin: create a rotation, owned by the
+/// creating admin's own tenant.
 pub async fn create_schedule(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    AdminUser(claims): AdminUser,
     Json(input): Json<ScheduleInput>,
 ) -> Result<Json<OnCallScheduleDto>, ApiError> {
     validate_input(&input)?;
@@ -220,10 +230,11 @@ pub async fn create_schedule(
     let anchor = input.anchor_at.unwrap_or_else(Utc::now);
     let row: (Uuid, String, Vec<Uuid>, i32, DateTime<Utc>, DateTime<Utc>, DateTime<Utc>) =
         sqlx::query_as(
-            "INSERT INTO on_call_schedules (name, members, cadence_days, anchor_at) \
-             VALUES ($1, $2, $3, $4) \
+            "INSERT INTO on_call_schedules (user_id, name, members, cadence_days, anchor_at) \
+             VALUES ($1, $2, $3, $4, $5) \
              RETURNING id, name, members, cadence_days, anchor_at, created_at, updated_at",
         )
+        .bind(claims.sub)
         .bind(input.name.trim())
         .bind(&input.members)
         .bind(input.cadence_days)
@@ -237,10 +248,11 @@ pub async fn create_schedule(
     ))
 }
 
-/// PUT /api/on-call/schedules/{id} — Admin: update an existing rotation.
+/// PUT /api/on-call/schedules/{id} — Admin: update an existing rotation,
+/// scoped to the caller's own tenant.
 pub async fn update_schedule(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
     Json(input): Json<ScheduleInput>,
 ) -> Result<Json<OnCallScheduleDto>, ApiError> {
@@ -252,7 +264,7 @@ pub async fn update_schedule(
             sqlx::query_as(
                 "UPDATE on_call_schedules \
                  SET name = $2, members = $3, cadence_days = $4, anchor_at = $5, updated_at = NOW() \
-                 WHERE id = $1 \
+                 WHERE id = $1 AND user_id = $6 \
                  RETURNING id, name, members, cadence_days, anchor_at, created_at, updated_at",
             )
             .bind(id)
@@ -260,6 +272,7 @@ pub async fn update_schedule(
             .bind(&input.members)
             .bind(input.cadence_days)
             .bind(anchor)
+            .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
         } else {
@@ -268,13 +281,14 @@ pub async fn update_schedule(
             sqlx::query_as(
                 "UPDATE on_call_schedules \
                  SET name = $2, members = $3, cadence_days = $4, updated_at = NOW() \
-                 WHERE id = $1 \
+                 WHERE id = $1 AND user_id = $5 \
                  RETURNING id, name, members, cadence_days, anchor_at, created_at, updated_at",
             )
             .bind(id)
             .bind(input.name.trim())
             .bind(&input.members)
             .bind(input.cadence_days)
+            .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
         }
@@ -302,9 +316,16 @@ pub async fn update_schedule(
 /// (An earlier version of this comment claimed an hourly `alert_engine`
 /// orphan-route sweep repaired these. No such sweep exists — the engine's only
 /// hourly task is the resolved-alert purge.)
+///
+/// ⚠ SECURITY (s437): both the delete and the orphan-route sweep below are
+/// now scoped to the caller's own tenant. Scoping the sweep matters even
+/// though `validate_schedule_routes` (escalation_policies.rs) now refuses to
+/// let a policy reference another tenant's schedule going forward — a delete
+/// must still never touch another tenant's rows, defense-in-depth against any
+/// pre-existing or future cross-tenant reference.
 pub async fn delete_schedule(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let mut tx = state
@@ -313,13 +334,15 @@ pub async fn delete_schedule(
         .await
         .map_err(|e| internal_error("delete schedule", e))?;
 
-    // Delete first so a request for a schedule that does not exist fails fast,
-    // without taking a table-wide lock on escalation_policies and rolling it
-    // back (an admin-UI double-submit would otherwise lock every policy row
-    // twice). Same transaction either way: if the rewrite below fails, the
-    // schedule is not deleted.
-    let result = sqlx::query("DELETE FROM on_call_schedules WHERE id = $1")
+    // Delete first so a request for a schedule that does not exist (or isn't
+    // owned by this tenant) fails fast, without taking a lock on this
+    // tenant's escalation_policies rows and rolling it back (an admin-UI
+    // double-submit would otherwise lock every policy row twice). Same
+    // transaction either way: if the rewrite below fails, the schedule is
+    // not deleted.
+    let result = sqlx::query("DELETE FROM on_call_schedules WHERE id = $1 AND user_id = $2")
         .bind(id)
+        .bind(claims.sub)
         .execute(&mut *tx)
         .await
         .map_err(|e| internal_error("delete schedule", e))?;
@@ -330,11 +353,13 @@ pub async fn delete_schedule(
     }
 
     let orphan_route = format!("on_call_schedule:{id}");
-    let policies: Vec<(Uuid, serde_json::Value)> =
-        sqlx::query_as("SELECT id, steps FROM escalation_policies FOR UPDATE")
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|e| internal_error("delete schedule", e))?;
+    let policies: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
+        "SELECT id, steps FROM escalation_policies WHERE user_id = $1 FOR UPDATE",
+    )
+    .bind(claims.sub)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|e| internal_error("delete schedule", e))?;
 
     let mut rewritten = 0usize;
     for (policy_id, steps_json) in policies {

@@ -4,6 +4,45 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.193.0]
+
+### Fixed — on-call schedules and escalation policies had zero tenant scoping
+
+`on_call_schedules` and `escalation_policies` have carried no `user_id`
+column at all since they shipped: every route gated on `AdminUser` (role)
+alone, so any admin on the install could list, read, write or delete every
+OTHER tenant's on-call rotations and escalation policies. Confirmed
+UI-reachable (`Alerts.tsx`, `Settings.tsx`); zero realized harm on this box
+(0 rows, 1 admin) but a real cross-tenant leak/write on any install with a
+second admin — the exact bug class this project's last several releases
+fixed repeatedly elsewhere, just never swept in this pair.
+
+Added `user_id` to both tables via a migration that backfills existing rows
+from real tenant provenance (the `alert_rules` row that references a policy,
+then the policy that references a schedule), falling back to the install's
+first user, matching the precedent `20260830000000_status_page_subscribers_owner.sql`
+set. Every CRUD route in `on_call.rs`/`escalation_policies.rs` now scopes to
+the caller's own tenant, never widening for admin (matching how a
+caller-supplied-ID resource is scoped elsewhere in this codebase).
+
+Two adjacent gaps found and closed in the same pass, both in the same
+feature family: `validate_schedule_routes` only checked that a referenced
+on-call schedule *existed*, not that the caller owned it — a policy could
+otherwise legitimately reference, and therefore page, another tenant's
+rotation. And `alerts.rs::attach_escalation_policy` — the one write path
+that couples an alert rule to an escalation policy — had no ownership check
+at all on either side, so any admin could re-point any tenant's alert rule
+at any policy.
+
+The new regression pin (`client-role-and-server-ownership-pin-e2e.sh`,
+extended rather than duplicated — it already owned this exact defect shape)
+was mutation-tested against three defeats before shipping: a full revert to
+the pre-fix source (24 arms correctly went red), a dead-code wrap of the
+`attach_escalation_policy` ownership check (only the brace-depth liveness
+arm caught it — the text-presence/ordering arms stayed green, same lesson
+v2.189.0 learned the hard way), and a `.bind()` order swap (only the
+bind-order arm caught it).
+
 ## [2.192.0]
 
 ### Fixed — updating an app's image or env silently disabled its auto-sleep setting

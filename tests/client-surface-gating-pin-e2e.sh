@@ -9,10 +9,20 @@
 # into an empty state, so a site owner was shown "Mail Server Not Installed" for
 # a mail server running fine. The fix was correct and the sweep that followed it
 # was not — it enumerated administrator-gated handlers by grepping `AdminUser(`,
-# and TWO route modules never write that spelling. They bind the extractor
-# without destructuring it, so a paren-anchored search returns zero on both, and
+# and TWO route modules never wrote that spelling. They bound the extractor
+# without destructuring it, so a paren-anchored search returned zero on both, and
 # both were left out of every count. Those two modules are exactly the ones
 # behind the tabs that stayed broken for another two sessions.
+#
+# s437 UPDATE: those same two modules (on_call.rs, escalation_policies.rs) were
+# exactly the ones grepped-verified to hold ALL FIVE remaining occurrences each
+# of the undestructured spelling in `panel/backend/src/routes/` — the entire
+# population. Adding tenant scoping to both required `claims.sub` in every
+# handler, which meant destructuring the extractor everywhere it was bound —
+# so the undestructured spelling is now retired from the codebase, not merely
+# from these two files. §A below was rewritten to reflect that: A1/A2 no
+# longer demonstrate the blind spot (there is nothing left to be blind to) and
+# instead pin the retirement itself as a fact worth not regressing silently on.
 #
 # So the arm worth the most here is not any single page: it is §A, which fails
 # when a THIRD spelling appears. A census keyed on one way of writing the thing
@@ -137,30 +147,29 @@ fi
 echo
 echo "§A  the census idiom — the mechanism that hid two of these surfaces for two sessions"
 
-# Two route modules bind the admin extractor WITHOUT destructuring it. A search
-# anchored on the open paren returns zero on both, which is why a sweep that
-# used one reported them as carrying no administrator-gated handler at all.
+# Two route modules used to bind the admin extractor WITHOUT destructuring it.
+# A search anchored on the open paren returned zero on both, which is why a
+# sweep that used one reported them as carrying no administrator-gated
+# handler at all. s437's tenant-scoping fix needed `claims.sub` in every
+# handler of both files, which meant destructuring the extractor everywhere —
+# grep-verified (s437) that these two files held the ENTIRE population of the
+# undestructured spelling in $ROUTES, so it is now retired codebase-wide, not
+# just from these two files. A1 now pins that retirement directly instead of
+# demonstrating the blind spot it used to require.
 UNNAMED_FILES=$(grep -rlE '^\s*_[a-z_]+: AdminUser,' "$ROUTES" | sort)
 UNNAMED_COUNT=$(grep -rhE '^\s*_[a-z_]+: AdminUser,' "$ROUTES" | wc -l)
 
-if [ "$UNNAMED_COUNT" -gt 0 ]; then
-  ok  "A1 the undestructured spelling is real and present ($UNNAMED_COUNT handlers) — an arm asserting it does not exist would be vacuous"
+if [ "$UNNAMED_COUNT" -eq 0 ]; then
+  ok  "A1 the undestructured spelling is retired codebase-wide (s437) — on_call.rs/escalation_policies.rs were its entire population"
 else
-  bad "A1 no handler uses the undestructured spelling — if it was retired, retire §A with it; if the pattern changed, this suite is measuring nothing"
+  bad "A1 the undestructured spelling has reappeared ($UNNAMED_COUNT handler(s) in: $UNNAMED_FILES) — re-verify it stays invisible to a paren-anchored 'AdminUser(' census before trusting one again"
 fi
 
-# The control that makes A1 meaningful: those same files must be INVISIBLE to
-# the paren-anchored search. If this ever fails the blindness is gone and the
-# lesson can be retired — but it must be observed, not assumed.
-BLIND=1
-for f in $UNNAMED_FILES; do
-  if grep -qE 'AdminUser\(' "$f"; then BLIND=0; fi
-done
-if [ "$BLIND" -eq 1 ]; then
-  ok  "A2 every file using the undestructured spelling is invisible to a paren-anchored 'AdminUser(' search — this is the miss, pinned"
-else
-  ok  "A2 a file now uses BOTH spellings — the blindness is partial; §A still holds because the enumeration below is what protects the count"
-fi
+# The historical control (A2) no longer has a subject to check blindness
+# against now that A1 is 0 — a loop over an empty $UNNAMED_FILES would just
+# print a hollow "ok" either way. If A1 ever goes non-zero again, restore the
+# blindness check that used to live here (git log this file) before trusting
+# any `AdminUser(`-anchored census again.
 
 # THE ARM WORTH THE MOST — and it must not be enumerated the way the sweep that
 # missed these two modules was. Detection is spelling-INDEPENDENT (any signature

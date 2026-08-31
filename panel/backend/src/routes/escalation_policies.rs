@@ -127,16 +127,25 @@ async fn validate_webhook_routes(input: &PolicyInput) -> Result<(), ApiError> {
 }
 
 /// Reject `on_call_schedule:<uuid>` routes pointing at a schedule that does not
-/// exist. `validate_route` only parses the UUID, so a policy could be saved with
-/// a dangling rota reference — either by typo, or by the editor's
-/// read-modify-write racing a concurrent schedule delete and writing the stale
-/// steps back after `delete_schedule` had already rewritten them. A dangling
-/// route is not inert: it resolves to zero users, which is why
-/// `dispatch_escalation_step` now degrades to the alert owner's channels rather
-/// than dropping the page. This keeps it from being stored in the first place.
+/// exist, OR that the caller doesn't own. `validate_route` only parses the
+/// UUID, so a policy could be saved with a dangling rota reference — either by
+/// typo, or by the editor's read-modify-write racing a concurrent schedule
+/// delete and writing the stale steps back after `delete_schedule` had already
+/// rewritten them. A dangling route is not inert: it resolves to zero users,
+/// which is why `dispatch_escalation_step` now degrades to the alert owner's
+/// channels rather than dropping the page. This keeps it from being stored in
+/// the first place.
+///
+/// ⚠ SECURITY (s437): the ownership half is new. Without it, a policy could
+/// legitimately reference — and therefore page — another tenant's on-call
+/// rotation, which now also carries its own `user_id`. "Does not exist" is
+/// used for the ownership-denied case too (not "not owned"), matching this
+/// codebase's convention elsewhere of never confirming another tenant's
+/// resource exists to a caller who doesn't own it.
 async fn validate_schedule_routes(
     db: &sqlx::PgPool,
     input: &PolicyInput,
+    owner_id: Uuid,
 ) -> Result<(), ApiError> {
     for (i, step) in input.steps.iter().enumerate() {
         let Some(uuid_str) = step.route.strip_prefix("on_call_schedule:") else {
@@ -146,12 +155,14 @@ async fn validate_schedule_routes(
             continue; // shape already rejected by validate_route
         };
 
-        let exists: Option<(Uuid,)> =
-            sqlx::query_as("SELECT id FROM on_call_schedules WHERE id = $1")
-                .bind(schedule_id)
-                .fetch_optional(db)
-                .await
-                .map_err(|e| internal_error("validate schedule routes", e))?;
+        let exists: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT id FROM on_call_schedules WHERE id = $1 AND user_id = $2",
+        )
+        .bind(schedule_id)
+        .bind(owner_id)
+        .fetch_optional(db)
+        .await
+        .map_err(|e| internal_error("validate schedule routes", e))?;
 
         if exists.is_none() {
             return Err(err(
@@ -163,34 +174,47 @@ async fn validate_schedule_routes(
     Ok(())
 }
 
-/// GET /api/escalation-policies — Admin: list all policies.
+/// GET /api/escalation-policies — Admin: list this tenant's policies.
+///
+/// ⚠ SECURITY (s437): this table carried no `user_id` at all until this
+/// release — every route here gated on `AdminUser` (role) alone, so any
+/// admin on the install could list, read, write or delete every OTHER
+/// tenant's escalation policies. Scoped the same way `alerts.rs`/`servers.rs`
+/// scope a caller-supplied resource: never widens for admin, admin included.
+/// `used_by_rule_count`'s subquery needs no extra scoping beyond the outer
+/// `p.user_id` filter — `alert_rules.escalation_policy_id` can only point at
+/// a same-tenant policy now that `attach_escalation_policy` (alerts.rs)
+/// checks both sides' ownership.
 pub async fn list_policies(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    AdminUser(claims): AdminUser,
 ) -> Result<Json<Vec<PolicyDto>>, ApiError> {
     let rows: Vec<PolicyDto> = sqlx::query_as(
         "SELECT p.id, p.name, p.steps, p.created_at, p.updated_at, \
                 COALESCE((SELECT COUNT(*) FROM alert_rules WHERE escalation_policy_id = p.id), 0) AS used_by_rule_count \
-         FROM escalation_policies p ORDER BY p.name ASC",
+         FROM escalation_policies p WHERE p.user_id = $1 ORDER BY p.name ASC",
     )
+    .bind(claims.sub)
     .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("list policies", e))?;
     Ok(Json(rows))
 }
 
-/// GET /api/escalation-policies/{id} — Admin: fetch a single policy.
+/// GET /api/escalation-policies/{id} — Admin: fetch a single policy, scoped
+/// to the caller's own tenant.
 pub async fn get_policy(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<PolicyDto>, ApiError> {
     let row: Option<PolicyDto> = sqlx::query_as(
         "SELECT p.id, p.name, p.steps, p.created_at, p.updated_at, \
                 COALESCE((SELECT COUNT(*) FROM alert_rules WHERE escalation_policy_id = p.id), 0) AS used_by_rule_count \
-         FROM escalation_policies p WHERE p.id = $1",
+         FROM escalation_policies p WHERE p.id = $1 AND p.user_id = $2",
     )
     .bind(id)
+    .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| internal_error("get policy", e))?;
@@ -200,24 +224,26 @@ pub async fn get_policy(
     }
 }
 
-/// POST /api/escalation-policies — Admin: create a policy.
+/// POST /api/escalation-policies — Admin: create a policy, owned by the
+/// creating admin's own tenant.
 pub async fn create_policy(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    AdminUser(claims): AdminUser,
     Json(input): Json<PolicyInput>,
 ) -> Result<Json<PolicyDto>, ApiError> {
     validate_input(&input)?;
     validate_webhook_routes(&input).await?;
-    validate_schedule_routes(&state.db, &input).await?;
+    validate_schedule_routes(&state.db, &input, claims.sub).await?;
 
     let steps_json = serde_json::to_value(&input.steps)
         .map_err(|e| internal_error("serialize policy steps", e))?;
 
     let row: PolicyDto = sqlx::query_as(
-        "INSERT INTO escalation_policies (name, steps) \
-         VALUES ($1, $2) \
+        "INSERT INTO escalation_policies (user_id, name, steps) \
+         VALUES ($1, $2, $3) \
          RETURNING id, name, steps, created_at, updated_at, 0::bigint AS used_by_rule_count",
     )
+    .bind(claims.sub)
     .bind(input.name.trim())
     .bind(&steps_json)
     .fetch_one(&state.db)
@@ -226,16 +252,17 @@ pub async fn create_policy(
     Ok(Json(row))
 }
 
-/// PUT /api/escalation-policies/{id} — Admin: replace a policy.
+/// PUT /api/escalation-policies/{id} — Admin: replace a policy, scoped to
+/// the caller's own tenant.
 pub async fn update_policy(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
     Json(input): Json<PolicyInput>,
 ) -> Result<Json<PolicyDto>, ApiError> {
     validate_input(&input)?;
     validate_webhook_routes(&input).await?;
-    validate_schedule_routes(&state.db, &input).await?;
+    validate_schedule_routes(&state.db, &input, claims.sub).await?;
 
     let steps_json = serde_json::to_value(&input.steps)
         .map_err(|e| internal_error("serialize policy steps", e))?;
@@ -243,13 +270,14 @@ pub async fn update_policy(
     let row: Option<PolicyDto> = sqlx::query_as(
         "UPDATE escalation_policies \
          SET name = $2, steps = $3, updated_at = NOW() \
-         WHERE id = $1 \
+         WHERE id = $1 AND user_id = $4 \
          RETURNING id, name, steps, created_at, updated_at, \
             COALESCE((SELECT COUNT(*) FROM alert_rules WHERE escalation_policy_id = id), 0) AS used_by_rule_count",
     )
     .bind(id)
     .bind(input.name.trim())
     .bind(&steps_json)
+    .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| internal_error("update policy", e))?;
@@ -260,7 +288,8 @@ pub async fn update_policy(
     }
 }
 
-/// DELETE /api/escalation-policies/{id} — Admin: delete a policy.
+/// DELETE /api/escalation-policies/{id} — Admin: delete a policy, scoped to
+/// the caller's own tenant.
 ///
 /// `alert_rules.escalation_policy_id` is `ON DELETE SET NULL`, so any rule
 /// that referenced this policy reverts to the pre-W3 default cadence.
@@ -268,11 +297,12 @@ pub async fn update_policy(
 /// won't advance further (next tick finds no policy to chain against).
 pub async fn delete_policy(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = sqlx::query("DELETE FROM escalation_policies WHERE id = $1")
+    let result = sqlx::query("DELETE FROM escalation_policies WHERE id = $1 AND user_id = $2")
         .bind(id)
+        .bind(claims.sub)
         .execute(&state.db)
         .await
         .map_err(|e| internal_error("delete policy", e))?;

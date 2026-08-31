@@ -573,19 +573,40 @@ pub struct AttachPolicy {
 /// PUT /api/alert-rules/{rule_id}/escalation-policy — Admin: attach or
 /// detach an escalation policy on a single rule. Admin-only because
 /// mis-attaching a policy can route 3 AM pages to the wrong on-call user.
+///
+/// ⚠ SECURITY (s437): `rule_id` came from the URL under plain `AdminUser`
+/// (role only) with NO ownership check at all — any admin on the install
+/// could re-point ANY other tenant's alert rule at ANY escalation policy
+/// (including one they don't own, since the old existence check was also
+/// unscoped). Same shape as `update_server_rules`/`delete_server_rules`
+/// (s433): a single resource resolved by a caller-supplied ID never widens
+/// for admin, admin included.
 pub async fn attach_escalation_policy(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Path(rule_id): Path<Uuid>,
     Json(body): Json<AttachPolicy>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // If setting (not clearing), verify the policy exists so the FK violation
-    // surfaces as a 400 instead of a 500.
+    let owns_rule: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM alert_rules WHERE id = $1 AND user_id = $2")
+            .bind(rule_id)
+            .bind(claims.sub)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| internal_error("check alert rule ownership", e))?;
+    if owns_rule.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Alert rule not found"));
+    }
+
+    // If setting (not clearing), verify the policy exists AND is owned by
+    // the same tenant so the FK violation surfaces as a 400 instead of a
+    // 500, and so a rule can never be pointed at another tenant's policy.
     if let Some(pid) = body.policy_id {
         let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM escalation_policies WHERE id = $1)",
+            "SELECT EXISTS(SELECT 1 FROM escalation_policies WHERE id = $1 AND user_id = $2)",
         )
         .bind(pid)
+        .bind(claims.sub)
         .fetch_one(&state.db)
         .await
         .map_err(|e| internal_error("check policy exists", e))?;
@@ -594,10 +615,12 @@ pub async fn attach_escalation_policy(
         }
     }
     let result = sqlx::query(
-        "UPDATE alert_rules SET escalation_policy_id = $2, updated_at = NOW() WHERE id = $1",
+        "UPDATE alert_rules SET escalation_policy_id = $2, updated_at = NOW() \
+         WHERE id = $1 AND user_id = $3",
     )
     .bind(rule_id)
     .bind(body.policy_id)
+    .bind(claims.sub)
     .execute(&state.db)
     .await
     .map_err(|e| internal_error("attach policy", e))?;
