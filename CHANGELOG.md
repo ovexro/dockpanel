@@ -4,6 +4,35 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.192.0]
+
+### Fixed — updating an app's image or env silently disabled its auto-sleep setting
+
+`update_app`, `update_image`, and `update_env` all stop, remove, and
+re-create the container to apply a change — which mints a brand new Docker
+container id while keeping the same name. `container_sleep_config` is keyed
+on `container_id` alone, so after any of these ordinary actions the row
+became permanently unreachable under its old id: `GET .../sleep-config`
+read it back as "not configured" and the auto-sleep sweeper's
+`WHERE auto_sleep_enabled = true` query never found it again. An operator
+who enabled auto-sleep, then later updated that app's image or environment
+variables — routine maintenance, not an edge case — silently lost the
+setting with no error and no indication anything had changed.
+
+This is the second half of a fix `container_expected_stops`
+(20260822000000) already made for a sibling problem: that migration's own
+comment names all three functions and explains why a new table had to key
+on `(server_id, container_name)` instead of `container_id` for exactly this
+reason. `container_sleep_config` predates that fix and wasn't updated
+alongside it.
+
+Fixed by re-pointing the existing `container_sleep_config` row at the new
+container id immediately after each of the three recreates, reading the id
+from the same agent response the handler already receives. No schema
+change, no re-keying scheme — the row's `container_id` column simply stays
+accurate through an update, the same way every other read/write site in
+this file already expects it to.
+
 ## [2.191.0]
 
 ### Fixed — passkey RP-ID/origin derivation now fails closed instead of defaulting to "localhost"

@@ -1307,6 +1307,9 @@ pub async fn update_app(
                     emit("recreate", "Recreating container", "done", None);
                     emit("complete", "App updated", "done", None);
                 }
+                if let Some(new_id) = result.get("container_id").and_then(|v| v.as_str()) {
+                    rekey_sleep_config(&db, &cid, new_id).await;
+                }
                 activity::log_activity(
                     &db, user_id, &email, "app.update",
                     Some("app"), Some(&cid), None, None,
@@ -1425,6 +1428,9 @@ pub async fn update_env(
         .put_long(&format!("/apps/{container_id}/env"), body, 900)
         .await
         .map_err(|e| agent_error("Update env", e))?;
+    if let Some(new_id) = result.get("container_id").and_then(|v| v.as_str()) {
+        rekey_sleep_config(&state.db, &container_id, new_id).await;
+    }
     activity::log_activity(
         &state.db,
         claims.sub,
@@ -1502,6 +1508,10 @@ pub async fn update_image(
         )
         .await
         .map_err(|e| agent_error("Change image", e))?;
+
+    if let Some(new_id) = result.get("container_id").and_then(|v| v.as_str()) {
+        rekey_sleep_config(&state.db, &container_id, new_id).await;
+    }
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "app.change_image",
@@ -2378,6 +2388,39 @@ pub async fn policy_usage(
 }
 
 // ─── Container Auto-Sleep / Scale to Zero ──────────────────────
+
+/// `update_app`/`update_image`/`update_env` all stop, remove and re-create
+/// the container — minting a NEW Docker container id while keeping the same
+/// name (the same behavior `container_expected_stops`'s own migration
+/// comment names all three functions for, s238/20260822000000). Unlike that
+/// table, `container_sleep_config` is still keyed on `container_id` alone,
+/// so without this the row becomes permanently unreachable under its old
+/// id: `GET .../sleep-config` reads it back as "not configured" (no error,
+/// no row found) and the sweeper's `WHERE auto_sleep_enabled = true` never
+/// finds it again. An operator who enables auto-sleep, then later does an
+/// ordinary Update/image-change/env-edit, silently loses that setting with
+/// no indication anything happened.
+///
+/// Best-effort: the container recreate has already succeeded by the time
+/// this runs, so a failure here logs loudly rather than turning an
+/// otherwise-successful update into an error response.
+async fn rekey_sleep_config(db: &sqlx::PgPool, old_container_id: &str, new_container_id: &str) {
+    if old_container_id == new_container_id || new_container_id.is_empty() {
+        return;
+    }
+    if let Err(e) = sqlx::query(
+        "UPDATE container_sleep_config SET container_id = $1 WHERE container_id = $2",
+    )
+    .bind(new_container_id)
+    .bind(old_container_id)
+    .execute(db)
+    .await
+    {
+        tracing::error!(
+            "Failed to re-key sleep config after container recreate ({old_container_id} -> {new_container_id}): {e}"
+        );
+    }
+}
 
 #[derive(serde::Deserialize)]
 pub struct SleepConfigRequest {

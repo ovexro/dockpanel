@@ -99,6 +99,24 @@ fnbody() {
 # arm (lesson #585/#638 — it has happened twice).
 flat() { tr -d ' \n' <<< "$1"; }
 
+# Brace depth immediately BEFORE the first occurrence of fixed-string $2 in
+# body $1 (relative to where $1 itself starts — this file's fnbody() already
+# skips the signature line, so a top-level statement sits at depth 0). A
+# text-presence check alone cannot tell live code from the identical text
+# sitting inside a dead branch (`if false { ... }`) — both contain the same
+# text in the same relative order. This can: the extra `{` from a wrapper
+# pushes everything inside it one level deeper. Prints -1 if $2 is absent.
+depth_before() {
+  local off
+  off=$(grep -boF -- "$2" <<< "$1" | head -1 | cut -d: -f1)
+  if [ -z "$off" ]; then echo -1; return; fi
+  local prefix="${1:0:$off}"
+  local opens closes
+  opens=$(tr -cd '{' <<< "$prefix" | wc -c)
+  closes=$(tr -cd '}' <<< "$prefix" | wc -c)
+  echo $((opens - closes))
+}
+
 echo "== §A  the severity FIRED and the severity DECLARED are the same string =="
 
 if EG=$(subj "$ENGINE"); then
@@ -644,6 +662,110 @@ if AP=$(subj "$APPS"); then
   fi
 else
   for a in J9-control J10 J11; do bad "$a $APPS is readable"; done
+fi
+
+echo "== §K  container_sleep_config survives the SAME recreate this file's own migration named (s436) =="
+#
+# This file's own migration (MIG, 20260822000000_container_expected_stops.sql,
+# §1 "THE KEY") documents that update_app/change_container_image/update_env
+# "all stop, remove and re-create the container, which mints a NEW id and
+# keeps the name" — and fixed container_expected_stops by keying on
+# (server_id, container_name) instead of container_id BECAUSE of exactly this.
+# container_sleep_config is still keyed on container_id alone (no change to
+# that table's schema), so it needed the OTHER half of the same fix: re-point
+# the existing row at the new id when a recreate happens, or the row goes
+# permanently unreachable and auto-sleep silently stops working with no error
+# and no UI indication — the live bug tracked in tech_debt p4 since s238.
+
+if AP=$(subj "$APPS"); then
+  RK=$(fnbody "$AP" rekey_sleep_config)
+  RKF=$(flat "$RK")
+
+  if [ -n "$RK" ]; then
+    ok "K0-control rekey_sleep_config extracted, $(wc -l <<< "$RK") lines"
+  else
+    bad "K0-control could not extract rekey_sleep_config — every arm below is vacuous"
+  fi
+
+  # K1 — the UPDATE sets container_id from the NEW value and matches on the OLD
+  # one, in that placeholder order ($1=new, $2=old). Checked as one flattened
+  # string so rustfmt reflowing the query across lines cannot retire this arm.
+  if grep -qF 'UPDATEcontainer_sleep_configSETcontainer_id=$1WHEREcontainer_id=$2' <<< "$RKF"; then
+    ok "K1 rekey_sleep_config's UPDATE sets container_id from \$1 (new) and matches \$2 (old)"
+  else
+    bad "K1 rekey_sleep_config's UPDATE does not match the expected SET \$1 / WHERE \$2 shape — re-read it, the bind order may have been swapped"
+  fi
+
+  # K2 — the bind CALLS agree with K1's placeholder order: new_container_id
+  # bound first (-> $1), old_container_id bound second (-> $2). A swap here
+  # would compile, run, and silently re-key every row to the OLD id instead of
+  # the new one — the exact inverse of the fix.
+  if grep -qF '.bind(new_container_id).bind(old_container_id)' <<< "$RKF"; then
+    ok "K2 bind order is new_container_id then old_container_id, matching \$1/\$2"
+  else
+    bad "K2 bind order does not match .bind(new_container_id).bind(old_container_id) — \$1/\$2 would receive the wrong values even if K1 is green"
+  fi
+
+  # K3 — every recreate call site actually invokes the re-key, reading the
+  # NEW id from the agent's own response rather than assuming one. Discovered
+  # by membership (which handlers call the three recreate agent routes), not
+  # by a fixed count — matching this file's own J-block methodology.
+  RECREATE_FNS="update_app update_image update_env"
+  CALLED=""
+  LIVE=""
+  for f in $RECREATE_FNS; do
+    b=$(fnbody "$AP" "$f")
+    bf=$(flat "$b")
+    if grep -qF 'rekey_sleep_config(' <<< "$bf" && grep -qF 'result.get("container_id")' <<< "$bf"; then
+      CALLED="$CALLED $f"
+
+      # K4 (per-handler) — LIVENESS. Text presence (above) cannot tell a real
+      # call from the identical text sitting inside a dead branch — both
+      # contain the same text in the same relative order.
+      #
+      # ⚠ A first draft of this arm compared the call's depth against its OWN
+      # guarding if-let's depth (call == if-let + 1) — verified BY MUTATION to
+      # be insufficient: wrapping the if-let AND the call TOGETHER in an outer
+      # `if false { ... }` shifts both depths by the same +1, so the relative
+      # difference between them never changes and the mutation stays green.
+      # Fixed by anchoring the if-let itself against its own known-correct
+      # ABSOLUTE depth — a per-function baseline, since this file's fnbody()
+      # includes the (often multi-line) signature's own closing `{` in the
+      # extraction, so a genuinely top-level statement in update_image/
+      # update_env sits at depth 1 (not 0), and update_app's sits at depth 4
+      # (inside its tokio::spawn + match arm) — AND that the call sits exactly
+      # one level deeper than THAT. Neither the if-let nor the call can be
+      # wrapped in anything extra now, and the call can't be pulled out of the
+      # if-let that guards it while the if-let itself stays put.
+      case "$f" in
+        update_app)   BASE_DEPTH=4 ;;
+        update_image) BASE_DEPTH=1 ;;
+        update_env)   BASE_DEPTH=1 ;;
+      esac
+      D_IF=$(depth_before "$b" 'if let Some(new_id) = result.get("container_id")')
+      D_CALL=$(depth_before "$b" 'rekey_sleep_config(')
+      if [ "$D_IF" = "$BASE_DEPTH" ] && [ "$D_CALL" = "$((BASE_DEPTH + 1))" ]; then
+        LIVE="$LIVE $f"
+      fi
+    fi
+  done
+  CALLED=$(echo $CALLED)
+  N_CALLED=$(wc -w <<< "$CALLED")
+  if [ "$N_CALLED" -eq 3 ]; then
+    ok "K3 all 3 recreate handlers (update_app, update_image, update_env) call rekey_sleep_config with the agent's returned container_id"
+  else
+    bad "K3 only $N_CALLED/3 recreate handlers call rekey_sleep_config (found:${CALLED:- none}) — a container recreated through the missing handler(s) still orphans its sleep config"
+  fi
+
+  LIVE=$(echo $LIVE)
+  N_LIVE=$(wc -w <<< "$LIVE")
+  if [ "$N_LIVE" -eq 3 ]; then
+    ok "K4 all 3 rekey_sleep_config calls sit exactly one brace deeper than the if-let that guards them — live, not wrapped in extra dead code"
+  else
+    bad "K4 only $N_LIVE/3 rekey_sleep_config calls sit exactly one brace deeper than their guarding if-let (found:${LIVE:- none}) — one or more may be wrapped in an extra dead/conditional branch while text-only K3 still reports it present"
+  fi
+else
+  for a in K0-control K1 K2 K3 K4; do bad "$a $APPS is readable"; done
 fi
 
 echo
