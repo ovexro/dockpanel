@@ -56,8 +56,15 @@ pub struct PruneRequest {
 async fn upload(
     Json(body): Json<UploadRequest>,
 ) -> Result<Json<serde_json::Value>, ApiErr> {
-    // Validate filepath
-    if !body.filepath.starts_with("/var/backups/dockpanel/") {
+    // Validate filepath. The prefix check alone is a LEXICAL, not a resolved,
+    // guard -- "/var/backups/dockpanel/../../etc/shadow" satisfies
+    // starts_with() and the OS resolves the ".." on open, same shape as
+    // git_build.rs's is_valid_dockerfile/is_valid_build_context reject
+    // elsewhere in this crate. ProtectSystem=strict blocks writes outside the
+    // agent's ReadWritePaths allowlist, not reads, so an unguarded path here
+    // would be arbitrary root-readable-file exfiltration to an
+    // attacker-supplied S3/SFTP destination, not merely a write bypass.
+    if !body.filepath.starts_with("/var/backups/dockpanel/") || body.filepath.contains("..") {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid backup filepath"));
     }
 

@@ -4,6 +4,35 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.194.0]
+
+### Fixed — closed the last two defense-in-depth gaps from the s436 audit round
+
+`nginx.rs`'s `clone_site`, `get_env` and `set_env` were 3 of ~28 domain-taking
+agent handlers that skipped `is_valid_domain` while every sibling calls it
+first. Not reachable via the panel API today — every current caller sources
+its domain from a DB-validated column — but the live systemd unit's
+`ReadWritePaths` allowlist includes `/etc/systemd/system` and
+`/var/spool/cron`, so an unvalidated domain segment
+(`../../etc/systemd/system`) would have been root code execution via
+cron/systemd-unit overwrite, not merely a stray file write. All three now
+call `is_valid_domain` first, matching the other 25 handlers in the file.
+
+`remote_backup.rs`'s `upload()` gated the backup filepath with a lexical
+`starts_with()` check that `/var/backups/dockpanel/../../etc/shadow`
+satisfies — the OS resolves the `..` on open. `ProtectSystem=strict` blocks
+writes outside the agent's allowlist but not reads, so this would have been
+arbitrary root-readable-file exfiltration (shadow, Let's Encrypt private
+keys, `.env` secrets) to an attacker-supplied S3/SFTP destination. Now
+rejects any filepath containing `..`, matching the pattern `git_build.rs`'s
+`is_valid_dockerfile`/`is_valid_build_context` already use elsewhere in the
+same crate.
+
+New pin (`nginx-clone-env-backup-path-pin-e2e.sh`) mutation-tested against
+two defeats: a full revert to pre-fix source (8 of 12 arms correctly went
+red) and a split-guard dead-code mutation on the backup path check (only the
+structural arm caught it — the text-presence arm stayed green).
+
 ## [2.193.0]
 
 ### Fixed — on-call schedules and escalation policies had zero tenant scoping

@@ -1843,6 +1843,9 @@ async fn clone_site(Json(body): Json<CloneRequest>) -> Result<Json<serde_json::V
     if body.source_domain.is_empty() || body.target_domain.is_empty() {
         return Err(api_err(StatusCode::BAD_REQUEST, "Source and target domains required"));
     }
+    if !is_valid_domain(&body.source_domain) || !is_valid_domain(&body.target_domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
 
     let source_dir = format!("/var/www/{}", body.source_domain);
     let target_dir = format!("/var/www/{}", body.target_domain);
@@ -1888,7 +1891,10 @@ async fn clone_site(Json(body): Json<CloneRequest>) -> Result<Json<serde_json::V
 // ──────────────────────────────────────────────────────────────
 
 /// GET /nginx/env/{domain} — Read .env file for a site.
-async fn get_env(Path(domain): Path<String>) -> Json<serde_json::Value> {
+async fn get_env(Path(domain): Path<String>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
     let env_path = format!("/var/www/{domain}/.env");
     let content = std::fs::read_to_string(&env_path).unwrap_or_default();
 
@@ -1902,11 +1908,14 @@ async fn get_env(Path(domain): Path<String>) -> Json<serde_json::Value> {
         })
         .collect();
 
-    Json(serde_json::json!({ "vars": vars, "raw": content }))
+    Ok(Json(serde_json::json!({ "vars": vars, "raw": content })))
 }
 
 /// PUT /nginx/env/{domain} — Write .env file for a site.
 async fn set_env(Path(domain): Path<String>, Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
     let vars = body.get("vars").and_then(|v| v.as_array());
 
     let content = match vars {
