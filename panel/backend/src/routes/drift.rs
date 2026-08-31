@@ -34,16 +34,22 @@ pub struct DriftServer {
 
 /// GET /api/drift/servers — comparable servers, local first. Drives the
 /// reference/target pickers in the UI.
+///
+/// ⚠ SECURITY (s432): was `WHERE user_id = $1`, the same admin-scoping bug
+/// class `servers::list` and `dashboard::fleet_overview` already document and
+/// fix — `servers.user_id` names whoever registered the row, not a tenant
+/// boundary. This route only ever takes `AdminUser`, so (as with
+/// `fleet_overview`) there is no narrower case to preserve: the comparable
+/// servers are simply every server on the install.
 pub async fn servers(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AdminUser(_claims): AdminUser,
 ) -> Result<Json<Vec<DriftServer>>, ApiError> {
     let rows: Vec<(Uuid, String, bool, String, Option<chrono::DateTime<chrono::Utc>>, Option<String>)> =
         sqlx::query_as(
             "SELECT id, name, is_local, status, last_seen_at, agent_version \
-             FROM servers WHERE user_id = $1 ORDER BY is_local DESC, created_at DESC LIMIT 500",
+             FROM servers ORDER BY is_local DESC, created_at DESC LIMIT 500",
         )
-        .bind(claims.sub)
         .fetch_all(&state.db)
         .await
         .map_err(|e| internal_error("drift servers", e))?;
@@ -71,19 +77,20 @@ pub struct DriftQuery {
 }
 
 /// GET /api/drift — compute the fleet configuration-drift report.
+///
+/// ⚠ SECURITY (s432): the candidate-server query was `WHERE user_id = $1`, the
+/// same admin-scoping bug as `servers()` above — see that function's comment.
+/// `AdminUser`-only, so the comparable set is fleet-wide.
 pub async fn report(
     State(state): State<AppState>,
-    AdminUser(claims): AdminUser,
+    AdminUser(_claims): AdminUser,
     Query(q): Query<DriftQuery>,
 ) -> Result<Json<DriftReport>, ApiError> {
-    let user_id = claims.sub;
-
-    // The caller's servers, local first — used to validate ids and to default
-    // the reference/target selection.
+    // The comparable servers, local first — used to validate ids and to
+    // default the reference/target selection.
     let all: Vec<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM servers WHERE user_id = $1 ORDER BY is_local DESC, created_at DESC LIMIT 500",
+        "SELECT id FROM servers ORDER BY is_local DESC, created_at DESC LIMIT 500",
     )
-    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("drift server ids", e))?;
@@ -127,7 +134,7 @@ pub async fn report(
             .collect(),
     };
 
-    let report = drift::build_report(&state.db, user_id, reference, &targets)
+    let report = drift::build_report(&state.db, reference, &targets)
         .await
         .map_err(|e| internal_error("drift report", e))?;
 

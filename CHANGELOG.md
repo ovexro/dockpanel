@@ -4,6 +4,55 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.188.0]
+
+### Fixed — six more admin views under-reported for every admin except whoever registered the servers
+
+`servers::list`'s own SCOPE LIMIT note (added when that route was fixed)
+named seven sibling reads that still resolved a machine through
+`servers.user_id` — a column that names whoever *registered* the row, not a
+tenant boundary — and so still under-reported for a second administrator.
+v2.185.0 closed the first, `dashboard::fleet_overview`. This release closes
+the remaining six: `routes/drift.rs`'s `servers()` and `report()` (the
+config-drift picker and report), `services/drift.rs`'s five report fetchers
+(one logical site — reachable only from that same admin-gated route), and
+three more `routes/dashboard.rs` aggregations: `metrics_history`,
+`gpu_metrics_history`, and `timeline`.
+
+A second admin — one who didn't personally register the servers, which on
+a multi-admin install is most of them — saw an empty drift-comparison
+picker, a drift report that silently dropped rows for every server they
+didn't register, empty CPU/memory/disk/GPU history charts, and an activity
+timeline missing every deploy, backup, incident, alert, and security scan
+for those servers. None of these are cross-tenant leaks; all six are
+under-reports of data the caller was already fully entitled to see through
+every other route.
+
+Fixed per caller shape, following the two patterns this codebase had
+already established for the same bug class: the two `drift.rs` routes and
+`services/drift.rs`'s fetchers are `AdminUser`-only, so (as with
+`fleet_overview`) the owner filter is simply dropped — every caller here is
+an admin, so the comparable/reportable set is the whole fleet.
+`metrics_history`, `gpu_metrics_history`, and `timeline` also serve
+non-admin roles, so they widen conditionally with a bound
+`$N::uuid IS NULL OR user_id = $N` predicate, mirroring
+`dashboard::intelligence`'s own established idiom for exactly this
+distinction — an admin gets the fleet-wide read, a non-admin is unchanged.
+
+An adversarial review of this diff caught a correctness regression the fix
+itself would have introduced: `services/drift.rs`'s `fetch_alert_rules`
+relied on its own (now-removed) `user_id = $1` filter to accidentally
+guarantee at most one `alert_rules` row per `server_id` — the table only
+enforces `UNIQUE(user_id, server_id)`, not `UNIQUE(server_id)`. Collapsing
+unfiltered rows into a map keyed by `server_id` would have let a stray row
+from an unrelated account silently stand in for the server's real posture in
+the drift report. Fixed by joining against the server's actual owner instead
+of dropping the filter outright, so the report always resolves to the one
+row that belongs to that server, independent of any stray rows. (The write
+path that lets a stray row exist in the first place — `alerts.rs::update_server_rules`/
+`delete_server_rules` take `server_id` from the URL with no ownership check —
+is a separate, pre-existing gap and remains open.)
+
 ## [2.187.0]
 
 ### Fixed — five more webhook/verify secrets were stored in plaintext

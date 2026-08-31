@@ -101,6 +101,8 @@ USERS=panel/backend/src/routes/users.rs
 SERVERS=panel/backend/src/routes/servers.rs
 SITES=panel/backend/src/routes/sites.rs
 DASH=panel/backend/src/routes/dashboard.rs
+DRIFT=panel/backend/src/routes/drift.rs
+DRIFT_SVC=panel/backend/src/services/drift.rs
 FILTER=panel/agent/src/services/command_filter.rs
 MONITORS=panel/backend/src/routes/monitors.rs
 RESELLER=panel/backend/src/routes/reseller_dashboard.rs
@@ -109,7 +111,7 @@ LAYOUT=panel/frontend/src/hooks/useLayoutState.ts
 SITESTSX=panel/frontend/src/pages/Sites.tsx
 DETAIL=panel/frontend/src/pages/SiteDetail.tsx
 
-for f in "$USERS" "$SERVERS" "$SITES" "$FILTER" "$MONITORS" "$RESELLER" "$AUTH" \
+for f in "$USERS" "$SERVERS" "$SITES" "$DRIFT" "$DRIFT_SVC" "$FILTER" "$MONITORS" "$RESELLER" "$AUTH" \
          "$LAYOUT" "$SITESTSX" "$DETAIL"; do
   [ -f "$f" ] || { bad "SETUP subject missing: $f"; }
 done
@@ -484,6 +486,187 @@ else
     bad "I3 fleet_overview still binds claims.sub into a query — the widening is incomplete"
   else
     ok "I3 no query in fleet_overview binds claims.sub — genuinely fleet-wide, not a hidden per-admin filter"
+  fi
+fi
+
+# ── §J  drift.rs's two admin-only reads are fleet-wide too (s432) ────────────
+# `servers::list` (§B) documented seven sibling reads still resolving a
+# machine through `servers.user_id`. `fleet_overview` closed one (§I, s430).
+# `routes/drift.rs`'s `servers()` and `report()` are two more — both
+# `AdminUser`-only, same fix shape as `fleet_overview`: drop the filter.
+
+DRIFT_SRC=$(code "$DRIFT")
+DSERVERS=$(flat "$(fnbody "$DRIFT_SRC" "servers")")
+DREPORT=$(flat "$(fnbody "$DRIFT_SRC" "report")")
+
+if [ -z "$DSERVERS" ]; then
+  bad "J0 could not extract drift::servers"
+else
+  ok "J0 drift::servers extracted"
+  if has "$DSERVERS" 'FROM servers WHERE user_id = \$1'; then
+    bad "J1 drift::servers still filters WHERE user_id = \$1 — a second admin sees fewer comparable servers than exist"
+  elif ! has "$DSERVERS" 'WHERE user_id'; then
+    ok "J1 drift::servers's query is fleet-wide, not owner-scoped"
+  else
+    bad "J1 drift::servers's WHERE clause is neither the old shape nor fleet-wide — re-read it"
+  fi
+fi
+
+if [ -z "$DREPORT" ]; then
+  bad "J2 could not extract drift::report"
+else
+  ok "J2 drift::report extracted"
+  if has "$DREPORT" 'FROM servers WHERE user_id = \$1'; then
+    bad "J3 drift::report's candidate-server query still filters WHERE user_id = \$1"
+  elif ! has "$DREPORT" 'WHERE user_id'; then
+    ok "J3 drift::report's candidate-server query is fleet-wide"
+  else
+    bad "J3 drift::report's candidate-server query matches neither shape — re-read it"
+  fi
+  # J4 — negative control, same reasoning as I3: an AdminUser-only route has
+  # no reason to bind a caller id into a query at all.
+  if has "$DREPORT" '\.bind\(claims\.sub\)' || has "$DREPORT" '\.bind\(user_id\)'; then
+    bad "J4 drift::report still binds a caller id into a query — the widening is incomplete"
+  else
+    ok "J4 no query in drift::report binds a caller id — genuinely fleet-wide"
+  fi
+fi
+
+# ── §K  services/drift.rs's report fetchers are fleet-wide too (s432) ────────
+# The one remaining logical sibling from §B's original seven: `build_report`
+# and its five DB fetchers, reachable ONLY from `routes/drift.rs::report`
+# (§J), which is `AdminUser`-gated — so there is no narrower case to preserve.
+
+DRIFT_SVC_SRC=$(code "$DRIFT_SVC")
+BUILD_REPORT=$(flat "$(fnbody "$DRIFT_SVC_SRC" "build_report")")
+
+if [ -z "$BUILD_REPORT" ]; then
+  bad "K0 could not extract services::drift::build_report"
+else
+  ok "K0 services::drift::build_report extracted"
+  if has "$BUILD_REPORT" 'user_id: *Uuid'; then
+    bad "K1 build_report still takes a user_id parameter — a caller-scoped id has no reason to exist on an AdminUser-only call chain"
+  else
+    ok "K1 build_report no longer takes a user_id parameter"
+  fi
+fi
+
+K_VIOL=0; K_N=0
+while read -r fn; do
+  [ -n "$fn" ] || continue
+  B=$(flat "$(fnbody "$DRIFT_SVC_SRC" "$fn")")
+  [ -n "$B" ] || continue
+  K_N=$((K_N+1))
+  # Placeholder-agnostic: a caller-id filter re-added as $2 (or any other
+  # position) must still be caught, not just the $1 shape these 5 fetchers
+  # happen to use today. A JOIN condition comparing two COLUMNS (e.g.
+  # `s.user_id = ar.user_id`, fetch_alert_rules's own fix below) has no `$`
+  # and so is correctly NOT a violation — only a comparison against a bound
+  # query parameter is.
+  if has "$B" 'user_id *= *\$[0-9]'; then
+    K_VIOL=$((K_VIOL+1))
+    printf '%s\n' "$fn" >> /tmp/.s432_k_viol
+  fi
+done < <(printf '%s\n' fetch_server_meta fetch_alert_rules fetch_sites fetch_crons fetch_backup_coverage)
+
+if [ "$K_N" -ne 5 ]; then
+  bad "K2 censused only $K_N of 5 drift report fetchers — the extractor is broken, not the tree"
+elif [ "$K_VIOL" -eq 0 ]; then
+  ok "K2 all 5 drift report fetchers query by server id alone, no owner filter"
+else
+  while read -r fn; do
+    [ -n "$fn" ] || continue
+    bad "K2 services::drift::$fn still filters by user_id — a second admin's drift report silently drops rows for servers it didn't register"
+  done < <(cat /tmp/.s432_k_viol 2>/dev/null)
+fi
+rm -f /tmp/.s432_k_viol
+
+# ── §L  three more dashboard.rs fleet aggregations, widened for admins (s432) ─
+# `metrics_history`, `gpu_metrics_history`, and `timeline` are the three
+# remaining §B siblings alongside `fleet_overview` (§I) — all four are what
+# the original comment called "the four fleet aggregations in
+# routes/dashboard.rs". Unlike `fleet_overview`, these three serve every
+# role, so the fix is `dashboard::intelligence`'s own conditional-widen idiom
+# (a bound `$N::uuid IS NULL OR` predicate) rather than an unconditional drop.
+
+MHIST=$(flat "$(fnbody "$DASH_SRC" "metrics_history")")
+
+if [ -z "$MHIST" ]; then
+  bad "L0 could not extract dashboard::metrics_history"
+else
+  ok "L0 dashboard::metrics_history extracted"
+  if has "$MHIST" 'servers WHERE user_id = \$1\)'; then
+    bad "L1 metrics_history still filters WHERE user_id = \$1 — a second admin's chart is empty for every server they didn't register"
+  elif has "$MHIST" 'servers WHERE \$1::uuid IS NULL OR user_id = \$1\)'; then
+    ok "L1 metrics_history admits an admin to fleet-wide history"
+  else
+    bad "L1 metrics_history's server subquery matches neither shape — re-read it"
+  fi
+  if has "$MHIST" 'claims\.role == "admin"'; then
+    ok "L2 metrics_history's tenant scope is bound to the admin role"
+  else
+    bad "L2 metrics_history widened without binding the condition to the admin role"
+  fi
+  if has "$MHIST" '\.bind\(claims\.sub\)'; then
+    bad "L2b metrics_history still binds claims.sub directly — the widening is incomplete"
+  else
+    ok "L2b metrics_history binds only the derived tenant value, not claims.sub directly"
+  fi
+fi
+
+GHIST=$(flat "$(fnbody "$DASH_SRC" "gpu_metrics_history")")
+
+if [ -z "$GHIST" ]; then
+  bad "L3 could not extract dashboard::gpu_metrics_history"
+else
+  ok "L3 dashboard::gpu_metrics_history extracted"
+  if has "$GHIST" 'servers WHERE user_id = \$1\)'; then
+    bad "L4 gpu_metrics_history still filters WHERE user_id = \$1"
+  elif has "$GHIST" 'servers WHERE \$1::uuid IS NULL OR user_id = \$1\)'; then
+    ok "L4 gpu_metrics_history admits an admin to fleet-wide history"
+  else
+    bad "L4 gpu_metrics_history's server subquery matches neither shape — re-read it"
+  fi
+  if has "$GHIST" '\.bind\(claims\.sub\)'; then
+    bad "L4b gpu_metrics_history still binds claims.sub directly — the widening is incomplete"
+  else
+    ok "L4b gpu_metrics_history binds only the derived tenant value, not claims.sub directly"
+  fi
+fi
+
+TIMELINE=$(flat "$(fnbody "$DASH_SRC" "timeline")")
+
+if [ -z "$TIMELINE" ]; then
+  bad "L5 could not extract dashboard::timeline"
+else
+  ok "L5 dashboard::timeline extracted"
+  if has "$TIMELINE" 'claims\.role == "admin"'; then
+    ok "L6 timeline's tenant scope is bound to the admin role"
+  else
+    bad "L6 timeline widened without binding the condition to the admin role"
+  fi
+  # L7 — every one of the five sub-queries' old unconditional shape must be gone.
+  if has "$TIMELINE" 's\.user_id = \$1 ORDER|WHERE user_id = \$1 ORDER BY created_at DESC LIMIT 10|servers WHERE user_id = \$1\)'; then
+    bad "L7 timeline still has an unconditional user_id = \$1 predicate on at least one sub-query — a second admin's activity feed is missing that source's fleet-wide events"
+  else
+    ok "L7 no sub-query in timeline has the old unconditional owner-only predicate"
+  fi
+  # L8 — the widened shape must actually be present, not just absent-by-some-
+  # unrelated-rewrite: count the IS NULL escape hatch. Five sub-queries, one
+  # (alerts) uses it twice (its own predicate + the servers subquery it joins
+  # against) — six occurrences total, an exact count so a partial fix reds too.
+  L_WIDENS=$(grep -o '\$1::uuid IS NULL' <<< "$TIMELINE" | wc -l)
+  if [ "$L_WIDENS" -eq 6 ]; then
+    ok "L8 timeline's widened predicate appears exactly 6 times — all five sub-queries fixed (alerts uses it twice)"
+  else
+    bad "L8 timeline's widened predicate appears $L_WIDENS times, expected 6 — at least one sub-query was not fixed"
+  fi
+  # L9 — negative control, same reasoning as I3/J4: only the derived `tenant`
+  # value may be bound now, never claims.sub directly.
+  if has "$TIMELINE" '\.bind\(claims\.sub\)'; then
+    bad "L9 timeline still binds claims.sub directly into a query — the widening is incomplete"
+  else
+    ok "L9 timeline binds only the derived tenant value, not claims.sub directly"
   fi
 fi
 

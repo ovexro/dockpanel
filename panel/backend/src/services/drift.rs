@@ -288,14 +288,12 @@ struct ServerMeta {
 
 async fn fetch_server_meta(
     pool: &PgPool,
-    user_id: Uuid,
     ids: &[Uuid],
 ) -> Result<HashMap<Uuid, ServerMeta>, sqlx::Error> {
     let rows: Vec<(Uuid, String, bool, String, Option<DateTime<Utc>>)> = sqlx::query_as(
         "SELECT id, name, is_local, status, last_seen_at \
-         FROM servers WHERE user_id = $1 AND id = ANY($2)",
+         FROM servers WHERE id = ANY($1)",
     )
-    .bind(user_id)
     .bind(ids)
     .fetch_all(pool)
     .await?;
@@ -309,20 +307,33 @@ async fn fetch_server_meta(
 
 async fn fetch_alert_rules(
     pool: &PgPool,
-    user_id: Uuid,
     ids: &[Uuid],
 ) -> Result<HashMap<Uuid, Value>, sqlx::Error> {
     // NULL server_id (the user's default rule) is excluded by `= ANY`.
+    //
+    // ⚠ CORRECTNESS (s432 review): `alert_rules` enforces only
+    // `UNIQUE(user_id, server_id)`, not `UNIQUE(server_id)` — a caller other
+    // than the server's owner can create a stray second row for the same
+    // server_id (`routes/alerts.rs::update_server_rules` takes `server_id`
+    // straight from the URL path under plain `AuthUser`, with no ownership
+    // check — a real, separate gap, still open). Before this session's fix,
+    // this fetcher's own `user_id = $1` filter accidentally guaranteed at
+    // most one row per server_id (the caller's own); collapsing unfiltered
+    // rows into a `HashMap<Uuid, Value>` keyed by server_id would silently
+    // pick whichever row Postgres happens to return last if a stray row
+    // exists. The join below restores "one row per server_id" by resolving
+    // to the row that belongs to the server's actual registering owner,
+    // rather than depending on the stray-row bug being absent.
     let rows: Vec<(Uuid, Value)> = sqlx::query_as(
         "SELECT server_id, (to_jsonb(c) - 'server_id') AS config FROM ( \
-           SELECT server_id, cpu_threshold, cpu_duration, memory_threshold, memory_duration, \
-                  disk_threshold, alert_cpu, alert_memory, alert_disk, alert_offline, \
-                  alert_backup_failure, alert_ssl_expiry, alert_service_health, ssl_warning_days, \
-                  notify_email, notify_slack_url, notify_discord_url, cooldown_minutes, escalation_policy_id \
-           FROM alert_rules WHERE user_id = $1 AND server_id = ANY($2) \
+           SELECT ar.server_id, ar.cpu_threshold, ar.cpu_duration, ar.memory_threshold, ar.memory_duration, \
+                  ar.disk_threshold, ar.alert_cpu, ar.alert_memory, ar.alert_disk, ar.alert_offline, \
+                  ar.alert_backup_failure, ar.alert_ssl_expiry, ar.alert_service_health, ar.ssl_warning_days, \
+                  ar.notify_email, ar.notify_slack_url, ar.notify_discord_url, ar.cooldown_minutes, ar.escalation_policy_id \
+           FROM alert_rules ar JOIN servers s ON s.id = ar.server_id AND s.user_id = ar.user_id \
+           WHERE ar.server_id = ANY($1) \
          ) c",
     )
-    .bind(user_id)
     .bind(ids)
     .fetch_all(pool)
     .await?;
@@ -331,7 +342,6 @@ async fn fetch_alert_rules(
 
 async fn fetch_sites(
     pool: &PgPool,
-    user_id: Uuid,
     ids: &[Uuid],
 ) -> Result<HashMap<Uuid, Vec<(String, Value)>>, sqlx::Error> {
     let rows: Vec<(Uuid, String, Value)> = sqlx::query_as(
@@ -340,10 +350,9 @@ async fn fetch_sites(
                   ssl_profile, rate_limit, max_upload_mb, php_memory_mb, php_max_workers, custom_nginx, \
                   php_preset, app_command, enabled, fastcgi_cache, redis_cache, redis_db, waf_enabled, \
                   waf_mode, csp_policy, permissions_policy, bot_protection \
-           FROM sites WHERE user_id = $1 AND server_id = ANY($2) \
+           FROM sites WHERE server_id = ANY($1) \
          ) c",
     )
-    .bind(user_id)
     .bind(ids)
     .fetch_all(pool)
     .await?;
@@ -352,16 +361,14 @@ async fn fetch_sites(
 
 async fn fetch_crons(
     pool: &PgPool,
-    user_id: Uuid,
     ids: &[Uuid],
 ) -> Result<HashMap<Uuid, Vec<(String, Value)>>, sqlx::Error> {
     let rows: Vec<(Uuid, String, Value)> = sqlx::query_as(
         "SELECT s.server_id, (s.domain || ' · ' || cr.command) AS identity, \
                 jsonb_build_object('schedule', cr.schedule, 'enabled', cr.enabled, 'label', cr.label) AS config \
          FROM crons cr JOIN sites s ON cr.site_id = s.id \
-         WHERE s.user_id = $1 AND s.server_id = ANY($2)",
+         WHERE s.server_id = ANY($1)",
     )
-    .bind(user_id)
     .bind(ids)
     .fetch_all(pool)
     .await?;
@@ -370,7 +377,6 @@ async fn fetch_crons(
 
 async fn fetch_backup_coverage(
     pool: &PgPool,
-    user_id: Uuid,
     ids: &[Uuid],
 ) -> Result<HashMap<Uuid, CoverageMetrics>, sqlx::Error> {
     let rows: Vec<(Uuid, i64, i64, i64)> = sqlx::query_as(
@@ -379,10 +385,9 @@ async fn fetch_backup_coverage(
                 COUNT(bs.id) FILTER (WHERE bs.enabled)::bigint AS backed_up, \
                 COUNT(DISTINCT bs.destination_id)::bigint AS destinations \
          FROM sites s LEFT JOIN backup_schedules bs ON bs.site_id = s.id \
-         WHERE s.user_id = $1 AND s.server_id = ANY($2) \
+         WHERE s.server_id = ANY($1) \
          GROUP BY s.server_id",
     )
-    .bind(user_id)
     .bind(ids)
     .fetch_all(pool)
     .await?;
@@ -415,9 +420,16 @@ fn group_by_server(rows: Vec<(Uuid, String, Value)>) -> HashMap<Uuid, Vec<(Strin
 /// Build the drift report: compare each target server against `reference_id`
 /// across the four v1 entities. `targets` (already excluding the reference) are
 /// the servers rendered under each entity.
+///
+/// ⚠ SECURITY (s432): the five fetchers below used to take a `user_id` and
+/// scope every query to that caller's own registered servers — the same
+/// admin-scoping bug `servers::list`/`dashboard::fleet_overview` already fix.
+/// This function has exactly one caller, `routes/drift.rs::report`, which is
+/// `AdminUser`-gated, so there is no narrower case to preserve: every id in
+/// `all_ids` was already validated against the fleet-wide server list by that
+/// caller, and the fetchers below simply resolve whatever ids they're given.
 pub async fn build_report(
     pool: &PgPool,
-    user_id: Uuid,
     reference_id: Uuid,
     targets: &[Uuid],
 ) -> Result<DriftReport, sqlx::Error> {
@@ -425,7 +437,7 @@ pub async fn build_report(
     all_ids.push(reference_id);
     all_ids.extend_from_slice(targets);
 
-    let meta = fetch_server_meta(pool, user_id, &all_ids).await?;
+    let meta = fetch_server_meta(pool, &all_ids).await?;
     let ref_meta = meta.get(&reference_id);
     let reference = ServerRef {
         server_id: reference_id,
@@ -435,10 +447,10 @@ pub async fn build_report(
         last_seen_at: ref_meta.and_then(|m| m.last_seen_at),
     };
 
-    let alert_rules = fetch_alert_rules(pool, user_id, &all_ids).await?;
-    let sites = fetch_sites(pool, user_id, &all_ids).await?;
-    let crons = fetch_crons(pool, user_id, &all_ids).await?;
-    let coverage = fetch_backup_coverage(pool, user_id, &all_ids).await?;
+    let alert_rules = fetch_alert_rules(pool, &all_ids).await?;
+    let sites = fetch_sites(pool, &all_ids).await?;
+    let crons = fetch_crons(pool, &all_ids).await?;
+    let coverage = fetch_backup_coverage(pool, &all_ids).await?;
 
     // Track which target servers drift in ≥1 entity.
     let mut drifted: HashSet<Uuid> = HashSet::new();

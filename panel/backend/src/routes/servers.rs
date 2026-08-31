@@ -58,14 +58,27 @@ pub struct Server {
 /// sees only rows it owns — which for a `client` is none, because no non-admin can
 /// own one.
 ///
-/// ⚠ SCOPE LIMIT, stated here rather than discovered later: this fixes the LIST.
-/// Seven sibling reads still resolve a machine through `servers.user_id` and so
-/// still under-report for a second admin — `routes/drift.rs:44` and `:84`,
-/// `services/drift.rs:296`, and the four fleet aggregations in
-/// `routes/dashboard.rs` (`:329`, `:371`, `:474`, `:494`). `routes/billing.rs:36`
-/// is NOT one of them: counting the servers a given account holds is what billing
-/// means. Closing the seven wants the one shared predicate this project already
-/// uses for sites (`helpers::SITE_CALLER_PREDICATE`), not seven edits.
+/// ⚠ SCOPE LIMIT (CLOSED s432), stated here rather than discovered later: this
+/// fixes the LIST. It named seven sibling reads that still resolved a machine
+/// through `servers.user_id` and so still under-reported for a second admin —
+/// `routes/drift.rs`'s `servers()` and `report()`, `services/drift.rs`'s five
+/// report fetchers (one logical site), and four `routes/dashboard.rs`
+/// aggregations (`fleet_overview`, `metrics_history`, `gpu_metrics_history`,
+/// `timeline`). `routes/billing.rs:63` was never one of them: counting the
+/// servers a given account holds is what billing means. `fleet_overview` was
+/// closed first, at s430 (`AdminUser`-only, so the filter was dropped
+/// outright — see its own comment). The remaining six were closed at s432 by
+/// the same rule, applied per caller shape: the `AdminUser`-only routes
+/// (`drift.rs`, `services/drift.rs`) drop the filter exactly as this route
+/// does below; the routes that also serve non-admins (`metrics_history`,
+/// `gpu_metrics_history`, `timeline`) widen conditionally with a bound
+/// `$N::uuid IS NULL OR` predicate, mirroring `dashboard::intelligence`'s own
+/// established idiom for the same distinction. No shared predicate was
+/// introduced for servers (unlike `helpers::SITE_CALLER_PREDICATE` for
+/// sites): the two shapes above are what the codebase's own prior fixes
+/// (`intelligence`, `fleet_overview`) had already established, and a new
+/// abstraction used by none of the existing call sites would be inconsistent
+/// with both rather than an improvement on either.
 pub async fn list(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
