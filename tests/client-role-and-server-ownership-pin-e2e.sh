@@ -82,6 +82,24 @@ has() { grep -qE -- "$2" <<< "$1"; }
 # string or an ordered pair of builder calls needs the newlines gone.
 flat() { tr '\n' ' ' <<< "$1" | tr -s ' '; }
 
+# Brace depth immediately BEFORE the first occurrence of fixed-string $2 in
+# flattened body $1. Depth 1 = a top-level statement directly inside the
+# function's own opening brace, not nested in any if/for/match. A text-
+# presence-and-ordering pin (has/grep -bo) cannot tell live code from code
+# wrapped in a dead branch (`if false { ... }`) — both contain the same text
+# in the same relative order. This can: the extra `{` from the wrapper pushes
+# everything inside it to depth 2. Prints -1 if $2 is not found at all.
+depth_before() {
+  local off
+  off=$(grep -boF -- "$2" <<< "$1" | head -1 | cut -d: -f1)
+  if [ -z "$off" ]; then echo -1; return; fi
+  local prefix="${1:0:$off}"
+  local opens closes
+  opens=$(tr -cd '{' <<< "$prefix" | wc -c)
+  closes=$(tr -cd '}' <<< "$prefix" | wc -c)
+  echo $((opens - closes))
+}
+
 # A function body, bounded on ITS OWN braces.
 # ⚠ s323: a window that ends at the SUCCESSOR'S match position swallows the next
 # function's declaration, so a body inherits its neighbour's tokens. This counts
@@ -103,6 +121,7 @@ SITES=panel/backend/src/routes/sites.rs
 DASH=panel/backend/src/routes/dashboard.rs
 DRIFT=panel/backend/src/routes/drift.rs
 DRIFT_SVC=panel/backend/src/services/drift.rs
+ALERTS=panel/backend/src/routes/alerts.rs
 FILTER=panel/agent/src/services/command_filter.rs
 MONITORS=panel/backend/src/routes/monitors.rs
 RESELLER=panel/backend/src/routes/reseller_dashboard.rs
@@ -111,7 +130,7 @@ LAYOUT=panel/frontend/src/hooks/useLayoutState.ts
 SITESTSX=panel/frontend/src/pages/Sites.tsx
 DETAIL=panel/frontend/src/pages/SiteDetail.tsx
 
-for f in "$USERS" "$SERVERS" "$SITES" "$DRIFT" "$DRIFT_SVC" "$FILTER" "$MONITORS" "$RESELLER" "$AUTH" \
+for f in "$USERS" "$SERVERS" "$SITES" "$DRIFT" "$DRIFT_SVC" "$ALERTS" "$FILTER" "$MONITORS" "$RESELLER" "$AUTH" \
          "$LAYOUT" "$SITESTSX" "$DETAIL"; do
   [ -f "$f" ] || { bad "SETUP subject missing: $f"; }
 done
@@ -668,6 +687,118 @@ else
   else
     ok "L9 timeline binds only the derived tenant value, not claims.sub directly"
   fi
+fi
+
+# ── §M  alerts.rs's per-server write routes check ownership before acting (s433) ─
+# `update_server_rules`/`delete_server_rules` take `server_id` from the URL
+# with no check that the caller owns it — the opposite defect from §B/§I/§J/
+# §K/§L (those widened WHO sees fleet-wide data; this is a caller acting on a
+# server_id entirely outside its own scope). `upsert_rules`'s own existence
+# lookup (`WHERE user_id = $1 AND server_id = $2`) meant a non-owner's write
+# never touched the real owner's row — it silently INSERTed a stray second
+# row for that server_id instead (`services/drift.rs::fetch_alert_rules` had
+# to defend against exactly this stray row, §K, s432).
+
+ALERTS_SRC=$(code "$ALERTS")
+USRV=$(flat "$(fnbody "$ALERTS_SRC" "update_server_rules")")
+
+if [ -z "$USRV" ]; then
+  bad "M0 could not extract alerts::update_server_rules"
+else
+  ok "M0 alerts::update_server_rules extracted"
+  if has "$USRV" 'FROM servers WHERE id = \$1 AND user_id = \$2'; then
+    ok "M1 update_server_rules checks the caller owns server_id"
+  else
+    bad "M1 update_server_rules has no ownership check on server_id — any authenticated caller can write alert rules for a server they don't own"
+  fi
+  # M2 — ORDER. The ownership check must precede the write, or a stray row
+  # can still be created before the check ever runs.
+  CHK_AT=$(grep -bo 'FROM servers WHERE id = \$1 AND user_id = \$2' <<< "$USRV" | head -1 | cut -d: -f1)
+  UPS_AT=$(grep -bo 'upsert_rules(&state' <<< "$USRV" | head -1 | cut -d: -f1)
+  if [ -n "$CHK_AT" ] && [ -n "$UPS_AT" ] && [ "$CHK_AT" -lt "$UPS_AT" ]; then
+    ok "M2 the ownership check precedes the write"
+  else
+    bad "M2 the ownership check does not precede the write (check@${CHK_AT:-none} write@${UPS_AT:-none})"
+  fi
+  if has "$USRV" 'owns\.is_none\(\)' && has "$USRV" 'NOT_FOUND'; then
+    ok "M3 a non-owned/nonexistent server_id is rejected, not silently accepted"
+  else
+    bad "M3 update_server_rules performs the ownership lookup but never rejects on failure"
+  fi
+  # M2b — BIND ORDER for the ownership query specifically ($1=id must bind
+  # server_id, $2=user_id must bind claims.sub). Swapping the two .bind()
+  # calls leaves the pinned SQL string and M1/M2/M3 all unchanged — the
+  # query would compare $1 (id) against the CALLER's own id and $2 (user_id)
+  # against the TARGET server_id, which is not the check this claims to be.
+  BS_AT=$(grep -boF -- '.bind(server_id)' <<< "$USRV" | head -1 | cut -d: -f1)
+  BC_AT=$(grep -boF -- '.bind(claims.sub)' <<< "$USRV" | head -1 | cut -d: -f1)
+  if [ -n "$BS_AT" ] && [ -n "$BC_AT" ] && [ "$BS_AT" -lt "$BC_AT" ]; then
+    ok "M2b bind order is server_id then claims.sub, matching \$1=id \$2=user_id"
+  else
+    bad "M2b bind order is wrong or missing (server_id@${BS_AT:-none} claims.sub@${BC_AT:-none}) — \$1/\$2 would compare the wrong columns"
+  fi
+  # M2c — LIVENESS. A text-presence-and-ordering check (M1-M3, M2b) cannot
+  # tell live code from the identical text sitting inside a dead branch —
+  # `if false { <the whole ownership check> }` leaves every arm above green
+  # while the write two lines later runs completely unguarded. The wrapper's
+  # extra `{` pushes the check to depth 2; correct code has it at depth 1
+  # (a top-level statement, directly inside the function body).
+  D_CHK=$(depth_before "$USRV" 'FROM servers WHERE id = $1 AND user_id = $2')
+  if [ "$D_CHK" = "1" ]; then
+    ok "M2c the ownership check is live (depth 1 — not wrapped in a dead branch)"
+  else
+    bad "M2c the ownership check is at depth $D_CHK, not 1 — it may be wrapped in unreachable code (e.g. 'if false { ... }') while the write after it runs unconditionally"
+  fi
+fi
+
+DSRV=$(flat "$(fnbody "$ALERTS_SRC" "delete_server_rules")")
+
+if [ -z "$DSRV" ]; then
+  bad "M4 could not extract alerts::delete_server_rules"
+else
+  ok "M4 alerts::delete_server_rules extracted"
+  if has "$DSRV" 'FROM servers WHERE id = \$1 AND user_id = \$2'; then
+    ok "M5 delete_server_rules checks the caller owns server_id"
+  else
+    bad "M5 delete_server_rules has no ownership check on server_id — a request naming a server the caller doesn't own silently no-ops and still answers ok:true"
+  fi
+  CHK_AT2=$(grep -bo 'FROM servers WHERE id = \$1 AND user_id = \$2' <<< "$DSRV" | head -1 | cut -d: -f1)
+  DEL_AT2=$(grep -bo 'DELETE FROM alert_rules' <<< "$DSRV" | head -1 | cut -d: -f1)
+  if [ -n "$CHK_AT2" ] && [ -n "$DEL_AT2" ] && [ "$CHK_AT2" -lt "$DEL_AT2" ]; then
+    ok "M6 the ownership check precedes the delete"
+  else
+    bad "M6 the ownership check does not precede the delete (check@${CHK_AT2:-none} delete@${DEL_AT2:-none})"
+  fi
+  if has "$DSRV" 'owns\.is_none\(\)' && has "$DSRV" 'NOT_FOUND'; then
+    ok "M7 a non-owned/nonexistent server_id is rejected, not silently answered ok:true"
+  else
+    bad "M7 delete_server_rules performs the ownership lookup but never rejects on failure"
+  fi
+  # M6b/M6c — same bind-order and liveness checks as M2b/M2c above, applied
+  # to delete_server_rules's own ownership check.
+  BS_AT2=$(grep -boF -- '.bind(server_id)' <<< "$DSRV" | head -1 | cut -d: -f1)
+  BC_AT2=$(grep -boF -- '.bind(claims.sub)' <<< "$DSRV" | head -1 | cut -d: -f1)
+  if [ -n "$BS_AT2" ] && [ -n "$BC_AT2" ] && [ "$BS_AT2" -lt "$BC_AT2" ]; then
+    ok "M6b bind order is server_id then claims.sub, matching \$1=id \$2=user_id"
+  else
+    bad "M6b bind order is wrong or missing (server_id@${BS_AT2:-none} claims.sub@${BC_AT2:-none}) — \$1/\$2 would compare the wrong columns"
+  fi
+  D_CHK2=$(depth_before "$DSRV" 'FROM servers WHERE id = $1 AND user_id = $2')
+  if [ "$D_CHK2" = "1" ]; then
+    ok "M6c the ownership check is live (depth 1 — not wrapped in a dead branch)"
+  else
+    bad "M6c the ownership check is at depth $D_CHK2, not 1 — it may be wrapped in unreachable code (e.g. 'if false { ... }') while the delete after it runs unconditionally"
+  fi
+fi
+
+# M8 — negative control: the GLOBAL list route (no server_id in the URL) is
+# unaffected and stays scoped to the caller's own rows — this fix must not
+# have widened or narrowed it.
+GRULES=$(flat "$(fnbody "$ALERTS_SRC" "get_rules")")
+if has "$GRULES" 'WHERE user_id = \$1 ORDER BY server_id'; then
+  ok "M8 alerts::get_rules (the global list) is unchanged — still scoped to the caller's own rows"
+else
+  bad "M8 alerts::get_rules no longer matches its known shape — re-read it, this fix should not have touched it"
 fi
 
 # ── §H  context: green at BOTH tags ───────────────────────────────────────────

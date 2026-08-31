@@ -346,12 +346,49 @@ pub async fn update_rules(
 }
 
 /// PUT /api/alert-rules/{server_id} — Create or update per-server alert rules.
+///
+/// ⚠ SECURITY (s433): `server_id` comes from the URL, not from anything
+/// scoped to the caller — without an ownership check here, any authenticated
+/// user could PUT rules for a `server_id` they don't own. `upsert_rules`'s
+/// own existence lookup is `WHERE user_id = $1 AND server_id = $2`, so a
+/// non-owner's write was never actually overwriting the real owner's row —
+/// it was silently INSERTing a second, independent row for that server_id
+/// (`alert_rules` only enforces `UNIQUE(user_id, server_id)`, not
+/// `UNIQUE(server_id)`), a stray row `services/drift.rs::fetch_alert_rules`
+/// had to defend against (s432).
+///
+/// This does NOT widen for `claims.role == "admin"`, unlike the read routes
+/// s432 fixed — and that's not an inconsistency, it's a different axis
+/// entirely: a single resource resolved by a caller-supplied ID (this route,
+/// `auth::ServerScope`, `metrics.rs::server_metrics`, `servers.rs`'s own
+/// single-server writes) never widens for anyone, admin included — an
+/// account only acts on what it's the registered owner of. What widens is a
+/// FLEET-WIDE AGGREGATE with no mandatory per-resource ID (`dashboard.rs`'s
+/// `fleet_overview`/`metrics_history`/`gpu_metrics_history`/`timeline`,
+/// `drift.rs`) — there an admin legitimately needs the whole install's data
+/// in one read. `helpers::SITE_CALLER_PREDICATE`'s admin arm looks like a
+/// third case (a WRITE that DOES widen) but isn't a counterexample to either
+/// rule above — it's site-specific: a site's owner (often a `client`
+/// account) and the admin who registered the underlying SERVER are
+/// legitimately different people, which this route has no equivalent of.
 pub async fn update_server_rules(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(server_id): Path<Uuid>,
     Json(body): Json<UpdateRules>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let owns: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM servers WHERE id = $1 AND user_id = $2",
+    )
+    .bind(server_id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("check server ownership", e))?;
+    if owns.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Server not found"));
+    }
+
     upsert_rules(&state, claims.sub, Some(server_id), &body).await
 }
 
@@ -571,11 +608,32 @@ pub async fn attach_escalation_policy(
 }
 
 /// DELETE /api/alert-rules/{server_id} — Remove server-specific override.
+///
+/// ⚠ SECURITY/HONESTY (s433): the DELETE itself was already scoped
+/// `WHERE user_id = $1 AND server_id = $2`, so a non-owner could never
+/// remove the real owner's row — but with no upfront ownership check on
+/// `server_id`, a request naming a server the caller doesn't own (or that
+/// doesn't exist) matched 0 rows and still answered `{"ok": true}`, same as
+/// a real deletion. Checked the same way `update_server_rules` above now
+/// does, so this route is honest about which requests actually did
+/// something.
 pub async fn delete_server_rules(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(server_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let owns: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM servers WHERE id = $1 AND user_id = $2",
+    )
+    .bind(server_id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("check server ownership", e))?;
+    if owns.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Server not found"));
+    }
+
     sqlx::query(
         "DELETE FROM alert_rules WHERE user_id = $1 AND server_id = $2",
     )

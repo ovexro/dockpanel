@@ -4,6 +4,49 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.189.0]
+
+### Fixed — any authenticated user could write alert rules for a server they don't own
+
+`PUT /api/alert-rules/{server_id}` and `DELETE /api/alert-rules/{server_id}`
+took `server_id` straight from the URL under plain authentication, with no
+check that the caller actually owns that server. `upsert_rules`'s own
+existence lookup (`WHERE user_id = $1 AND server_id = $2`) meant a
+non-owner's write never touched the real owner's row — it silently
+inserted a *second*, independent row for that `server_id` instead, since
+`alert_rules` only enforces `UNIQUE(user_id, server_id)`, not
+`UNIQUE(server_id)`. That stray-row possibility is exactly what
+v2.188.0's `fetch_alert_rules` fix had to defend against in the drift
+report; this release closes the gap at its source instead of only
+containing its effect. The delete route had the same missing check —
+harmless to the real owner's row (its own `DELETE` was already scoped to
+the caller), but it silently answered `{"ok": true}` for a server_id the
+caller doesn't own or that doesn't exist. Both routes now check ownership
+up front (`SELECT id FROM servers WHERE id = $1 AND user_id = $2`,
+returning 404 otherwise), the same shape `metrics.rs::server_metrics`
+already uses for a path-supplied `server_id`. No frontend caller reaches
+either route today — found by an adversarial review of the previous
+release's diff, not by a user report.
+
+A second adversarial review of THIS diff, before shipping, proved the new
+regression pin was itself defeatable: wrapping the entire ownership check in
+`if false { ... }` — leaving the write completely unguarded — left every
+text-presence-and-ordering assertion green, because none of them verified
+the check was actually *live* code rather than dead code containing the same
+text. Also caught: swapping the two `.bind()` calls (`$1`/`$2` would then
+compare the wrong columns) left the pin green too. Both are now pinned
+directly — a brace-depth check that the ownership lookup sits at the
+top level of the function body, not inside a dead branch, plus an explicit
+bind-order check. The review also flagged that this fix's own reasoning
+comment, if read as a blanket "reads widen for admin, writes never do" rule,
+is an inaccurate generalization — `metrics.rs::server_metrics` is a read
+that doesn't widen, and `helpers::SITE_CALLER_PREDICATE` is a write that
+does (for sites, where the owner and the server's registering admin can
+legitimately differ). The comment now states the actual verified rule: a
+single resource resolved by a caller-supplied ID never widens for anyone,
+regardless of read or write; what widens for admin is a fleet-wide aggregate
+with no mandatory per-resource ID.
+
 ## [2.188.0]
 
 ### Fixed — six more admin views under-reported for every admin except whoever registered the servers
