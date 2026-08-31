@@ -4,6 +4,24 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.195.0]
+
+### Fixed — docker_apps.rs registry/ollama handlers had no argv-position validation
+
+`registry_login`/`registry_logout` passed the admin-supplied registry `server`
+straight into `docker login`/`docker logout` with only an emptiness check —
+a server starting with `-` is parsed by docker's own CLI as a flag in that
+position, not a registry host. Both now validate with `is_valid_image_ref`,
+the same validator already used a few hundred lines away for `change_image`'s
+`image` field. `ollama_pull_model`/`ollama_delete_model` already validated
+model-name length and character class but were missing the equivalent
+leading-`-` guard before `docker exec ... ollama pull/rm <model>`; both now
+reject a leading `-`, matching `is_valid_image_ref`'s existing behavior for
+the same threat class. All four are DiD-only (admin-authority endpoints;
+`safe_command`'s `.args()` already rules out shell injection) — named
+alongside the (now closed) `on_call`/`escalation_policies` tenant-scoping fix
+in `project_dockpanel_tech_debt_p4`'s long-standing carry list.
+
 ## [2.194.0]
 
 ### Fixed — closed the last two defense-in-depth gaps from the s436 audit round

@@ -1205,6 +1205,12 @@ async fn registry_login(
             Json(serde_json::json!({ "error": "Server and username required" })),
         ));
     }
+    if !is_valid_image_ref(&body.server) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid registry server" })),
+        ));
+    }
 
     // Pass password via stdin to avoid leaking it in process args
     use tokio::io::AsyncWriteExt;
@@ -1283,6 +1289,12 @@ async fn registry_logout(
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Server required"})),
+        ));
+    }
+    if !is_valid_image_ref(server) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid registry server"})),
         ));
     }
 
@@ -2001,7 +2013,7 @@ async fn ollama_pull_model(
     ensure_managed(&container_id).await?;
 
     let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("").trim();
-    if model.is_empty() || model.len() > 200 {
+    if model.is_empty() || model.len() > 200 || model.starts_with('-') {
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid model name" }))));
     }
 
@@ -2042,7 +2054,7 @@ async fn ollama_delete_model(
     ensure_managed(&container_id).await?;
 
     let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("").trim();
-    if model.is_empty() || model.len() > 200 {
+    if model.is_empty() || model.len() > 200 || model.starts_with('-') {
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid model name" }))));
     }
     if !model.chars().all(|c| c.is_alphanumeric() || "-_:/.".contains(c)) {
