@@ -80,6 +80,22 @@ pub const ASSIGNABLE_ROLES: [&str; 4] = ["admin", "reseller", "user", "client"];
 /// which is the same guarantee by a different route.
 const ASSIGNABLE_ROLES_MSG: &str = "Role must be one of: admin, reseller, user, client";
 
+/// True when `target` is another administrator — the caller's peer, not their
+/// subordinate. `AdminUser` below is a role check ONLY, so without this every
+/// two admin accounts on the same install are fully interchangeable: reset
+/// each other's password, strip each other's 2FA-recovering password (see
+/// `reset_password`), or delete each other and inherit their entire server
+/// fleet (`remove`'s `UPDATE servers SET user_id = ...` below). Multiple
+/// administrators is a live, supported configuration, not a hypothetical one
+/// — `docs/guides/roles-and-ownership.md` describes a per-admin hardware
+/// boundary for sites ("does not extend to a machine another administrator
+/// added"), and `534dc51`/v2.185.0 fixed a second-admin-visibility bug
+/// elsewhere in this arc. `list`/`create` are deliberately untouched: seeing
+/// the directory or minting a new account doesn't hand over an existing one.
+fn is_other_admin(target_role: &str, target_id: Uuid, caller_id: Uuid) -> bool {
+    target_role == "admin" && target_id != caller_id
+}
+
 
 /// POST /api/users — Create a new user (admin only).
 pub async fn create(
@@ -203,6 +219,13 @@ pub async fn update(
         .map_err(|e| internal_error("update users", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
 
+    if is_other_admin(&_user.role, id, claims.sub) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "Cannot modify another administrator's account",
+        ));
+    }
+
     if let Some(ref role) = body.role {
         if !ASSIGNABLE_ROLES.contains(&role.as_str()) {
             return Err(err(StatusCode::BAD_REQUEST, ASSIGNABLE_ROLES_MSG));
@@ -309,6 +332,13 @@ pub async fn toggle_suspend(
         .map_err(|e| internal_error("toggle_suspend", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
 
+    if is_other_admin(&user.role, id, claims.sub) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "Cannot suspend another administrator's account",
+        ));
+    }
+
     // Both arms write the role themselves, in one statement each, so the stash and
     // the status can never come apart.
     //
@@ -391,6 +421,13 @@ pub async fn reset_password(
         .map_err(|e| internal_error("reset_password", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
 
+    if is_other_admin(&user.role, id, claims.sub) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "Cannot reset another administrator's password",
+        ));
+    }
+
     // Hash new password with Argon2
     let salt = SaltString::generate(&mut OsRng);
     let hash = Argon2::default()
@@ -438,12 +475,14 @@ pub async fn reset_password(
 /// authenticator is the case this route cannot serve, and the security-hardening
 /// guide states that limit outright rather than papering over it.
 ///
-/// ⚠ An administrator CAN reset another administrator's 2FA. That is not an
-/// escalation across a privilege boundary: `admin` is already the top role, it
-/// already has `reset_password` on every account, and the panel already grants it
-/// a root terminal on the box. Refusing here would only remove the recovery path
-/// from the accounts most likely to need it, while leaving the DB route open. It
-/// is logged as its own action so it is never silent.
+/// ⚠ An administrator CAN reset another administrator's 2FA — deliberately left
+/// outside `is_other_admin`, unlike `update`/`reset_password`/`remove`/
+/// `toggle_suspend` below. Clearing a factor does not by itself grant sign-in
+/// (the password is untouched), so it is not the same class as those four,
+/// which do hand over full control of the target account. It is logged as its
+/// own action so it is never silent, and it remains the only recovery path for
+/// an administrator who has lost both their authenticator and their recovery
+/// codes (see the doc comment above).
 pub async fn reset_2fa(
     State(state): State<AppState>,
     AdminUser(claims): AdminUser,
@@ -514,6 +553,13 @@ pub async fn remove(
         .await
         .map_err(|e| internal_error("remove users", e))?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "User not found"))?;
+
+    if is_other_admin(&user.role, id, claims.sub) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "Cannot delete another administrator's account",
+        ));
+    }
 
     // Revoke the user's live token(s) BEFORE deletion — otherwise the stateless JWT
     // keeps authenticating as a now-nonexistent principal until it expires.

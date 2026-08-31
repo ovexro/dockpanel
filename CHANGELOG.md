@@ -4,6 +4,32 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.196.0]
+
+### Fixed — one admin could take over another administrator's account and inherit their entire server fleet
+
+Every mutation in `routes/users.rs` was gated on `AdminUser` alone (a role
+check, nothing else), so any two administrator accounts on the same install
+were fully interchangeable: `reset_password` and `update`'s password branch
+could set another admin's password with no code or consent from them,
+`remove` deleted a peer admin and auto-transferred every server they had
+registered to the caller in the same transaction, and `toggle_suspend` could
+lock a peer admin out unilaterally. Multiple administrators is a real,
+supported configuration — `docs/guides/roles-and-ownership.md` already
+describes a per-admin hardware boundary for sites ("does not extend to a
+machine another administrator added"), and v2.185.0 fixed a second-admin
+visibility bug elsewhere in this same arc. A new `is_other_admin` guard now
+blocks `update`, `reset_password`, `remove` and `toggle_suspend` from acting
+on any account whose current role is `admin`, other than the caller's own.
+`list`, `create` and `reset_2fa` are unchanged: listing the directory or
+minting a new account can't hand over an existing one, and clearing a 2FA
+factor doesn't by itself grant sign-in — it remains the only recovery path
+for an administrator who has lost both their authenticator and their
+recovery codes. Found by a `dockpanel-fanout` completeness-critic pass while
+auditing sibling tenant-scoping fixes from the same arc; not currently
+exploitable on demo.dockpanel.dev (only one admin account exists there
+today).
+
 ## [2.195.0]
 
 ### Fixed — docker_apps.rs registry/ollama handlers had no argv-position validation
