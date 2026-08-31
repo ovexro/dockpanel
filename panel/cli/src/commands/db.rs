@@ -72,13 +72,15 @@ pub async fn cmd_db_create(
     token: &str,
     name: &str,
     engine: &str,
-    password: &str,
+    password: Option<String>,
+    password_stdin: bool,
     port: u16,
 ) -> Result<(), String> {
     match engine {
         "mysql" | "mariadb" | "postgres" => {}
         _ => return Err(format!("Invalid engine '{engine}'. Use: mysql, mariadb, or postgres")),
     }
+    let password = crate::commands::resolve_password(password, password_stdin, "Root/admin password: ")?;
 
     println!("Creating {engine} database '{name}' on port {port}...");
     let body = json!({

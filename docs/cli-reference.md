@@ -145,15 +145,24 @@ dockpanel db -f analytics
 Create a new database in a Docker container.
 
 ```bash
-dockpanel db create blog_db --engine mysql --password "s3cureP@ss" --port 3307
+# Prefer --password-stdin — a bare --password is visible to other local
+# users via `ps`/`/proc` for the life of the process and lands in shell
+# history.
+echo -n "s3cureP@ss" | dockpanel db create blog_db --engine mysql --password-stdin --port 3307
+
+# Or omit both --password and --password-stdin for an interactive, masked prompt.
+dockpanel db create blog_db --engine mysql --port 3307
 ```
 
 | Argument | Required | Description |
 |----------|----------|-------------|
 | `NAME` | Yes | Database name |
 | `--engine` | Yes | Engine: `mysql`, `mariadb`, or `postgres` |
-| `--password` | Yes | Root/admin password |
+| `--password` | No | Root/admin password. Discouraged — visible via shell history and `ps`. |
+| `--password-stdin` | No | Read the root/admin password from stdin instead |
 | `--port` | Yes | Host port to expose |
+
+If neither `--password` nor `--password-stdin` is given, the CLI prompts interactively.
 
 ```
 Database created: blog_db

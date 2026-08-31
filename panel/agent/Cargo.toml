@@ -1,6 +1,6 @@
 [package]
 name = "dockpanel-agent"
-version = "2.196.0"
+version = "2.197.0"
 license = "AGPL-3.0-only"
 edition = "2024"
 
@@ -33,6 +33,7 @@ rustls-pemfile = "2"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 rcgen = "0.14"
 sha2 = "0.10"
+hmac = "0.12"
 subtle = "2"
 hex = "0.4"
 base64 = "0.22"

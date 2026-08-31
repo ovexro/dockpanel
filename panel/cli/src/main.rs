@@ -159,9 +159,15 @@ enum DbCmd {
         /// Engine: mysql, mariadb, or postgres
         #[arg(long)]
         engine: String,
-        /// Root/admin password
+        /// Root/admin password. Prefer --password-stdin or the interactive
+        /// prompt — a value given here is visible to other local users via
+        /// `ps`/`/proc` for the life of the process and lands in shell history.
+        #[arg(long, conflicts_with = "password_stdin")]
+        password: Option<String>,
+        /// Read the root/admin password from stdin (one line) instead of
+        /// passing it on the command line.
         #[arg(long)]
-        password: String,
+        password_stdin: bool,
         /// Host port
         #[arg(long)]
         port: u16,
@@ -291,9 +297,15 @@ enum BackupCmd {
         /// Database user
         #[arg(long, default_value = "root")]
         user: String,
-        /// Database password
+        /// Database password. Prefer --password-stdin or the interactive
+        /// prompt — a value given here is visible to other local users via
+        /// `ps`/`/proc` for the life of the process and lands in shell history.
+        #[arg(long, conflicts_with = "password_stdin")]
+        password: Option<String>,
+        /// Read the database password from stdin (one line) instead of
+        /// passing it on the command line.
         #[arg(long)]
-        password: String,
+        password_stdin: bool,
     },
     /// List database backups
     DbList {
@@ -409,8 +421,9 @@ async fn main() {
                 name,
                 engine,
                 password,
+                password_stdin,
                 port,
-            }) => commands::db::cmd_db_create(&token, &name, &engine, &password, port).await,
+            }) => commands::db::cmd_db_create(&token, &name, &engine, password, password_stdin, port).await,
             Some(DbCmd::Delete { container_id }) => commands::db::cmd_db_delete(&token, &container_id).await,
         },
         Commands::Apps { filter, command } => match command {
@@ -450,8 +463,8 @@ async fn main() {
             BackupCmd::Delete { domain, filename } => {
                 commands::backup::cmd_backup_delete(&token, &domain, &filename).await
             }
-            BackupCmd::DbCreate { container, db_name, db_type, user, password } => {
-                commands::backup::cmd_db_backup_create(&token, &container, &db_name, &db_type, &user, &password).await
+            BackupCmd::DbCreate { container, db_name, db_type, user, password, password_stdin } => {
+                commands::backup::cmd_db_backup_create(&token, &container, &db_name, &db_type, &user, password, password_stdin).await
             }
             BackupCmd::DbList { db_name } => {
                 commands::backup::cmd_db_backup_list(&token, &db_name, &output).await

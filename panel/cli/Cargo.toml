@@ -1,6 +1,6 @@
 [package]
 name = "dockpanel"
-version = "2.196.0"
+version = "2.197.0"
 license = "AGPL-3.0-only"
 edition = "2024"
 description = "CLI for DockPanel — self-hosted server management"
@@ -21,3 +21,4 @@ tokio = { version = "1", features = ["full", "net"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
+rpassword = "7"

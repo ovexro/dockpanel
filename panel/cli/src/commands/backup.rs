@@ -127,8 +127,10 @@ pub async fn cmd_backup_delete(token: &str, domain: &str, filename: &str) -> Res
 }
 
 pub async fn cmd_db_backup_create(
-    token: &str, container: &str, db_name: &str, db_type: &str, user: &str, password: &str,
+    token: &str, container: &str, db_name: &str, db_type: &str, user: &str,
+    password: Option<String>, password_stdin: bool,
 ) -> Result<(), String> {
+    let password = crate::commands::resolve_password(password, password_stdin, "Database password: ")?;
     println!("Creating {db_type} backup for {db_name}...");
 
     let body = serde_json::json!({

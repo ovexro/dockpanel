@@ -1,6 +1,6 @@
 # Backup Orchestrator Guide
 
-The Backup Orchestrator provides centralized backup management for all databases and Docker volumes on your server. It supports AES-256-GCM encryption, automated policies, restore verification, and a health dashboard.
+The Backup Orchestrator provides centralized backup management for all databases and Docker volumes on your server. It supports AES-256 encryption, automated policies, restore verification, and a health dashboard.
 
 ## Overview
 
@@ -162,7 +162,14 @@ A policy with no destination writes its archives to this server's own disk and n
 
 When encryption is enabled, for the database dumps it covers:
 
-- **Algorithm**: AES-256-GCM
+- **Algorithm**: AES-256-CBC with PBKDF2 (100,000 iterations), then an
+  HMAC-SHA256 tag over the ciphertext (encrypt-then-MAC) so a corrupted or
+  tampered backup is rejected before it is ever decrypted, rather than
+  decrypting silently into wrong bytes. The MAC key is derived from the same
+  backup passphrase via a domain-separated HMAC, independent of the key
+  `openssl` derives for encryption itself. A backup encrypted before this
+  scheme shipped has no tag and is still decrypted, unauthenticated, for
+  backward compatibility.
 - **Key management**: Keys are stored encrypted in the panel database
 - Encrypted backups have a `.enc` extension
 - Decryption happens automatically during restore and verification

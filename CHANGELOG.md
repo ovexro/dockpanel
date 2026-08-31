@@ -4,6 +4,46 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.197.0]
+
+### Fixed — backup encryption had no integrity check; DB passwords could be typed as plaintext CLI arguments
+
+Two defense-in-depth gaps deferred from the v2.196.0 audit round, closed
+this session:
+
+`panel/agent/src/services/encryption.rs` encrypted database backups with
+AES-256-CBC and nothing else (CWE-353). PKCS7 padding bounds only the final
+ciphertext block, so a bit-flip anywhere earlier decrypted silently into
+corrupted plaintext instead of failing — a backup that looked fine and
+imported wrong, or not at all, with no signal pointing at corruption.
+`openssl enc` on this project's target OpenSSL (3.0+) refuses AEAD ciphers
+outright ("AEAD ciphers not supported"), so GCM was never an option here
+despite `docs/guides/backup-orchestrator.md` having claimed it for some
+time. Fixed with encrypt-then-MAC: `encrypt_file` now appends a 32-byte
+HMAC-SHA256 tag over the ciphertext, keyed by a passphrase-derived subkey
+independent of the AES key `openssl -pbkdf2` derives internally.
+`decrypt_file` verifies that tag *before* the ciphertext is ever handed to
+openssl, so a corrupted or tampered backup is rejected outright rather than
+decrypted into wrong bytes. A backup encrypted before this fix has no tag;
+it is detected by the trailer's absence and still decrypts, unauthenticated,
+for backward compatibility.
+
+`dockpanel db create` and `dockpanel backup db-create` took the database's
+root/admin password as a required `--password <VALUE>` clap flag (CWE-214):
+visible to any local user via `ps`/`/proc/<pid>/cmdline` for the life of the
+process, and left behind in shell history. `--password` still works
+(existing scripts keep working), but a new `--password-stdin` reads the
+value from stdin instead, and when neither flag is given the CLI now
+prompts interactively with masked input.
+
+New pin suites `tests/backup-encryption-integrity-pin-e2e.sh` (18
+assertions, including a live round trip against the real `openssl` binary
+proving the tamper-detection actually catches a flipped ciphertext byte) and
+`tests/cli-password-args-pin-e2e.sh` (18 assertions). Both mutation-tested:
+a full revert turns every non-control arm red, and every position arm was
+independently defeated by a targeted decoy mutation to confirm it measures
+ordering, not just presence.
+
 ## [2.196.0]
 
 ### Fixed — one admin could take over another administrator's account and inherit their entire server fleet
