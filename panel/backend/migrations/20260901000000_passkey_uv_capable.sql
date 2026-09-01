@@ -1,0 +1,21 @@
+-- Track whether a passkey credential demonstrated WebAuthn User Verification
+-- (the UV bit, 0x04 in authenticatorData flags) at its OWN registration
+-- ceremony, so login can require it back from that same credential.
+--
+-- Without this, passkey login was possession-only: `auth_complete` never read
+-- the UV bit at all, so a passkey that never demonstrated a PIN/biometric
+-- check still minted a full session — and that session is issued WITHOUT the
+-- separate 2FA step (`auth_complete`'s own comment: "the passkey IS the
+-- strong second factor"). Physical possession of an unlocked or PIN-less
+-- roaming key was therefore a complete bypass of both factors at once.
+--
+-- Enforcing UV retroactively at the login door — for every credential,
+-- unconditionally — would lock out every already-enrolled PIN-less roaming
+-- key on every install, with no way to tell which ones could ever satisfy it.
+-- This column is the grandfathering mechanism: DEFAULT FALSE so every
+-- existing row (registered before this column existed, when nothing recorded
+-- what the authenticator did) stays enforced-off, exactly as it behaves
+-- today. Only a credential whose OWN registration ceremony is later re-read
+-- and found to carry the UV bit gets `TRUE`, and only THAT credential's
+-- future logins are required to carry it again.
+ALTER TABLE passkeys ADD COLUMN uv_capable BOOLEAN NOT NULL DEFAULT FALSE;

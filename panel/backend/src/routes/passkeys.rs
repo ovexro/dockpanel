@@ -556,6 +556,15 @@ pub async fn register_complete(
         auth_data_bytes[35], auth_data_bytes[36],
     ]) as i64;
 
+    // Whether THIS ceremony's authenticator performed user verification (PIN,
+    // fingerprint, face) rather than merely user presence (a touch). Recorded
+    // once, here, because UV is a property of the ceremony — nothing else
+    // this row holds can answer it later. `auth_complete` re-checks this bit
+    // on every future login for this credential, but ONLY if it's `true`
+    // here: see the migration and `auth_complete` for the grandfathering
+    // reasoning.
+    let uv_capable = (flags & 0x04) != 0;
+
     let cred_id_b64 = URL_SAFE_NO_PAD.encode(&credential_id);
     let aaguid_hex = hex::encode(aaguid);
     let transports = body.transports.as_ref().map(|t| t.join(","));
@@ -573,8 +582,8 @@ pub async fn register_complete(
 
     // Store passkey
     let passkey_id: (uuid::Uuid,) = sqlx::query_as(
-        "INSERT INTO passkeys (user_id, credential_id, public_key_cbor, sign_count, name, transports, aaguid) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"
+        "INSERT INTO passkeys (user_id, credential_id, public_key_cbor, sign_count, name, transports, aaguid, uv_capable) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id"
     )
     .bind(claims.sub)
     .bind(&cred_id_b64)
@@ -583,6 +592,7 @@ pub async fn register_complete(
     .bind(name)
     .bind(&transports)
     .bind(&aaguid_hex)
+    .bind(uv_capable)
     .fetch_one(&state.db)
     .await
     .map_err(|e| internal_error("store passkey", e))?;
@@ -729,15 +739,15 @@ pub async fn auth_complete(
 
     // Look up the credential
     let cred_id_b64 = &body.id;
-    let passkey: Option<(uuid::Uuid, uuid::Uuid, Vec<u8>, i64)> = sqlx::query_as(
-        "SELECT id, user_id, public_key_cbor, sign_count FROM passkeys WHERE credential_id = $1"
+    let passkey: Option<(uuid::Uuid, uuid::Uuid, Vec<u8>, i64, bool)> = sqlx::query_as(
+        "SELECT id, user_id, public_key_cbor, sign_count, uv_capable FROM passkeys WHERE credential_id = $1"
     )
     .bind(cred_id_b64)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| internal_error("passkey lookup", e))?;
 
-    let (passkey_id, user_id, cose_key_cbor, stored_count) = passkey
+    let (passkey_id, user_id, cose_key_cbor, stored_count, uv_capable) = passkey
         .ok_or_else(|| {
             // Record failed attempt
             if let Ok(mut map) = state.login_attempts.lock() {
@@ -792,6 +802,50 @@ pub async fn auth_complete(
             }
             err(StatusCode::UNAUTHORIZED, "Signature verification failed")
         })?;
+
+    // Require user verification back from any credential that proved it could
+    // give one. Deliberately AFTER the signature verify, for the same reason
+    // the counter check below is: `flags` lives inside `auth_data_bytes`, which
+    // is exactly what the signature covers, so trusting the UV bit before the
+    // signature is checked would let an attacker learn this credential's UV
+    // requirement from forged, unauthenticated assertions.
+    //
+    // `uv_capable` is read from the credential's OWN registration ceremony
+    // (`register_complete`), never assumed — a credential registered before
+    // this column existed, or one whose authenticator never demonstrated a
+    // PIN/biometric check at enrolment, has `uv_capable = false` and is left
+    // exactly as possession-only as it always was. This is the grandfathering
+    // the migration comment describes: nothing that worked yesterday stops
+    // working today, and only a credential that has ALREADY proven it can
+    // verify its holder is now asked to prove it again.
+    if uv_capable && (flags & 0x04) == 0 {
+        tracing::warn!("Passkey UV requirement not met for credential {cred_id_b64}");
+
+        if let Ok(mut map) = state.login_attempts.lock() {
+            map.entry(ip.clone()).or_default().push(Instant::now());
+        }
+
+        let actor_email: Option<String> = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+        crate::services::security_hardening::audit_log(
+            &state.db,
+            "passkey.uv_not_provided",
+            actor_email.as_deref(),
+            Some(&ip),
+            Some("passkey"),
+            Some(cred_id_b64),
+            None,
+            None,
+            "warning",
+        )
+        .await;
+
+        return Err(err(StatusCode::UNAUTHORIZED, "This passkey requires verification (PIN, fingerprint, or face) that wasn't provided"));
+    }
 
     // Check sign counter (anti-cloning) — deliberately AFTER the signature, which
     // is where WebAuthn L2 §7.2 puts it and what makes this refusal mean anything.
@@ -883,7 +937,12 @@ pub async fn auth_complete(
         attempts.remove(&ip);
     }
 
-    // Passkey login bypasses 2FA (the passkey IS the strong second factor)
+    // Passkey login skips the separate TOTP step (the passkey IS the second
+    // factor) — but as of `uv_capable`, that claim is now enforced rather than
+    // assumed: a credential that has proven it can perform user verification
+    // must present it again on every login (the check above), and only a
+    // possession-only credential (never proven UV-capable) still logs in on
+    // presence alone, same as before this fix.
     let (_token, cookie, jti) = super::auth::issue_session_pub(&state, &user, &headers)?;
 
     // Record session
@@ -929,22 +988,23 @@ pub async fn list_passkeys(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let passkeys: Vec<(uuid::Uuid, String, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>)> =
+    let passkeys: Vec<(uuid::Uuid, String, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>, bool)> =
         sqlx::query_as(
-            "SELECT id, name, transports, aaguid, created_at FROM passkeys WHERE user_id = $1 ORDER BY created_at"
+            "SELECT id, name, transports, aaguid, created_at, uv_capable FROM passkeys WHERE user_id = $1 ORDER BY created_at"
         )
         .bind(claims.sub)
         .fetch_all(&state.db)
         .await
         .map_err(|e| internal_error("list passkeys", e))?;
 
-    let items: Vec<serde_json::Value> = passkeys.iter().map(|(id, name, transports, aaguid, created)| {
+    let items: Vec<serde_json::Value> = passkeys.iter().map(|(id, name, transports, aaguid, created, uv_capable)| {
         serde_json::json!({
             "id": id,
             "name": name,
             "transports": transports,
             "aaguid": aaguid,
             "created_at": created,
+            "uvCapable": uv_capable,
         })
     }).collect();
 

@@ -25,6 +25,7 @@ interface Passkey {
   id: string;
   name: string;
   created_at: string;
+  uvCapable: boolean;
 }
 
 interface ApiKey {
@@ -386,7 +387,14 @@ export function PasskeysCard() {
                         <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
                       </svg>
                       <div>
-                        <p className="text-sm text-dark-100">{pk.name}</p>
+                        <p className="text-sm text-dark-100 flex items-center gap-1.5">
+                          {pk.name}
+                          {pk.uvCapable ? (
+                            <span title="This key requires a PIN, fingerprint, or face to sign in — it counts as a full second factor." className="px-1.5 py-0.5 bg-rust-500/10 text-rust-400 rounded text-[10px] font-medium">Verified</span>
+                          ) : (
+                            <span title="This key signs in on presence alone (no PIN/biometric was recorded). Re-register with a security key that supports verification for stronger protection." className="px-1.5 py-0.5 bg-dark-600 text-dark-300 rounded text-[10px] font-medium">Possession-only</span>
+                          )}
+                        </p>
                         <p className="text-xs text-dark-400">Added {new Date(pk.created_at).toLocaleDateString()}</p>
                       </div>
                     </div>

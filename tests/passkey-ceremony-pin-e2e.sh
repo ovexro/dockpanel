@@ -55,19 +55,20 @@
 #   §G  CONTEXT — arms green at BOTH tags, so a harness measuring nothing cannot
 #       read as a pass. Each owes its own mutation.
 #
-# ⚠ NOT SHIPPED, DELIBERATELY, and G4 pins the non-ship: a user-verification
-# requirement. The UV bit (0x04) is still never tested, so a passkey remains
-# possession-only while passkey login deliberately skips 2FA. It is NOT fixed
-# here because UV is a property of the CEREMONY, not of the credential — nothing
-# recorded at registration binds a later assertion — so enforcing it at the
-# enrolment door protects nothing, and enforcing it at the login door is
-# RETROACTIVE: every already-enrolled credential on a PIN-less roaming key stops
-# working, on every install, with no column to grandfather from. That needs a
-# `uv` column populated at registration and a virtual-authenticator harness to
-# prove the flip, which is a ship of its own.
+# ⚠ s443: §G4 pinned a deliberate NON-ship for many sessions — the UV bit
+# (0x04) was never tested, so a passkey was possession-only while passkey
+# login skipped 2FA. That gap is CLOSED as of s443: a new `uv_capable` column
+# is populated at registration from the ceremony's own UV bit, and
+# `auth_complete` now requires that bit back on every future login — but ONLY
+# from a credential that proved it could give one. G4 below pins the
+# ENFORCEMENT now; §I pins the storage + grandfathering it depends on. See
+# `panel/backend/src/bin/passkey_virtual_authenticator.rs` +
+# `tests/passkey-uv-enforcement-e2e.sh` for the live end-to-end proof this
+# source-only file cannot give.
 #
 # RUN AGAINST v2.85.0: the §G arms are green by design and each was killed by its
-# own mutation. Everything else is RED there.
+# own mutation. Everything else is RED there. §G4 and §I are s443 additions —
+# RED before that ship, by construction.
 
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
@@ -325,14 +326,80 @@ else
   bad "G3 door(s) stopped comparing the RP ID hash:$RP_MISSING"
 fi
 
-# G4 — THE DELIBERATE NON-SHIP. The UV bit is still unchecked and passkey login
-# still skips 2FA. Pinned so the next reader finds the reasoning attached to the
-# fact rather than "helpfully" flipping the literal, which is retroactive and
-# locks out every PIN-less roaming key already enrolled.
-if hasf "$AUTH_BODY" 'issue_session_pub' && ! has "$PK_C" 'flags & 0x04'; then
-  ok "G4 (context) UV is still unverified and passkey login still skips 2FA — deliberate, see the header; needs a uv column + a virtual-authenticator harness"
+# G4 — s443: the UV bit is now checked in auth_complete, conditioned on the
+# credential's OWN uv_capable column (never unconditional — that would be the
+# retroactive lockout the header describes G4 used to pin the ABSENCE of).
+if hasf "$AUTH_BODY" 'uv_capable && (flags & 0x04) == 0'; then
+  ok "G4 (context) auth_complete requires UV back, but only from a credential gated on its own uv_capable value — not unconditionally"
 else
-  bad "G4 the UV posture changed without this pin being updated — if a UV check landed, it needs a grandfathering column or it locks out enrolled PIN-less keys"
+  bad "G4 the UV enforcement branch is missing or no longer conditioned on uv_capable — either the check regressed, or it went back to unconditional (which locks out every possession-only key)"
+fi
+
+echo
+echo "── §I passkey UV enforcement is stored, ordered, and grandfathered (s443) ──"
+
+if grep -qF 'ADD COLUMN uv_capable BOOLEAN NOT NULL DEFAULT FALSE' panel/backend/migrations/*.sql 2>/dev/null; then
+  ok "I1 a migration adds uv_capable, defaulting FALSE — every pre-existing row is grandfathered as unenforced"
+else
+  bad "I1 no migration adds 'uv_capable BOOLEAN NOT NULL DEFAULT FALSE' — without a FALSE default, existing possession-only credentials would be enforced retroactively"
+fi
+
+if hasf "$REG_BODY" 'let uv_capable = (flags & 0x04) != 0;'; then
+  ok "I2 register_complete derives uv_capable from the SAME ceremony's own UV bit, not assumed"
+else
+  bad "I2 register_complete no longer computes uv_capable from the registration ceremony's flags"
+fi
+
+if hasf "$PK_C" 'INSERT INTO passkeys (user_id, credential_id, public_key_cbor, sign_count, name, transports, aaguid, uv_capable)'; then
+  ok "I3 the INSERT persists uv_capable alongside the rest of the credential row"
+else
+  bad "I3 the passkeys INSERT no longer stores uv_capable — I2's derived value has nowhere to land"
+fi
+
+if hasf "$PK_C" 'SELECT id, user_id, public_key_cbor, sign_count, uv_capable FROM passkeys WHERE credential_id = $1'; then
+  ok "I4 auth_complete's own credential lookup reads uv_capable back — the enforcement branch has a real value to check, not a default"
+else
+  bad "I4 auth_complete's SELECT no longer fetches uv_capable — G4's condition would read an undeclared or defaulted value"
+fi
+
+# I5 — ORDER. Reusing §B's landmark technique: the UV check must run AFTER the
+# signature verify, for the identical reason the counter check does (the flags
+# byte lives inside auth_data_bytes, which the signature covers — trusting it
+# before verification lets an attacker learn a credential's UV requirement from
+# a forged, unauthenticated assertion).
+UV_LN=$(grep -n 'uv_capable && (flags & 0x04) == 0' <<< "$AUTH_BODY" | head -1 | cut -d: -f1)
+if [ -n "$VERIFY_LN" ] && [ -n "$UV_LN" ] && [ "$UV_LN" -gt "$VERIFY_LN" ]; then
+  ok "I5 the UV requirement is checked AFTER signature verification (verify at +${VERIFY_LN}, UV check at +${UV_LN})"
+else
+  bad "I5 could not confirm the UV check runs after signature verification (verify=${VERIFY_LN:-missing}, UV=${UV_LN:-missing}) — checking it earlier leaks the requirement to an unauthenticated caller"
+fi
+
+# I6 — the refusal costs the caller something, matching §B3's precedent for the
+# clone-check branch, and does NOT route through the panel-wide lockout trigger.
+UVB=$(awk '/uv_capable && \(flags & 0x04\) == 0/{f=1} f{print} f&&/^    }$/{exit}' <<< "$AUTH_BODY")
+if [ -n "$UVB" ] && hasf "$UVB" 'login_attempts' && hasf "$UVB" 'security_hardening::audit_log' && ! hasf "$UVB" 'record_suspicious_event'; then
+  ok "I6 a UV-not-provided refusal records a login attempt and an audit row, without routing through record_suspicious_event"
+else
+  bad "I6 the UV-refusal branch is missing the login-attempt record, the audit row, or wrongly routes through record_suspicious_event (which auto-locks the panel at 5 events in 10 minutes)"
+fi
+
+# I7 — CONTEXT, the deliberate non-change. register_begin's own hint stays
+# "preferred": forcing "required" would fail registration outright for any
+# PIN-less roaming key, closing the documented sole-admin recovery path
+# (require_enrolment_proof's own doc comment) that this whole file exists to
+# protect. UV is captured from whatever the authenticator actually did, never
+# demanded at enrolment time.
+RB=$(fnbody "$PK_C" "register_begin")
+if [ -n "$RB" ] && hasf "$RB" 'user_verification: "preferred"' && ! hasf "$RB" 'user_verification: "required"'; then
+  ok "I7 (context) register_begin still only PREFERS user verification — deliberate, see the header; demanding it would break PIN-less-key recovery"
+else
+  bad "I7 register_begin's user_verification hint changed — if it now REQUIRES UV, PIN-less roaming keys can no longer enrol at all, including the documented sole-admin recovery path"
+fi
+
+if hasf "$PK_C" '"uvCapable": uv_capable,'; then
+  ok "I8 list_passkeys exposes uv_capable to the account owner, so a possession-only key is visible as such rather than a hidden distinction"
+else
+  bad "I8 list_passkeys no longer reports uv_capable — the account owner has no way to tell a verified key from a possession-only one"
 fi
 
 echo

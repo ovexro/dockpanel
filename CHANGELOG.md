@@ -4,6 +4,66 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.199.0]
+
+### Security — passkey login now enforces user verification, for any credential that ever proved it could give one
+
+Passkey sign-in has always skipped the separate TOTP step (the passkey *is*
+the second factor) — but nothing checked whether the passkey ceremony itself
+had actually verified its holder. WebAuthn's User Verification (UV) bit
+distinguishes a PIN/fingerprint/face check from mere presence (a touch), and
+`auth_complete` never read it. A physical security key with no PIN set, or
+one simply borrowed for a moment, was a complete bypass of both factors at
+once: possession alone minted a full session.
+
+Fixing this at the login door unconditionally would have been retroactive —
+locking out every already-enrolled PIN-less roaming key on every install,
+with no way to tell which ones could ever satisfy it. Instead: a new
+`uv_capable` column on `passkeys` (migration
+`20260901000000_passkey_uv_capable.sql`, `DEFAULT FALSE`) records, once, at
+registration, whether that ceremony's own authenticator performed
+verification. `auth_complete` now requires the UV bit back on every future
+login for that credential — but *only* for a credential whose `uv_capable`
+is `true`. Every pre-existing row, and every authenticator that has never
+demonstrated verification, keeps working exactly as before: this is a
+per-credential guarantee, not an account-wide switch, and nothing already
+enrolled is newly locked out. `register_begin`'s WebAuthn hint deliberately
+stays `user_verification: "preferred"` rather than `"required"` — forcing it
+would fail registration outright for a PIN-less key, closing the documented
+sole-administrator recovery path (`docs/guides/security-hardening.md`'s own
+"register a passkey" advice) this exists to protect.
+
+The UV check runs after signature verification, for the same reason the
+existing clone-counter check does: the flags byte is covered by the
+signature, so trusting it earlier would let an attacker learn a credential's
+verification requirement from a forged, unauthenticated assertion. A
+refusal records a login attempt and an audit row (`passkey.uv_not_provided`),
+without routing through the panel-wide lockout trigger.
+
+**My Account** now shows each passkey as **Verified** or **Possession-only**
+(`list_passkeys` returns `uvCapable`), so an account owner can see which of
+their keys carry the stronger guarantee and re-register a possession-only
+one if they want it.
+
+New: `panel/backend/src/bin/passkey_virtual_authenticator.rs`, a standalone
+WebAuthn client+authenticator (independent of the server's own code — real
+P-256 keys, hand-built CBOR/authenticatorData, real ECDSA signatures) that
+drives the actual HTTP ceremony end to end against a live instance, proving
+the enforcement and the grandfathering both hold. Run via
+`tests/passkey-uv-enforcement-e2e.sh` (a new EXECUTE-class suite, alongside
+`nginx-headers-pin-e2e.sh`/`update-rollback-pin-e2e.sh` — needs a live box,
+not pure source analysis; cleans up every credential it plants regardless of
+outcome).
+
+`tests/passkey-ceremony-pin-e2e.sh` grows a new §I (8 assertions: the
+migration, the derivation, storage, retrieval, check ordering, the refusal's
+side effects, the deliberate non-change to `register_begin`'s hint, and
+`list_passkeys` exposing the new field) and §G4 flips from pinning the
+absence of enforcement to pinning its presence — 26 → 34 assertions. All
+new/changed arms verified via full revert (source stashed, all correctly
+went red) and, for the two absence/context arms, a targeted decoy mutation
+confirming each fires in isolation.
+
 ## [2.198.1]
 
 ### Fixed — Dashboard: Updates tile not clickable, Active Issues width, dot/text misalignment

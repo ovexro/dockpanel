@@ -302,11 +302,12 @@ echo "── S4 every test runs somewhere, or is exempt by name ──"
 # below with the reason it cannot run in CI.
 
 # The suites that genuinely need a provisioned box: seven take `<host> [port]`
-# and drive a remote install, two dial a live panel on 127.0.0.1:3080. None can
-# run on a bare runner and none is a regression pin.
+# and drive a remote install, three dial a live panel on 127.0.0.1:3080. None
+# can run on a bare runner and none is a regression pin.
 EXEMPT="backup-orchestrator-e2e.sh chain-report-e2e.sh deep-e2e.sh e2e.sh
-        full-e2e.sh incident-management-e2e.sh secrets-manager-e2e.sh
-        security-enhancements-e2e.sh webhook-gateway-e2e.sh"
+        full-e2e.sh incident-management-e2e.sh passkey-uv-enforcement-e2e.sh
+        secrets-manager-e2e.sh security-enhancements-e2e.sh
+        webhook-gateway-e2e.sh"
 
 ALL_TESTS=$(find tests -maxdepth 1 -name '*.sh' -printf '%f\n' | sort)
 N_ALL=$(grep -c . <<< "$ALL_TESTS")

@@ -165,6 +165,12 @@ Two consequences worth knowing:
 
 Removing a passkey is not guarded, and deliberately so: the person who has lost the authenticator holding it is exactly the person who needs to remove it, and a passkey is never an account's only way in — the password and identity-provider doors remain.
 
+### A passkey that verifies you is held to that on every login
+
+Since v2.199.0, **My Account** marks each passkey **Verified** or **Possession-only**. A security key can satisfy WebAuthn's user-presence requirement (a touch) without ever confirming who is touching it — no PIN, no fingerprint, no face. The panel now records, at the moment a passkey is registered, whether its authenticator actually performed that stronger check, and if it did, every future login with that same passkey is required to perform it again. A passkey that has never demonstrated verification — including every passkey registered before this release — keeps working exactly as before: presence alone is enough, same as always.
+
+**Nothing already enrolled is affected.** This is a property of a specific credential, not an account-wide switch: two passkeys on the same account can carry different badges. If a security key you rely on shows **Possession-only** and you want the stronger guarantee, remove it and register it again with a PIN or biometric enabled on the device — the new registration will record verification and your future logins with it will require it.
+
 ## IP Whitelist
 
 Restrict panel access to specific IP addresses. When configured, login attempts from non-whitelisted IPs are rejected before password validation.
