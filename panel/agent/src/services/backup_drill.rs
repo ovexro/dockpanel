@@ -1,4 +1,4 @@
-use crate::safe_cmd::safe_command;
+use crate::safe_cmd::{safe_command, DockerEnvFile};
 
 /// Result of an end-to-end backup drill (extract → scratch container → HTTP probe → teardown).
 /// Distinct from `backup_verify::VerificationResult`: a drill *runs* the restored backup,
@@ -245,16 +245,19 @@ async fn run_mysql_drill(
 ) -> DrillResult {
     // 1. Spin temp mariadb. Hardened: --network none (loopback works for the
     //    in-container psql/mariadb client; the engine itself binds 127.0.0.1).
+    //    Credential via --env-file, not `-e KEY=value`: see `DockerEnvFile`.
+    let run_env_file = match DockerEnvFile::new(&[
+        ("MYSQL_DATABASE", db_name),
+        ("MYSQL_ROOT_PASSWORD", password),
+    ]) {
+        Ok(f) => f,
+        Err(e) => return drill_failure(start, format!("Failed to prepare credentials: {e}")),
+    };
     let start_ok = safe_command("docker")
-        .args([
-            "run", "-d", "--name", container_name,
-            "--network", "none",
-            "-e", &format!("MYSQL_DATABASE={db_name}"),
-            "-e", &format!("MYSQL_ROOT_PASSWORD={password}"),
-            "--memory=256m",
-            "--cpus=1.0",
-            "mariadb:11",
-        ])
+        .arg("run").arg("-d").arg("--name").arg(container_name)
+        .arg("--network").arg("none")
+        .arg("--env-file").arg(run_env_file.path())
+        .args(["--memory=256m", "--cpus=1.0", "mariadb:11"])
         .output()
         .await
         .map(|o| o.status.success())
@@ -264,15 +267,18 @@ async fn run_mysql_drill(
         return drill_failure(start, "mariadb scratch container failed to start");
     }
 
+    let exec_env_file = match DockerEnvFile::new(&[("MYSQL_PWD", password)]) {
+        Ok(f) => f,
+        Err(e) => return drill_failure(start, format!("Failed to prepare credentials: {e}")),
+    };
+
     // 2. Wait for ready (up to 40s).
     let mut ready = false;
     for _ in 0..40 {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let check = safe_command("docker")
-            .args([
-                "exec", "-e", &format!("MYSQL_PWD={password}"),
-                container_name, "mariadb", "-u", "root", "-e", "SELECT 1",
-            ])
+            .arg("exec").arg("--env-file").arg(exec_env_file.path())
+            .args([container_name, "mariadb", "-u", "root", "-e", "SELECT 1"])
             .output()
             .await;
         if check.map(|o| o.status.success()).unwrap_or(false) {
@@ -297,11 +303,9 @@ async fn run_mysql_drill(
                 let docker_ok = tokio::time::timeout(
                     std::time::Duration::from_secs(180),
                     safe_command("docker")
-                        .args([
-                            "exec", "-i",
-                            "-e", &format!("MYSQL_PWD={password}"),
-                            container_name, "mariadb", "-u", "root", db_name,
-                        ])
+                        .arg("exec").arg("-i")
+                        .arg("--env-file").arg(exec_env_file.path())
+                        .args([container_name, "mariadb", "-u", "root", db_name])
                         .stdin(stdout.into_owned_fd().unwrap())
                         .output(),
                 )
@@ -356,9 +360,12 @@ async fn run_mysql_drill(
 }
 
 async fn run_mysql_scalar(container_name: &str, password: &str, db_name: &str, sql: &str) -> i64 {
+    let Ok(env_file) = DockerEnvFile::new(&[("MYSQL_PWD", password)]) else {
+        return 0;
+    };
     safe_command("docker")
+        .arg("exec").arg("--env-file").arg(env_file.path())
         .args([
-            "exec", "-e", &format!("MYSQL_PWD={password}"),
             container_name, "mariadb", "-u", "root", db_name,
             "-e", sql, "--batch", "--skip-column-names",
         ])
@@ -375,18 +382,21 @@ async fn run_postgres_drill(
     password: &str,
     start: std::time::Instant,
 ) -> DrillResult {
-    // 1. Spin temp postgres.
+    // 1. Spin temp postgres. Credential via --env-file, not `-e KEY=value`:
+    //    see `DockerEnvFile`.
+    let run_env_file = match DockerEnvFile::new(&[
+        ("POSTGRES_DB", db_name),
+        ("POSTGRES_USER", "drill"),
+        ("POSTGRES_PASSWORD", password),
+    ]) {
+        Ok(f) => f,
+        Err(e) => return drill_failure(start, format!("Failed to prepare credentials: {e}")),
+    };
     let start_ok = safe_command("docker")
-        .args([
-            "run", "-d", "--name", container_name,
-            "--network", "none",
-            "-e", &format!("POSTGRES_DB={db_name}"),
-            "-e", "POSTGRES_USER=drill",
-            "-e", &format!("POSTGRES_PASSWORD={password}"),
-            "--memory=256m",
-            "--cpus=1.0",
-            "postgres:16-alpine",
-        ])
+        .arg("run").arg("-d").arg("--name").arg(container_name)
+        .arg("--network").arg("none")
+        .arg("--env-file").arg(run_env_file.path())
+        .args(["--memory=256m", "--cpus=1.0", "postgres:16-alpine"])
         .output()
         .await
         .map(|o| o.status.success())
@@ -396,15 +406,18 @@ async fn run_postgres_drill(
         return drill_failure(start, "postgres scratch container failed to start");
     }
 
+    let exec_env_file = match DockerEnvFile::new(&[("PGPASSWORD", password)]) {
+        Ok(f) => f,
+        Err(e) => return drill_failure(start, format!("Failed to prepare credentials: {e}")),
+    };
+
     // 2. Wait for ready.
     let mut ready = false;
     for _ in 0..30 {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let check = safe_command("docker")
-            .args([
-                "exec", "-e", &format!("PGPASSWORD={password}"),
-                container_name, "psql", "-U", "drill", "-d", db_name, "-c", "SELECT 1",
-            ])
+            .arg("exec").arg("--env-file").arg(exec_env_file.path())
+            .args([container_name, "psql", "-U", "drill", "-d", db_name, "-c", "SELECT 1"])
             .output()
             .await;
         if check.map(|o| o.status.success()).unwrap_or(false) {
@@ -429,9 +442,9 @@ async fn run_postgres_drill(
                 let docker_ok = tokio::time::timeout(
                     std::time::Duration::from_secs(180),
                     safe_command("docker")
+                        .arg("exec").arg("-i")
+                        .arg("--env-file").arg(exec_env_file.path())
                         .args([
-                            "exec", "-i",
-                            "-e", &format!("PGPASSWORD={password}"),
                             container_name,
                             "psql", "-U", "drill", "-d", db_name, "--quiet",
                             // ON_ERROR_STOP alone stops at the first failed
@@ -481,11 +494,8 @@ async fn run_postgres_drill(
     let _ = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         safe_command("docker")
-            .args([
-                "exec", "-e", &format!("PGPASSWORD={password}"),
-                container_name, "psql", "-U", "drill", "-d", db_name,
-                "-c", "ANALYZE",
-            ])
+            .arg("exec").arg("--env-file").arg(exec_env_file.path())
+            .args([container_name, "psql", "-U", "drill", "-d", db_name, "-c", "ANALYZE"])
             .output(),
     )
     .await;
@@ -505,12 +515,12 @@ async fn run_postgres_drill(
 }
 
 async fn run_psql_scalar(container_name: &str, password: &str, db_name: &str, sql: &str) -> i64 {
+    let Ok(env_file) = DockerEnvFile::new(&[("PGPASSWORD", password)]) else {
+        return 0;
+    };
     safe_command("docker")
-        .args([
-            "exec", "-e", &format!("PGPASSWORD={password}"),
-            container_name, "psql", "-U", "drill", "-d", db_name,
-            "-t", "-A", "-c", sql,
-        ])
+        .arg("exec").arg("--env-file").arg(env_file.path())
+        .args([container_name, "psql", "-U", "drill", "-d", db_name, "-t", "-A", "-c", sql])
         .output()
         .await
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<i64>().unwrap_or(0))

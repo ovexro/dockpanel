@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use tokio::io::AsyncWriteExt;
-use crate::safe_cmd::safe_command;
+use crate::safe_cmd::{safe_command, DockerEnvFile};
 
 use super::backups::{BackupInfo, compute_file_sha256};
 
@@ -187,10 +187,14 @@ pub async fn dump_mysql(
     let _filepath_str = filepath.to_str().ok_or("Invalid path encoding")?;
 
     // docker exec outputs to stdout → pipe to gzip → write to file
+    //
+    // Credential via --env-file, not `-e KEY=value`: see `DockerEnvFile`.
+    let env_file = DockerEnvFile::new(&[("MYSQL_PWD", password)])
+        .map_err(|e| format!("Failed to prepare credentials: {e}"))?;
     let mut docker_child = safe_command("docker")
+        .arg("exec")
+        .arg("--env-file").arg(env_file.path())
         .args([
-            "exec",
-            "-e", &format!("MYSQL_PWD={password}"),
             container_name,
             "mariadb-dump",
             "-u", user,
@@ -296,10 +300,12 @@ pub async fn dump_postgres(
     let filepath = dest_dir.join(&filename);
     let _filepath_str = filepath.to_str().ok_or("Invalid path encoding")?;
 
+    let env_file = DockerEnvFile::new(&[("PGPASSWORD", password)])
+        .map_err(|e| format!("Failed to prepare credentials: {e}"))?;
     let mut docker_child = safe_command("docker")
+        .arg("exec")
+        .arg("--env-file").arg(env_file.path())
         .args([
-            "exec",
-            "-e", &format!("PGPASSWORD={password}"),
             container_name,
             "pg_dump",
             "-U", user,
@@ -502,10 +508,12 @@ pub async fn restore_mysql(
     let gunzip_stdout = gunzip_child.stdout.take()
         .ok_or("Failed to capture gunzip stdout")?;
 
+    let env_file = DockerEnvFile::new(&[("MYSQL_PWD", password)])
+        .map_err(|e| format!("Failed to prepare credentials: {e}"))?;
     let docker_child = safe_command("docker")
+        .arg("exec").arg("-i")
+        .arg("--env-file").arg(env_file.path())
         .args([
-            "exec", "-i",
-            "-e", &format!("MYSQL_PWD={password}"),
             container_name,
             // `mariadb`, NOT `mysql`: the panel provisions `mariadb:11`, and
             // MariaDB 11 dropped the mysql-named client symlinks, so `mysql`
@@ -588,10 +596,12 @@ pub async fn restore_postgres(
     let gunzip_stdout = gunzip_child.stdout.take()
         .ok_or("Failed to capture gunzip stdout")?;
 
+    let env_file = DockerEnvFile::new(&[("PGPASSWORD", password)])
+        .map_err(|e| format!("Failed to prepare credentials: {e}"))?;
     let docker_child = safe_command("docker")
+        .arg("exec").arg("-i")
+        .arg("--env-file").arg(env_file.path())
         .args([
-            "exec", "-i",
-            "-e", &format!("PGPASSWORD={password}"),
             container_name,
             // ON_ERROR_STOP=1 + --single-transaction make the restore fail-and-rollback on
             // ANY statement error instead of psql's default (continue-on-error, exit 0),

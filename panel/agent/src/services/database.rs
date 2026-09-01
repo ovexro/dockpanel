@@ -1,4 +1,4 @@
-use crate::safe_cmd::safe_command;
+use crate::safe_cmd::{safe_command, DockerEnvFile};
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
     StartContainerOptions, StopContainerOptions,
@@ -295,18 +295,28 @@ pub async fn execute_query(
 
     // Build the docker-exec command. kill_on_drop ensures a timed-out (dropped) future
     // actually terminates the docker exec child rather than leaking an orphaned process.
+    //
+    // The credential goes in via `--env-file`, NOT `-e KEY=value`: a `-e`
+    // argument is literal `docker` argv, world-readable via `ps`/`/proc/<pid>/
+    // cmdline` for the life of the child (no `hidepid=` assumed). See
+    // `DockerEnvFile` — `dockpanel-fanout` s445 completeness critic.
+    let env_file = match engine {
+        "mysql" | "mariadb" => DockerEnvFile::new(&[("MYSQL_PWD", password)]),
+        _ => DockerEnvFile::new(&[("PGPASSWORD", password)]),
+    }
+    .map_err(|e| format!("Failed to prepare credentials: {e}"))?;
     let mut cmd = safe_command("docker");
     match engine {
         "mysql" | "mariadb" => {
             cmd.arg("exec")
-                .arg("-e").arg(format!("MYSQL_PWD={password}"))
+                .arg("--env-file").arg(env_file.path())
                 .arg(container)
                 .arg("mariadb").arg("-u").arg(user).arg(database)
                 .arg("-e").arg(sql).arg("--batch").arg("--column-names");
         }
         _ => {
             cmd.arg("exec")
-                .arg("-e").arg(format!("PGPASSWORD={password}"))
+                .arg("--env-file").arg(env_file.path())
                 .arg(container)
                 .arg("psql").arg("-U").arg(user).arg("-d").arg(database)
                 .arg("-c").arg(sql).arg("--csv");
@@ -556,12 +566,16 @@ pub async fn reset_password(
                 "SET PASSWORD = PASSWORD('{}');",
                 mysql_string_escape(new_password),
             );
+            let env_file = match DockerEnvFile::new(&[("MYSQL_PWD", old_password)]) {
+                Ok(f) => f,
+                Err(e) => return Err(format!("Failed to prepare credentials: {e}")),
+            };
             tokio::time::timeout(
                 std::time::Duration::from_secs(QUERY_TIMEOUT_SECS),
                 safe_command("docker")
                     .arg("exec")
-                    .arg("-e")
-                    .arg(format!("MYSQL_PWD={old_password}"))
+                    .arg("--env-file")
+                    .arg(env_file.path())
                     .arg(container)
                     .arg("mariadb")
                     .arg("-u")
@@ -592,12 +606,16 @@ pub async fn reset_password(
                 user.replace('"', "\"\""),
                 pg_string_escape(new_password),
             );
+            let env_file = match DockerEnvFile::new(&[("PGPASSWORD", old_password)]) {
+                Ok(f) => f,
+                Err(e) => return Err(format!("Failed to prepare credentials: {e}")),
+            };
             tokio::time::timeout(
                 std::time::Duration::from_secs(QUERY_TIMEOUT_SECS),
                 safe_command("docker")
                     .arg("exec")
-                    .arg("-e")
-                    .arg(format!("PGPASSWORD={old_password}"))
+                    .arg("--env-file")
+                    .arg(env_file.path())
                     .arg(container)
                     .arg("psql")
                     .arg("-U")
@@ -649,14 +667,19 @@ async fn provision_postgres_tenant_role(
     admin_password: &str,
     tenant_password: &str,
 ) -> Result<(), String> {
+    // One env-file for the whole function: `admin_password` doesn't change
+    // across the readiness loop or the provisioning call below.
+    let env_file = DockerEnvFile::new(&[("PGPASSWORD", admin_password)])
+        .map_err(|e| format!("Failed to prepare credentials: {e}"))?;
+
     // Wait until postgres accepts connections to the tenant DB (mirrors backup_verify).
     let mut ready = false;
     for _ in 0..30 {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let ok = safe_command("docker")
             .arg("exec")
-            .arg("-e")
-            .arg(format!("PGPASSWORD={admin_password}"))
+            .arg("--env-file")
+            .arg(env_file.path())
             .arg(container)
             .arg("psql")
             .arg("-U")
@@ -681,8 +704,8 @@ async fn provision_postgres_tenant_role(
     let sql = tenant_role_sql(db_name, tenant_password);
     let output = safe_command("docker")
         .arg("exec")
-        .arg("-e")
-        .arg(format!("PGPASSWORD={admin_password}"))
+        .arg("--env-file")
+        .arg(env_file.path())
         .arg(container)
         .arg("psql")
         .arg("-U")

@@ -118,10 +118,14 @@ fi
 # A1 is the load-bearing arm. It does not ask whether `old_password` is MENTIONED
 # — the defective version mentioned it too, in its own signature. It asks whether
 # the value is RESOLVED INTO the connection the statement runs over.
+# s445: the credential moved from a literal `-e MYSQL_PWD={old_password}`
+# docker argv (world-readable via ps/proc for the child's lifetime — see
+# `DockerEnvFile`) to a 0600 --env-file. Pin the NEW shape — old_password
+# still has to reach the connection, just not through argv anymore.
 if [ -z "$RESET" ]; then
   bad "A1 skipped — no body"
-elif has "$RESET" 'MYSQL_PWD=\{old_password\}'; then
-  ok "A1 the mariadb branch resolves old_password into the connection (MYSQL_PWD)"
+elif has "$RESET" '"MYSQL_PWD", *old_password'; then
+  ok "A1 the mariadb branch resolves old_password into the connection (MYSQL_PWD via --env-file)"
 else
   bad "A1 the mariadb branch does not authenticate with old_password — the caller's credential is decorative"
 fi
@@ -149,8 +153,8 @@ fi
 
 if [ -z "$RESET" ]; then
   bad "A4 skipped — no body"
-elif has "$RESET" 'PGPASSWORD=\{old_password\}'; then
-  ok "A4 the postgres branch also resolves old_password into its connection"
+elif has "$RESET" '"PGPASSWORD", *old_password'; then
+  ok "A4 the postgres branch also resolves old_password into its connection (PGPASSWORD via --env-file)"
 else
   bad "A4 the postgres branch stopped passing old_password — the sibling regressed"
 fi
@@ -370,6 +374,50 @@ else
   else
     ok "E1b all $E1B_SEEN call site(s) of the handle-taking helper(s) resolve the host from the row"
   fi
+fi
+
+# ── §F credentials are not argv-exposed ─────────────────────────────────────
+echo
+echo "§F  credentials reach docker via --env-file, never via -e KEY=value"
+
+# s445 (dockpanel-fanout completeness critic, agent-crate rotation): a
+# `-e MYSQL_PWD=...`/`-e PGPASSWORD=...` docker argument is literal argv,
+# world-readable via ps/`/proc/<pid>/cmdline` for the child's lifetime —
+# verified live against this box's own /proc mount (no hidepid=). Absence
+# arm with a CONTROL: the same files must still mention the credential
+# env-var NAMES (now inside `DockerEnvFile::new` calls, not `-e` argv), so a
+# grep finding zero of either measures a deleted feature, not a fix.
+#
+# ONE known exception, excluded by name rather than weakening the pattern:
+# `create_database`'s `POSTGRES_PASSWORD={admin_password}` builds the `env`
+# Vec bollard's `Docker::create_container` API sends over the Docker
+# SOCKET — no `docker` subprocess, no argv, nothing `ps`/`/proc` can see.
+# Mutation-tested: this arm DID catch the leak before this exclusion was
+# added (F1 failed on `database.rs:60` until scoped out — same class of
+# false-positive risk the exclusion documents, not a hole opened blind).
+DB_FILES="panel/agent/src/services/database.rs panel/agent/src/services/database_backup.rs panel/agent/src/services/backup_verify.rs panel/agent/src/services/backup_drill.rs"
+LEAK_PATTERN='(MYSQL_PWD|PGPASSWORD|MYSQL_ROOT_PASSWORD|POSTGRES_PASSWORD)=\{'
+NAME_PATTERN='"(MYSQL_PWD|PGPASSWORD|MYSQL_ROOT_PASSWORD|POSTGRES_PASSWORD)"'
+ARGV_LEAK=0
+NAME_HITS=0
+for f in $DB_FILES; do
+  [ -f "$f" ] || continue
+  c=$(code "$f")
+  leak=$(grep -cE -- "$LEAK_PATTERN" <<< "$c" || true)
+  if [ "$f" = "$AGENT_DB_SVC" ]; then
+    create_leak=$(grep -cE -- "$LEAK_PATTERN" <<< "$(fnbody "$c" "create_database")" || true)
+    leak=$((leak - create_leak))
+  fi
+  ARGV_LEAK=$((ARGV_LEAK + leak))
+  names=$(grep -cE -- "$NAME_PATTERN" <<< "$c" || true)
+  NAME_HITS=$((NAME_HITS + names))
+done
+if [ "$NAME_HITS" -eq 0 ]; then
+  bad "F1 CONTROL failed — found zero credential env-var names across the DB files, so the grep is measuring nothing"
+elif [ "$ARGV_LEAK" -eq 0 ]; then
+  ok "F1 no credential is interpolated into a docker argv slot ($NAME_HITS env-var reference(s) across the DB files all route through --env-file)"
+else
+  bad "F1 $ARGV_LEAK credential(s) still interpolated directly into docker argv — visible via ps/proc for the child's lifetime"
 fi
 
 echo

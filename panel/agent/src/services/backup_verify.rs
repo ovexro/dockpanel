@@ -1,4 +1,4 @@
-use crate::safe_cmd::safe_command;
+use crate::safe_cmd::{safe_command, DockerEnvFile};
 
 #[derive(serde::Serialize)]
 pub struct VerificationResult {
@@ -190,15 +190,26 @@ async fn verify_mysql_restore(
     password: &str,
     checks: &mut Vec<VerificationCheck>,
 ) -> bool {
-    // Start temp MySQL container
+    // Start temp MySQL container. Bootstrap credential via --env-file, not
+    // `-e KEY=value`: see `DockerEnvFile`.
+    let run_env_file = match DockerEnvFile::new(&[
+        ("MYSQL_DATABASE", db_name),
+        ("MYSQL_ROOT_PASSWORD", password),
+    ]) {
+        Ok(f) => f,
+        Err(e) => {
+            checks.push(VerificationCheck {
+                name: "temp_container".into(),
+                passed: false,
+                message: format!("Failed to prepare credentials: {e}"),
+            });
+            return false;
+        }
+    };
     let start_ok = safe_command("docker")
-        .args([
-            "run", "-d", "--name", container_name,
-            "-e", &format!("MYSQL_DATABASE={db_name}"),
-            "-e", &format!("MYSQL_ROOT_PASSWORD={password}"),
-            "--memory=256m",
-            "mariadb:11",
-        ])
+        .arg("run").arg("-d").arg("--name").arg(container_name)
+        .arg("--env-file").arg(run_env_file.path())
+        .args(["--memory=256m", "mariadb:11"])
         .output()
         .await
         .map(|o| o.status.success())
@@ -213,15 +224,25 @@ async fn verify_mysql_restore(
         return false;
     }
 
+    let exec_env_file = match DockerEnvFile::new(&[("MYSQL_PWD", password)]) {
+        Ok(f) => f,
+        Err(e) => {
+            checks.push(VerificationCheck {
+                name: "temp_container".into(),
+                passed: false,
+                message: format!("Failed to prepare credentials: {e}"),
+            });
+            return false;
+        }
+    };
+
     // Wait for MySQL to be ready (up to 40s)
     let mut ready = false;
     for _ in 0..40 {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let check = safe_command("docker")
-            .args([
-                "exec", "-e", &format!("MYSQL_PWD={password}"),
-                container_name, "mariadb", "-u", "root", "-e", "SELECT 1",
-            ])
+            .arg("exec").arg("--env-file").arg(exec_env_file.path())
+            .args([container_name, "mariadb", "-u", "root", "-e", "SELECT 1"])
             .output()
             .await;
         if check.map(|o| o.status.success()).unwrap_or(false) {
@@ -255,12 +276,9 @@ async fn verify_mysql_restore(
                     let docker_ok = tokio::time::timeout(
                         std::time::Duration::from_secs(120),
                         safe_command("docker")
-                            .args([
-                                "exec", "-i",
-                                "-e", &format!("MYSQL_PWD={password}"),
-                                container_name,
-                                "mariadb", "-u", "root", db_name,
-                            ])
+                            .arg("exec").arg("-i")
+                            .arg("--env-file").arg(exec_env_file.path())
+                            .args([container_name, "mariadb", "-u", "root", db_name])
                             .stdin(stdout.into_owned_fd().unwrap())
                             .output(),
                     )
@@ -299,8 +317,8 @@ async fn verify_mysql_restore(
 
     // Verify: count tables
     let table_count = safe_command("docker")
+        .arg("exec").arg("--env-file").arg(exec_env_file.path())
         .args([
-            "exec", "-e", &format!("MYSQL_PWD={password}"),
             container_name, "mariadb", "-u", "root", db_name,
             "-e", "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()",
             "--batch", "--skip-column-names",
@@ -328,16 +346,27 @@ async fn verify_postgres_restore(
     password: &str,
     checks: &mut Vec<VerificationCheck>,
 ) -> bool {
-    // Start temp PostgreSQL container
+    // Start temp PostgreSQL container. Bootstrap credential via --env-file,
+    // not `-e KEY=value`: see `DockerEnvFile`.
+    let run_env_file = match DockerEnvFile::new(&[
+        ("POSTGRES_DB", db_name),
+        ("POSTGRES_USER", "verify"),
+        ("POSTGRES_PASSWORD", password),
+    ]) {
+        Ok(f) => f,
+        Err(e) => {
+            checks.push(VerificationCheck {
+                name: "temp_container".into(),
+                passed: false,
+                message: format!("Failed to prepare credentials: {e}"),
+            });
+            return false;
+        }
+    };
     let start_ok = safe_command("docker")
-        .args([
-            "run", "-d", "--name", container_name,
-            "-e", &format!("POSTGRES_DB={db_name}"),
-            "-e", "POSTGRES_USER=verify",
-            "-e", &format!("POSTGRES_PASSWORD={password}"),
-            "--memory=256m",
-            "postgres:16-alpine",
-        ])
+        .arg("run").arg("-d").arg("--name").arg(container_name)
+        .arg("--env-file").arg(run_env_file.path())
+        .args(["--memory=256m", "postgres:16-alpine"])
         .output()
         .await
         .map(|o| o.status.success())
@@ -352,15 +381,25 @@ async fn verify_postgres_restore(
         return false;
     }
 
+    let exec_env_file = match DockerEnvFile::new(&[("PGPASSWORD", password)]) {
+        Ok(f) => f,
+        Err(e) => {
+            checks.push(VerificationCheck {
+                name: "temp_container".into(),
+                passed: false,
+                message: format!("Failed to prepare credentials: {e}"),
+            });
+            return false;
+        }
+    };
+
     // Wait for PostgreSQL to be ready (up to 30s)
     let mut ready = false;
     for _ in 0..30 {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let check = safe_command("docker")
-            .args([
-                "exec", "-e", &format!("PGPASSWORD={password}"),
-                container_name, "psql", "-U", "verify", "-d", db_name, "-c", "SELECT 1",
-            ])
+            .arg("exec").arg("--env-file").arg(exec_env_file.path())
+            .args([container_name, "psql", "-U", "verify", "-d", db_name, "-c", "SELECT 1"])
             .output()
             .await;
         if check.map(|o| o.status.success()).unwrap_or(false) {
@@ -394,9 +433,9 @@ async fn verify_postgres_restore(
                     let docker_ok = tokio::time::timeout(
                         std::time::Duration::from_secs(120),
                         safe_command("docker")
+                            .arg("exec").arg("-i")
+                            .arg("--env-file").arg(exec_env_file.path())
                             .args([
-                                "exec", "-i",
-                                "-e", &format!("PGPASSWORD={password}"),
                                 container_name,
                                 "psql", "-U", "verify", "-d", db_name, "--quiet",
                                 // Without these, psql reports success for a dump
@@ -447,8 +486,8 @@ async fn verify_postgres_restore(
 
     // Verify: count tables
     let table_count = safe_command("docker")
+        .arg("exec").arg("--env-file").arg(exec_env_file.path())
         .args([
-            "exec", "-e", &format!("PGPASSWORD={password}"),
             container_name, "psql", "-U", "verify", "-d", db_name,
             "-t", "-c", "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'",
         ])

