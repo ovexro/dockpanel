@@ -271,6 +271,14 @@ export default function SiteDetail() {
         await api.delete(`/sites/${id}/staging`);
         setStaging({ exists: false });
         setStagingMessage("Staging deleted");
+      } else if (type === "staging_create_db_ack") {
+        await api.post(`/sites/${id}/staging`, {
+          domain: stagingDomain || undefined,
+          acknowledge_shared_database: true,
+        });
+        fetchStaging();
+        setShowStagingForm(false);
+        setStagingMessage("Staging environment created");
       }
     } catch (e) {
       setStagingMessage(e instanceof Error ? e.message : "Action failed");
@@ -2020,8 +2028,23 @@ export default function SiteDetail() {
             ) : (
               <div className="space-y-3">
                 <p className="text-sm text-dark-200">
-                  Create a staging copy of this site to test changes before going live.
+                  Create a staging copy of this site's files to test changes before going live.
+                  Only files are cloned — if this site has a database attached, staging reads
+                  and writes that SAME live database; it is not isolated.
                 </p>
+                {pendingConfirm && pendingConfirm.type === "staging_create_db_ack" && (
+                  <div className="px-4 py-3 rounded-lg border border-warn-500/30 bg-warn-500/5 flex items-center justify-between">
+                    <span className="text-xs font-mono text-warn-400">{pendingConfirm.label}</span>
+                    <div className="flex items-center gap-2 shrink-0 ml-4">
+                      <button onClick={executeConfirm} className="px-3 py-1.5 bg-warn-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-warn-600 transition-colors">
+                        Continue Anyway
+                      </button>
+                      <button onClick={() => setPendingConfirm(null)} className="px-3 py-1.5 bg-dark-600 text-dark-200 text-xs font-bold uppercase tracking-wider hover:bg-dark-500 transition-colors">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {showStagingForm ? (
                   <div className="flex items-end gap-3">
                     <div className="flex-1">
@@ -2049,7 +2072,12 @@ export default function SiteDetail() {
                           setShowStagingForm(false);
                           setStagingMessage("Staging environment created");
                         } catch (e) {
-                          setStagingMessage(e instanceof Error ? e.message : "Creation failed");
+                          const message = e instanceof Error ? e.message : "Creation failed";
+                          if (message.includes("attached database")) {
+                            setPendingConfirm({ type: "staging_create_db_ack", label: `${message} Continue anyway?` });
+                          } else {
+                            setStagingMessage(message);
+                          }
                         } finally {
                           setStagingLoading(false);
                         }

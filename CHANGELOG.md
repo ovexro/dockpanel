@@ -4,6 +4,83 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.200.0]
+
+### Fixed — migration/staging/oauth fan-out audit: 13 findings, all fixed
+
+The standing rotation's next-untouched-file menu (`migration.rs`/`staging.rs`/`oauth.rs`)
+went through a full census + adversarial-skeptic + completeness-critic fan-out. Every
+UPHELD finding was fixed the same session; the two most severe were things the census
+itself didn't originally ask about.
+
+**Staging never isolated the database, despite promising to.** `/staging/clone` only
+ever rsyncs files (confirmed by reading every line of the agent's staging surface) — for
+any DB-backed site (WordPress, Laravel, anything with a `databases` row), "Create
+Staging" put the operator on a UI that says "test changes before going live" while
+actually reading and writing the LIVE production database from the first click. Fixed by
+disclosure + a block: creating staging for a site with an attached database now refuses
+with a clear message unless the caller explicitly acknowledges it
+(`acknowledge_shared_database`), and the UI copy no longer implies the database is
+covered. Real database cloning is a larger feature (raises its own question — does "Push
+to Prod" sync the database back, and how? — deliberately not answered here) and stays
+open as future work.
+
+**Staging has 500'd on every proxy/node/python site since the day the fix that broke it
+shipped (s375, 69 sessions ago).** `staging::create` bound the parent's own `proxy_port`
+onto a new row sharing the parent's `server_id`, and `idx_sites_proxy_port_server` is
+UNIQUE on `(proxy_port, server_id)` — so the INSERT always collided with the parent's own
+row. Diagnosed once, filed, and then lost when the register that held it retired without
+ever being promoted. Fixed by allocating staging its own free port (same allocator
+`sites::create` already uses for node/python) instead of copying the parent's. The same
+gap silently existed for `app_command` — staging never sent it at all, so a staged
+node/python app's process never actually started; fixed alongside the port.
+
+**Security — oauth.rs: an account already linked to one provider could be logged into by
+a second, different provider.** The linking check only tested *whether* `oauth_provider`
+was set, never *which* provider — contradicting its own comment. Fixed with an explicit
+provider-identity check.
+
+**Security — staging's `destroy()` released a domain claim even when file cleanup
+failed**, leaving the previous tenant's files (potentially `.env`/`wp-config.php`) on
+disk under a domain anyone could immediately reclaim. The DB row — the only thing that
+marks a domain occupied — is now kept (status `error`) until file cleanup actually
+succeeds.
+
+**Migration import silently produced broken sites for its own dominant case.** Every
+non-static site imported via the migration wizard got an nginx config with no
+`php_socket`/`proxy_port`/`app_command` — for PHP (the modal outcome for cPanel/Plesk/
+HestiaCP archives) this rendered a socket path that doesn't exist under this project's
+own PHP-FPM naming convention; for node/python it defaulted to a meaningless port. Fixed:
+PHP imports now resolve a real, running PHP-FPM version from the server; node/python
+imports (whose port and start command genuinely cannot be derived from a file-tree scan)
+skip vhost creation entirely rather than serve a wrong config or the app's raw source,
+and are clearly marked as needing manual configuration.
+
+**Migration's database-port allocator raced with itself and with `POST /databases`**,
+because it called the agent to create the container BEFORE inserting the row that claims
+the port — the opposite order from `databases::create`'s own comment ("insert first to
+atomically claim the port"). Reordered to match; a losing racer now gets a clear
+"claimed by a concurrent operation, retry" message instead of an opaque Docker bind
+failure.
+
+Plus, all lower-severity: an unscoped `DELETE FROM migrations` (every other statement in
+the file filters `user_id`; this one didn't, though nothing exploitable reached it
+today); a Google OAuth login stored `oauth_id` with its JSON quote characters still
+attached (dead data, never read back, but wrong); `oauth.rs`'s account auto-link and
+auto-create never wrote an activity-log row, unlike every other mutation in the file and
+unlike the password registration path it sits beside; `oauth.rs` leaked raw
+`reqwest`/`serde_json`/`jsonwebtoken` error text to the client instead of using the
+`upstream_error`/`internal_error` helpers it already imports and uses elsewhere in the
+same file; and a duplicate-staging TOCTOU race (the existing check-then-insert had no
+backing constraint) now has one — `idx_sites_parent_unique`, migration
+`20260901010000_staging_parent_unique.sql`.
+
+One finding was investigated and deliberately NOT fixed: adding `record_suspicious_event`
+to oauth's CSRF-failure path (the natural-looking fix for "no security-audit-log entry on
+a login-CSRF attempt") would let any anonymous visitor trigger a system-wide five-minute
+lockdown with five bad requests — the exact self-DoS `passkeys.rs` already documents
+avoiding for the same reason. Left as-is, with a comment explaining why.
+
 ## [2.199.0]
 
 ### Security — passkey login now enforces user verification, for any credential that ever proved it could give one

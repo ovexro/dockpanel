@@ -321,9 +321,16 @@ fi
 eq "F1 every INSERT INTO databases names the NOT NULL site_id" \
    "$($G -rn "INSERT INTO databases" panel/backend/src --include=*.rs | $G -cv "site_id")" "0"
 eq "F2 the import's insert is checked rather than discarded" \
-   "$(/usr/bin/sed -n '/Insert the DB record/,/^            let landed/p' panel/backend/src/routes/migration.rs | $G -c 'fetch_optional')" "1"
-eq "F3 a database that cannot be recorded has its container taken back down" \
-   "$(/usr/bin/sed -n '/if !landed {/,/^            }/p' panel/backend/src/routes/migration.rs | $G -c 'agent.delete')" "1"
+   "$(/usr/bin/sed -n '/Insert the DB record/,/Create database container via agent/p' panel/backend/src/routes/migration.rs | $G -c 'fetch_optional')" "1"
+# The insert now runs BEFORE the agent call (s444: reordered so the port's own
+# unique index adjudicates a racing pick before either side reaches the agent,
+# rather than after — see F7/F8 below), which flips WHICH side of a failure
+# needs cleanup. A DB-insert conflict can no longer orphan a container, because
+# no container has been created yet at that point. What can now happen is the
+# reverse: the row lands (claiming the port and name) and THEN the agent call
+# fails — so the row, not a container, is what has to be taken back down.
+eq "F3 a database whose container creation fails has its row taken back down" \
+   "$(/usr/bin/sed -n '/agent.post("\/databases", Some(create_body))/,/^            };/p' panel/backend/src/routes/migration.rs | $G -c 'DELETE FROM databases WHERE id = \$1')" "1"
 # The site a database belongs to is resolved BEFORE the container is created, or
 # the failure it prevents has already happened by the time it is detected.
 RESOLVE_LINE=$($G -n "Which site does this database belong to" panel/backend/src/routes/migration.rs | cut -d: -f1)

@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::auth::AdminUser;
-use crate::error::{internal_error, err, ApiError};
+use crate::error::{internal_error, err, upstream_error, ApiError};
+use crate::services::activity;
 use crate::AppState;
 
 #[derive(serde::Deserialize)]
@@ -46,6 +47,15 @@ pub const OAUTH_PROVIDERS: &[&str] = &["google", "github", "gitlab"];
 /// neither side. Three copies of one `format!` is how they drift apart.
 pub fn redirect_uri(base_url: &str, provider_name: &str) -> String {
     format!("{base_url}/api/auth/oauth/{provider_name}/callback")
+}
+
+/// `Value::to_string()` serializes a JSON string WITH its surrounding quote
+/// characters — it's `Display` for the JSON representation, not the string's
+/// own content. A provider's numeric `id` field survives that unqualified
+/// (GitHub/GitLab), but a string field like Google's `sub` does not: it comes
+/// out as `"1234567890"` (14 chars, quotes included) instead of the real id.
+fn stringify_id(v: &serde_json::Value) -> String {
+    v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())
 }
 
 fn get_provider(name: &str) -> Option<OAuthProvider> {
@@ -196,6 +206,15 @@ pub async fn callback(
 
     // Validate CSRF state is a member of the server-side map — proves SOME
     // /authorize call issued it, nothing about WHO is presenting it now.
+    //
+    // Neither failure branch below (nor the cookie-mismatch one further down)
+    // calls `record_suspicious_event`, and that is deliberate, same reasoning as
+    // `passkeys.rs`'s counter-regression check: that function auto-activates
+    // system-wide lockdown at five events in ten minutes, and this endpoint is
+    // reachable by anyone with no account and no credential at all
+    // (`GET .../callback?state=garbage`) — wiring it in would let any anonymous
+    // visitor lock every non-admin out of the panel with five bad requests.
+    // `err()` below still logs and returns a 400; that is the right ceiling here.
     {
         let mut states = state.oauth_states.lock().unwrap_or_else(|e| e.into_inner());
         let entry = states.remove(&query.state);
@@ -263,10 +282,10 @@ pub async fn callback(
         ])
         .send()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Token exchange failed: {e}")))?;
+        .map_err(|e| upstream_error(&format!("{provider_name} OAuth token exchange"), e))?;
 
     let token_data: serde_json::Value = token_resp.json().await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Token parse failed: {e}")))?;
+        .map_err(|e| upstream_error(&format!("{provider_name} OAuth token exchange"), e))?;
 
     let access_token = token_data.get("access_token")
         .and_then(|v| v.as_str())
@@ -278,10 +297,10 @@ pub async fn callback(
         .header("User-Agent", "DockPanel")
         .send()
         .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Userinfo fetch failed: {e}")))?;
+        .map_err(|e| upstream_error(&format!("{provider_name} OAuth userinfo fetch"), e))?;
 
     let userinfo: serde_json::Value = userinfo_resp.json().await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("Userinfo parse failed: {e}")))?;
+        .map_err(|e| upstream_error(&format!("{provider_name} OAuth userinfo fetch"), e))?;
 
     // Extract email based on provider
     let email = match provider_name.as_str() {
@@ -325,7 +344,11 @@ pub async fn callback(
         return Err(err(StatusCode::BAD_GATEWAY, "OAuth provider reports this email address is not verified"));
     }
 
-    let oauth_id = userinfo.get("id").map(|v| v.to_string()).unwrap_or_else(|| userinfo.get("sub").map(|v| v.to_string()).unwrap_or_default());
+    // See `stringify_id` below: `Value::to_string()` keeps a JSON string's
+    // quote characters, which corrupted Google's `sub` (a JSON string) while
+    // leaving GitHub/GitLab's `id` (a JSON number) untouched.
+    let oauth_id = userinfo.get("id").map(stringify_id)
+        .unwrap_or_else(|| userinfo.get("sub").map(stringify_id).unwrap_or_default());
 
     if oauth_id.is_empty() {
         return Err(err(StatusCode::BAD_GATEWAY, "OAuth provider did not return a user ID"));
@@ -342,7 +365,17 @@ pub async fn callback(
 
     let user = match user {
         Some(mut u) => {
-            // Only auto-link if user has no password (OAuth-only) or already same provider
+            // Three-way, not two: auto-link an OAuth-only account with no provider
+            // yet, allow a plain login when already linked to THIS SAME provider,
+            // and reject everything else (a password-holder with no link yet, OR
+            // an account already linked to a DIFFERENT provider).
+            //
+            // The prior code only tested `oauth_provider.is_none()` on the reject
+            // branch, so once ANY provider was linked, a callback from a SECOND,
+            // different provider reporting the same email fell through both
+            // branches unchecked and logged straight in — contradicting this
+            // comment's own claim of an "already same provider" check, and
+            // bypassing the password-holder protection below it too.
             if u.oauth_provider.is_none() && u.password_hash.is_empty() {
                 sqlx::query("UPDATE users SET oauth_provider = $1, oauth_id = $2 WHERE id = $3")
                     .bind(&provider_name)
@@ -351,11 +384,15 @@ pub async fn callback(
                     .execute(&state.db)
                     .await
                     .ok();
+                activity::log_activity(
+                    &state.db, u.id, &u.email, "auth.oauth_link",
+                    Some("user"), Some(&provider_name), None, None,
+                ).await;
                 u.oauth_provider = Some(provider_name.clone());
-            } else if u.oauth_provider.is_none() {
-                // User has a password — don't auto-link, require manual linking
+            } else if u.oauth_provider.as_deref() != Some(provider_name.as_str()) {
                 return Err(err(StatusCode::CONFLICT,
-                    "An account with this email exists. Log in with your password and link OAuth in Settings."));
+                    "An account with this email exists, linked to a different sign-in method. \
+                     Log in with your existing method and link this one in Settings."));
             }
             u
         }
@@ -436,6 +473,10 @@ pub async fn callback(
             })?;
 
             tracing::info!("OAuth user created: {} via {}", email, provider_name);
+            activity::log_activity(
+                &state.db, new_user.id, &new_user.email, "auth.oauth_register",
+                Some("user"), Some(&provider_name), None, None,
+            ).await;
             new_user
         }
     };
@@ -489,7 +530,7 @@ pub async fn callback(
             &temp_claims,
             &jsonwebtoken::EncodingKey::from_secret(state.config.jwt_secret.as_bytes()),
         )
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("JWT encode failed: {e}")))?;
+        .map_err(|e| internal_error("oauth 2fa token encode", e))?;
 
         crate::services::activity::log_activity(
             &state.db, user.id, &user.email, "auth.oauth_login_2fa_required",
@@ -523,7 +564,7 @@ pub async fn callback(
         &claims,
         &jsonwebtoken::EncodingKey::from_secret(state.config.jwt_secret.as_bytes()),
     )
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("JWT encode failed: {e}")))?;
+    .map_err(|e| internal_error("oauth session token encode", e))?;
 
     // Record the session so it is visible to session management AND — critically —
     // revocable: the DELETE user_sessions RETURNING jti -> blacklist sweeps (logout,

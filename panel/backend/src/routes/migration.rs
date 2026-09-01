@@ -592,20 +592,96 @@ pub async fn import(
                 }
             };
 
-            // 1. Create nginx site via agent
+            // 1. Create nginx site via agent — except when the required config
+            // simply cannot be known from a file-tree scan.
+            //
+            // `detect_runtime` (agent's `services::migration`) only ever answers
+            // "php", "node", "python", or "static" — never anything requiring
+            // MORE than a domain to configure, except that "php" needs a
+            // PHP-FPM socket and "node"/"python" need a port AND a start
+            // command, none of which a cPanel/Plesk/HestiaCP archive records.
+            // Sending the agent `{"runtime": "php"}` with no `php_socket` does
+            // NOT fail: `put_site` skips its entire validation/resolution block
+            // when the field is absent, and `render_site_config` then silently
+            // defaults to a socket path (`/run/php/php-fpm.sock`) that does not
+            // exist under this project's own versioned PHP-FPM convention — an
+            // always-broken config reported as a success. "node"/"python" are
+            // worse: without `proxy_port`, `create_app_service` never runs at
+            // all (it needs both a command AND a port), and the rendered config
+            // then defaults to `proxy_pass http://127.0.0.1:3000` — pointing at
+            // nothing, or worse, at whatever unrelated thing happens to be
+            // listening on 3000.
+            //
+            // So: for "php", resolve a real, currently-running PHP-FPM version
+            // from the server itself and send that socket, letting the agent's
+            // normal validation run. For "node"/"python" (and defensively any
+            // value besides the four `detect_runtime` emits, since this field
+            // is client-supplied JSON, not re-validated against the inventory),
+            // there is nothing safe to send — creating the vhost anyway would
+            // either point at a wrong port or, if pointed at "static" instead,
+            // serve the app's raw source (`.env`, config with DB credentials)
+            // over HTTP. Skip the vhost; the site row and file copy below still
+            // land, so nothing imported is lost — it just needs a human to set
+            // the port/command from the site's Settings afterward.
             let runtime = &site_item.runtime;
-            let nginx_body = serde_json::json!({
-                "runtime": runtime,
-            });
+            let mut nginx_body = serde_json::json!({ "runtime": runtime });
+            let mut needs_config: Option<String> = None;
 
-            let agent_path = format!("/nginx/sites/{domain}");
-            if let Err(e) = agent.put(&agent_path, nginx_body).await {
-                let msg = format!("Nginx config failed for {domain}: {e}");
-                tracing::error!("{msg}");
-                emit_step(&logs, id, &step_key, &format!("Site {domain}"), "error", Some(msg.clone()));
-                if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
-                completed += 1;
-                continue;
+            if runtime == "php" {
+                match agent.get("/php/versions").await {
+                    Ok(resp) => {
+                        let running_version = resp
+                            .get("versions")
+                            .and_then(|v| v.as_array())
+                            .and_then(|versions| {
+                                versions.iter().find(|v| {
+                                    v.get("installed").and_then(|b| b.as_bool()).unwrap_or(false)
+                                        && v.get("fpm_running").and_then(|b| b.as_bool()).unwrap_or(false)
+                                })
+                            })
+                            .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(str::to_string));
+                        match running_version {
+                            Some(ver) => {
+                                nginx_body["php_socket"] =
+                                    serde_json::json!(format!("unix:/run/php/php{ver}-fpm.sock"));
+                            }
+                            None => {
+                                needs_config = Some(
+                                    "no running PHP-FPM version was found on this server — \
+                                     install one and set it from the site's PHP Version \
+                                     control after import"
+                                        .to_string(),
+                                );
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        needs_config = Some(
+                            "could not check installed PHP versions on this server — set \
+                             the PHP version from the site's Settings after import"
+                                .to_string(),
+                        );
+                    }
+                }
+            } else if runtime != "static" {
+                needs_config = Some(format!(
+                    "{runtime} sites need a port and start command, which can't be \
+                     detected from the backup — set them from the site's Settings after import"
+                ));
+            }
+
+            if let Some(ref reason) = needs_config {
+                tracing::warn!("Migration {id}: site {domain} imported without a vhost: {reason}");
+            } else {
+                let agent_path = format!("/nginx/sites/{domain}");
+                if let Err(e) = agent.put(&agent_path, nginx_body).await {
+                    let msg = format!("Nginx config failed for {domain}: {e}");
+                    tracing::error!("{msg}");
+                    emit_step(&logs, id, &step_key, &format!("Site {domain}"), "error", Some(msg.clone()));
+                    if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
+                    completed += 1;
+                    continue;
+                }
             }
 
             // 2. Insert site record into DB
@@ -616,14 +692,19 @@ pub async fn import(
             // it and is what every later handler reads to decide which host to talk
             // to, so a wrong value here is not a failed import — it is a site that
             // is quietly asked about on the wrong machine for the rest of its life.
+            //
+            // Status is 'error' rather than 'active' when no vhost was written —
+            // nothing serves this domain yet, and 'active' would say otherwise.
+            let initial_status = if needs_config.is_some() { "error" } else { "active" };
             let site_result = sqlx::query_as::<_, (Uuid,)>(
                 "INSERT INTO sites (user_id, server_id, domain, runtime, status) \
-                 VALUES ($1, $2, $3, $4, 'active') RETURNING id",
+                 VALUES ($1, $2, $3, $4, $5) RETURNING id",
             )
             .bind(user_id)
             .bind(server_id)
             .bind(domain)
             .bind(runtime)
+            .bind(initial_status)
             .fetch_one(&db)
             .await;
 
@@ -668,16 +749,29 @@ pub async fn import(
                 continue;
             }
 
+            let done_message = match &needs_config {
+                Some(reason) => format!("Imported — needs configuration: {reason}"),
+                None => "Imported".to_string(),
+            };
             emit_step(
                 &logs,
                 id,
                 &step_key,
                 &format!("Site {domain}"),
                 "done",
-                Some("Imported".into()),
+                Some(done_message),
             );
             if let Some(arr) = results["sites_imported"].as_array_mut() {
-                arr.push(serde_json::json!({ "domain": domain, "site_id": site_id }));
+                arr.push(serde_json::json!({
+                    "domain": domain,
+                    "site_id": site_id,
+                    "needs_config": needs_config,
+                }));
+            }
+            if let Some(reason) = needs_config {
+                if let Some(arr) = results["errors"].as_array_mut() {
+                    arr.push(serde_json::json!(format!("{domain}: {reason}")));
+                }
             }
 
             completed += 1;
@@ -799,7 +893,82 @@ pub async fn import(
                 }
             };
 
-            // Create database container via agent
+            // Insert the DB record BEFORE calling the agent — mirrors
+            // `databases::create`'s own "insert first" pattern
+            // (routes/databases.rs:233-244, comment: "Insert DB record first to
+            // atomically claim the port (unique index prevents races)"). The
+            // port SELECT above is unlocked, exactly like `find_available_port`,
+            // so it cannot rule out a second concurrent picker on its own — a
+            // second migration import, or an ordinary `POST /databases` running
+            // the identical unlocked query. What used to make that race land as
+            // an opaque Docker bind failure was the ORDER: the old code called
+            // the agent with the picked port first and only inserted this row
+            // 30+ lines later, so `idx_databases_port_unique` could not
+            // adjudicate the race until after the agent (and Docker) had already
+            // been asked to bind the same port twice. Inserting first lets
+            // Postgres reject the losing side's row before either one reaches
+            // the agent.
+            let encrypted_password =
+                crate::services::secrets_crypto::encrypt_credential(&password, &jwt_secret)
+                    .unwrap_or_else(|_| password.clone());
+            let inserted = sqlx::query_as::<_, (Uuid,)>(
+                "INSERT INTO databases (site_id, engine, name, db_user, db_password_enc, container_id, port) \
+                 VALUES ($1, $2, $3, $4, $5, '', $6) \
+                 ON CONFLICT ON CONSTRAINT databases_site_name_unique DO NOTHING RETURNING id",
+            )
+            .bind(site_id)
+            .bind(engine)
+            .bind(db_name)
+            .bind(db_name)
+            .bind(&encrypted_password)
+            .bind(port)
+            .fetch_optional(&db)
+            .await;
+
+            let db_id = match inserted {
+                Ok(Some((rid,))) => rid,
+                Ok(None) => {
+                    let msg =
+                        format!("Database {db_name} already exists on that site — not imported.");
+                    tracing::warn!("{msg}");
+                    emit_step(&logs, id, &step_key, &format!("Database {db_name}"), "error", Some(msg.clone()));
+                    if let Some(arr) = results["databases_failed"].as_array_mut() { arr.push(serde_json::json!(db_name)); }
+                    if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
+                    completed += 1;
+                    continue;
+                }
+                // `databases_site_name_unique` is named explicitly above, so a
+                // unique violation reaching here can only be the OTHER unique
+                // index, `idx_databases_port_unique` — a concurrent picker won
+                // the same port first. Named separately from a generic DB error
+                // because it tells the operator the truth: retrying the same
+                // database, unmodified, is expected to work.
+                Err(e) if e.to_string().contains("idx_databases_port_unique") => {
+                    let msg = format!(
+                        "Port {port} for database {db_name} was claimed by a concurrent \
+                         operation — not imported. Retry the import for this database."
+                    );
+                    tracing::warn!("{msg}");
+                    emit_step(&logs, id, &step_key, &format!("Database {db_name}"), "error", Some(msg.clone()));
+                    if let Some(arr) = results["databases_failed"].as_array_mut() { arr.push(serde_json::json!(db_name)); }
+                    if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
+                    completed += 1;
+                    continue;
+                }
+                Err(e) => {
+                    let msg = format!("Could not record database {db_name}: {e}");
+                    tracing::error!("{msg}");
+                    emit_step(&logs, id, &step_key, &format!("Database {db_name}"), "error", Some(msg.clone()));
+                    if let Some(arr) = results["databases_failed"].as_array_mut() { arr.push(serde_json::json!(db_name)); }
+                    if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
+                    completed += 1;
+                    continue;
+                }
+            };
+
+            // Create database container via agent. The row above now holds this
+            // exact port under a uniqueness guarantee, so this call — and Docker
+            // — are the only thing left that can fail.
             let create_body = serde_json::json!({
                 "name": db_name,
                 "engine": engine,
@@ -819,75 +988,35 @@ pub async fn import(
                     emit_step(&logs, id, &step_key, &format!("Database {db_name}"), "error", Some(msg.clone()));
                     if let Some(arr) = results["databases_failed"].as_array_mut() { arr.push(serde_json::json!(db_name)); }
                     if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
+                    // The row claimed this port and name but no container exists
+                    // for it — delete it (mirrors `databases::create`'s own
+                    // agent-failure cleanup) so a retry isn't blocked by a row
+                    // for a database that was never actually created.
+                    let _ = sqlx::query("DELETE FROM databases WHERE id = $1")
+                        .bind(db_id)
+                        .execute(&db)
+                        .await;
                     completed += 1;
                     continue;
                 }
             };
 
-            // Insert the DB record. This statement used to omit `site_id` and
-            // discard its own result, so it could never succeed and always
-            // reported success: the loop carried on and announced "Imported"
-            // over a row that was never written. `ON CONFLICT DO NOTHING`
-            // arbitrates unique conflicts and does not cover a not-null
-            // violation, so it never softened anything here either.
-            //
-            // Checked now, like the `sites` insert 150 lines up. A conflict is
-            // reported by name rather than swallowed — `(site_id, name)` is
-            // unique, so it means this site already has a database with this
-            // name, which the operator needs to know.
-            let encrypted_password =
-                crate::services::secrets_crypto::encrypt_credential(&password, &jwt_secret)
-                    .unwrap_or_else(|_| password.clone());
-            let inserted = sqlx::query_as::<_, (Uuid,)>(
-                "INSERT INTO databases (site_id, engine, name, db_user, db_password_enc, container_id, port) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING RETURNING id",
-            )
-            .bind(site_id)
-            .bind(engine)
-            .bind(db_name)
-            .bind(db_name)
-            .bind(&encrypted_password)
-            .bind(&container_id)
-            .bind(port)
-            .fetch_optional(&db)
-            .await;
-
-            let landed = match inserted {
-                Ok(Some(_)) => true,
-                Ok(None) => {
-                    let msg =
-                        format!("Database {db_name} already exists on that site — not imported.");
-                    tracing::warn!("{msg}");
-                    emit_step(&logs, id, &step_key, &format!("Database {db_name}"), "error", Some(msg.clone()));
-                    if let Some(arr) = results["databases_failed"].as_array_mut() { arr.push(serde_json::json!(db_name)); }
-                    if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
-                    false
-                }
-                Err(e) => {
-                    let msg = format!("Could not record database {db_name}: {e}");
-                    tracing::error!("{msg}");
-                    emit_step(&logs, id, &step_key, &format!("Database {db_name}"), "error", Some(msg.clone()));
-                    if let Some(arr) = results["databases_failed"].as_array_mut() { arr.push(serde_json::json!(db_name)); }
-                    if let Some(arr) = results["errors"].as_array_mut() { arr.push(serde_json::json!(msg)); }
-                    false
-                }
-            };
-
-            if !landed {
-                // The container exists and nothing in the panel now points at
-                // it. Take it back down rather than leave a running database
-                // with a password that exists nowhere — `databases::remove`
-                // needs a row, so this is the only moment it can be reached.
-                if !container_id.is_empty() {
-                    if let Err(e) = agent.delete(&format!("/databases/{container_id}")).await {
-                        tracing::error!(
-                            "Migration {id}: could not remove the orphaned container for {db_name} \
-                             ({container_id}): {e}"
-                        );
-                    }
-                }
-                completed += 1;
-                continue;
+            // Record the real container_id now that the agent has returned one
+            // (mirrors `databases::create`'s own post-agent UPDATE). Not fatal to
+            // the import if this write fails — the row and the container both
+            // exist either way, this only affects later delete/restart lookups —
+            // so a failure here is logged and the import continues rather than
+            // tearing down a container that is already running.
+            if let Err(e) = sqlx::query("UPDATE databases SET container_id = $1 WHERE id = $2")
+                .bind(&container_id)
+                .bind(db_id)
+                .execute(&db)
+                .await
+            {
+                tracing::error!(
+                    "Migration {id}: database {db_name} was created but its container_id \
+                     could not be recorded: {e}"
+                );
             }
 
             // Wait for engine to be ready
@@ -1148,9 +1277,15 @@ pub async fn remove(
         ),
     }
 
-    // Delete from DB
-    sqlx::query("DELETE FROM migrations WHERE id = $1")
+    // Delete from DB. Scoped by user_id like every other statement in this file
+    // (get_one, list, import's fetch, and the SELECT just above this DELETE) —
+    // this was the one exception, relying entirely on that preceding SELECT's
+    // ownership check still being valid, with no intervening await that could
+    // invalidate it today. Scoping it directly matches the file's own discipline
+    // and removes the dependency on that ordering never changing.
+    sqlx::query("DELETE FROM migrations WHERE id = $1 AND user_id = $2")
         .bind(id)
+        .bind(claims.sub)
         .execute(&state.db)
         .await
         .map_err(|e| internal_error("remove migration", e))?;
