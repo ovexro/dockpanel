@@ -1160,13 +1160,15 @@ export default function Dashboard() {
                 this cell asserted "up to date" about a machine it had not asked
                 about. An unhidden blank is honest; an unhidden zero is a claim. */}
             {isAdmin && (
-              <div className="bg-dark-800 px-4 py-3 flex flex-col card-interactive">
+              <Link to="/updates" className={`px-4 py-3 flex flex-col card-interactive ${
+                updateCount > 0 ? "bg-warn-500/5" : "bg-dark-800"
+              }`}>
                 <span className="text-[10px] text-dark-300 uppercase tracking-widest mb-1">Updates</span>
                 {updateCount > 0
                   ? <span className="text-sm text-warn-400 font-bold">{updateCount} available</span>
                   : <span className="text-sm text-rust-400 font-medium">up to date</span>
                 }
-              </div>
+              </Link>
             )}
             {/* Disk I/O */}
             {diskIo && isVisible("disk_io") && <>
@@ -1265,11 +1267,20 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* Active Issues + SSL — side by side */}
-          {intel && ((isVisible("issues") && intel.top_issues.length > 0) || (isVisible("ssl_countdown") && intel.ssl_countdowns.length > 0)) && (
+          {/* Active Issues + SSL — side by side when both have content; a solo
+              panel spans the full row instead of sitting at half width in an
+              empty 2-col grid (the "Active Issues looks narrower than Recent
+              Activity/Recommendations" report — it only IS narrower than its
+              full-width siblings when SSL has nothing to show beside it). */}
+          {intel && (() => {
+            const showIssues = isVisible("issues") && intel.top_issues.length > 0;
+            const showSsl = isVisible("ssl_countdown") && intel.ssl_countdowns.length > 0;
+            if (!showIssues && !showSsl) return null;
+            const solo = showIssues !== showSsl;
+            return (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-              {isVisible("issues") && intel.top_issues.length > 0 && (
-                <div className="border border-dark-500 bg-dark-800 rounded-lg p-4">
+              {showIssues && (
+                <div className={`border border-dark-500 bg-dark-800 rounded-lg p-4 ${solo ? "lg:col-span-2" : ""}`}>
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-xs text-dark-300 uppercase tracking-widest">Active Issues</h3>
                     <Link to={REC_ACTION_ROUTES.alerts} className="text-xs text-rust-400 hover:text-rust-300">View all</Link>
@@ -1277,7 +1288,7 @@ export default function Dashboard() {
                   <div className="space-y-2">
                     {intel.top_issues.slice(0, 4).map((issue, i) => (
                       <div key={i} className="flex items-start gap-2">
-                        <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
+                        <div className={`w-2 h-2 rounded-full mt-0.5 flex-shrink-0 ${
                           issue.severity === "critical" ? "bg-danger-500" :
                           issue.severity === "warning" ? "bg-warn-500" : "bg-accent-500"
                         }`} />
@@ -1287,8 +1298,8 @@ export default function Dashboard() {
                   </div>
                 </div>
               )}
-              {isVisible("ssl_countdown") && intel.ssl_countdowns.length > 0 && (
-                <div className="border border-dark-500 bg-dark-800 rounded-lg p-4">
+              {showSsl && (
+                <div className={`border border-dark-500 bg-dark-800 rounded-lg p-4 ${solo ? "lg:col-span-2" : ""}`}>
                   <h3 className="text-xs text-dark-300 uppercase tracking-widest mb-3">SSL Certificates</h3>
                   <div className="space-y-2">
                     {intel.ssl_countdowns.map((ssl, i) => (
@@ -1313,7 +1324,8 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
-          )}
+            );
+          })()}
 
           {/* Smart Recommendations */}
           {intel && intel.recommendations && intel.recommendations.length > 0 && (
@@ -1337,7 +1349,7 @@ export default function Dashboard() {
                   const route = target && isNavVisible(navFlagsFor(target), user?.role ?? "") ? target : undefined;
                   const inner = (
                     <>
-                      <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
+                      <div className={`w-2 h-2 rounded-full mt-0.5 flex-shrink-0 ${
                         rec.severity === "critical" ? "bg-danger-500" :
                         rec.severity === "warning" ? "bg-warn-500" : "bg-accent-500"
                       }`} />

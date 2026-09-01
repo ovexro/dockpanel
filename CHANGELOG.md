@@ -4,6 +4,40 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.198.1]
+
+### Fixed — Dashboard: Updates tile not clickable, Active Issues width, dot/text misalignment
+
+Three cosmetic/UX reports against the Dashboard, all in `Dashboard.tsx`:
+
+- The **Updates** stat tile was a plain `<div>` while its siblings (Docker,
+  Health, Alerts, SSL, Incidents, Backups) were all `<Link>`s. It now links to
+  `/updates`, with the same warn-tint-when-actionable treatment as Alerts/
+  Incidents/Backups.
+- **Active Issues** read narrower than **Recent Activity** or
+  **Recommendations** whenever the adjacent **SSL Certificates** panel had
+  nothing to show: both panels shared a `grid-cols-2` row, and CSS grid does
+  not stretch a lone child to fill an empty second column. The row now spans
+  a solo panel across both columns (`lg:col-span-2`) when only one of the two
+  has content, and keeps the existing side-by-side layout when both do.
+- The severity dots in **Active Issues** and **Recommendations** sat visibly
+  below their text's optical center (`mt-1.5` on an 8px dot against
+  `text-xs leading-tight`, measured via a headless-browser harness against
+  the actual compiled Tailwind output: dot center 4px below the first
+  line's center in both places). Changed to `mt-0.5`, verified to land the
+  two centers exactly on top of each other.
+
+`tests/carry-sweep-pin-e2e.sh`'s H6 (the SSL-countdown-must-not-ride-the-
+Active-Issues-switch pin) and `tests/client-role-honesty-pin-e2e.sh`'s A6
+(the Updates-cell-must-stay-admin-gated pin) both updated to match: H6 split
+into H6a/H6b to verify the new single-source-of-truth `showSsl` shape (a
+strictly stronger guarantee — the old duplicated-literal shape could drift
+between its two copies, this one cannot by construction), and A6's
+proximity threshold widened from 260 to 300 chars to admit the Link's
+legitimately longer conditional className while staying far tighter than
+neighboring thresholds. Both re-verified via full revert and targeted decoy
+mutation.
+
 ## [2.198.0]
 
 ### Fixed — escalation-policy notification-relay abuse; agent-side git-clone SSRF/DNS-rebind gap; secrets masking panic

@@ -336,13 +336,19 @@ else
                   || bad "H5 every widget checkbox has a render guard that reads it" "inert:$INERT"
 fi
 # The SSL countdown must not go back to riding the Active Issues switch.
-# ⚠ COUNTED, not merely present — and the count is 2 on purpose. The outer gate
-# that decides whether the row renders at all carries the SAME condition as the
-# inner render guard, so a `has` here is satisfied by the outer one while the inner
-# guard is deleted. That is the sibling-satisfaction trap this suite hit twice
-# already today; an `eq` is what makes either deletion go red.
-eq "H6 the certificate countdown reads its own switch, at both its gates" \
-   "$(occ "$F_DASH" 'isVisible("ssl_countdown")&&intel.ssl_countdowns.length>0')" 2
+# ⚠ COUNTED, not merely present. s442 replaced the original shape — the same
+# `isVisible("ssl_countdown")&&...` literal duplicated at an outer whole-row
+# gate and an inner per-panel gate — with a single `showSsl` computed once and
+# consumed at three independent points (whole-row gate, solo-width detection,
+# and the panel's own render gate), so the two copies can no longer drift from
+# each other by construction. `eq` on BOTH the definition (still derived from
+# ssl_countdown alone, never from "issues") and the total consumer count is
+# what makes any one deletion go red — a `has` here is satisfied by whichever
+# consumer survives while the others vanish.
+eq "H6a the certificate countdown's switch is derived from ssl_countdown alone" \
+   "$(occ "$F_DASH" 'constshowSsl=isVisible("ssl_countdown")&&intel.ssl_countdowns.length>0')" 1
+eq "H6b that switch is read at all three of its gates (whole-row, solo-width, render)" \
+   "$(occ "$F_DASH" 'showSsl')" 4
 
 echo "── §J  the only UNATTENDED renewal carries the site's certificate profile"
 # `security_scanner::auto_fix_safe_findings` is reached with no opt-in at all —

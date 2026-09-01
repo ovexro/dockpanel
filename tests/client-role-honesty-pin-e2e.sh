@@ -162,10 +162,15 @@ fi
 # A6-A9 — the cells that render a NUMBER from state a non-admin never fetches.
 # An unhidden blank is honest; an unhidden zero is a claim about a machine the
 # reader was never allowed to ask about. These four were the false statements.
+# ⚠ s442: A6's gap grew from 177 to 267 chars when Updates became a Link with
+# its own conditional background (matching Alerts/Incidents/Backups' existing
+# shape) — 300 keeps ~30 chars of headroom for that cell while staying far
+# tighter than A10's 700 below, so this still means "the SAME gate", not "gated
+# somewhere in the file".
 for pair in "A6:Updates:up to date" "A7:Mail Queue:messages" "A8:Bandwidth:formatSize" "A9:Docker:running"; do
   arm=${pair%%:*}; rest=${pair#*:}; label=${rest%%:*}; tail=${rest#*:}
   if need "$DASH_S" "$arm"; then
-    if within "$DASH_S" '\{isAdmin && \(' "$label" 260 && within "$DASH_S" "$label" "$tail" 400; then
+    if within "$DASH_S" '\{isAdmin && \(' "$label" 300 && within "$DASH_S" "$label" "$tail" 400; then
       ok "$arm the $label cell is admin-gated"
     else
       bad "$arm the $label cell renders to a non-admin — a host figure stated as zero"
