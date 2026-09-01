@@ -31,6 +31,7 @@ pub mod security;
 pub mod security_scanner;
 pub mod smtp;
 pub mod ssl;
+pub mod ssrf_guard;
 pub mod staging;
 pub mod traefik;
 pub mod volume_backup;

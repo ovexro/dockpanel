@@ -4,6 +4,62 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.198.0]
+
+### Fixed — escalation-policy notification-relay abuse; agent-side git-clone SSRF/DNS-rebind gap; secrets masking panic
+
+Three findings from a fresh `dockpanel-fanout` round targeting
+`auth.rs`/`secrets.rs`/`files.rs`/`git_deploys.rs`/`databases.rs`, plus two
+new-surface finds its completeness and setup critics surfaced outside that
+menu:
+
+`panel/backend/src/routes/escalation_policies.rs`'s `user:<uuid>`
+escalation-policy route step was validated only as a UUID shape, unlike its
+`on_call_schedule:<uuid>` sibling, which got an ownership check at v2.185.0
+(s437). Any admin could discover another user's UUID via `GET /api/users`
+(intentionally unscoped — a shared admin directory), save a policy with a
+`user:<victim>` step, attach it to an alert rule they own, and trigger it —
+delivering the alert to the victim's real email/Slack/Discord/PagerDuty/
+webhook with no consent and no way to trace who set it up.
+`validate_user_routes` now requires a `user:` target to be the caller
+themselves or a user they directly manage (`reseller_id = caller`), the same
+shape used everywhere else in the codebase for "which users does this admin
+manage."
+
+`panel/backend/src/helpers.rs::validate_repo_url_not_internal` checks a git
+deploy's `repo_url` for SSRF — but on the panel host, at write time. The
+actual `git clone` runs later (immediately, on a scheduled pull, or on a
+redeploy), on a *different* host — the fleet member running
+`panel/agent` — via a plain subprocess with no validation of its own. A DNS
+answer that differs between "how the panel resolved this hostname" and "how
+the fleet member resolves it right now" sailed straight through. Reachable
+via three independent, previously-unguarded agent code paths:
+`git_build.rs::clone_or_pull` (`/git/clone`), `deploy.rs::clone_or_pull`
+(`/deploy/run`), and `deploy.rs::atomic_deploy` (`/deploy/atomic`, its own
+inline clone). All three now resolve and reject an internal/private target
+via a new `ssrf_guard` module immediately before invoking `git`, closing the
+unbounded cross-host TOCTOU window down to the same narrow same-host,
+same-instant window this codebase already accepts for `check_tcp`/
+`check_ping`.
+
+`panel/backend/src/routes/secrets.rs`'s `mask_value` sliced the first 4
+*bytes* of a secret's value for display. Rust panics if that byte offset
+doesn't land on a UTF-8 character boundary — reachable from any secret
+containing a multi-byte character. Hit from `create_secret` and
+`update_secret`'s responses (the row is committed to Postgres before the
+panic, so the secret is saved but the response is lost) and every
+subsequent `list_secrets` call with `reveal=false`, permanently breaking
+that vault's default masked listing until the offending secret is deleted
+via `reveal=true`. Fixed by walking `.chars()` instead of byte indices,
+which can't straddle a boundary by construction.
+
+New pin suites: `tests/escalation-user-route-scope-pin-e2e.sh` (13
+assertions), `tests/git-clone-ssrf-pin-e2e.sh` (16 assertions),
+`tests/secrets-mask-value-boundary-pin-e2e.sh` (10 assertions) — 39 total,
+all mutation-tested via full revert and, for every position-sensitive
+assertion (8 of them), an individually targeted decoy mutation confirming
+that assertion alone catches its specific defect.
+
 ## [2.197.0]
 
 ### Fixed — backup encryption had no integrity check; DB passwords could be typed as plaintext CLI arguments

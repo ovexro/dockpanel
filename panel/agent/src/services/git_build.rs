@@ -61,6 +61,11 @@ pub async fn clone_or_pull(
     let repo_dir = format!("{GIT_BASE_DIR}/{name}");
     let git_dir = format!("{repo_dir}/.git");
 
+    // SSRF: this process is the one that actually dials `repo_url` (the panel's
+    // own check at write time runs on a different host, at a different — often
+    // much earlier — moment). See ssrf_guard's module docs.
+    crate::services::ssrf_guard::validate_repo_url_not_internal(repo_url).await?;
+
     let env_ssh = match key_path {
         Some(k) => Some(crate::services::deploy::ssh_command(k)?),
         None => None,

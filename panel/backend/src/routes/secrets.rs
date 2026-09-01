@@ -177,11 +177,20 @@ pub(crate) fn get_encryption_key(jwt_secret: &str) -> String {
     secrets_crypto::vault_key_primary(jwt_secret)
 }
 
+/// Byte-slicing (`&value[..4]`) panics whenever byte offset 4 doesn't land on a
+/// UTF-8 char boundary — reachable from any secret value containing a
+/// multi-byte character (e.g. a pasted passphrase), and every masking call
+/// site hits it: `create_secret`/`update_secret`'s response, and every
+/// default (`reveal=false`) `list_secrets` call thereafter, since the value
+/// is stored regardless of whether the response that reports it panics.
+/// Walking chars instead of bytes can't straddle a boundary by construction.
 fn mask_value(value: &str) -> String {
-    if value.len() <= 4 {
+    let mut chars = value.chars();
+    let prefix: String = chars.by_ref().take(4).collect();
+    if chars.next().is_none() {
         "••••••••".to_string()
     } else {
-        format!("{}••••••••", &value[..4])
+        format!("{prefix}••••••••")
     }
 }
 
@@ -701,6 +710,41 @@ pub async fn import_vault(
     }
 
     Ok(Json(serde_json::json!({ "ok": true, "imported": imported })))
+}
+
+#[cfg(test)]
+mod mask_value_tests {
+    use super::mask_value;
+
+    /// The exact scenario `&value[..4]` panicked on: byte offset 4 lands
+    /// mid-character in the 3-byte 日, which is NOT a char boundary. This is
+    /// executed, not asserted — a byte-slicing regression here panics the
+    /// test itself rather than merely failing an assertion.
+    #[test]
+    fn a_multibyte_value_straddling_the_old_byte_offset_does_not_panic() {
+        assert_eq!(mask_value("aa日BBBB"), "aa日B••••••••");
+    }
+
+    /// A value that's ENTIRELY multi-byte, so every char boundary the old
+    /// code could have picked is still not byte offset 4 (three 3-byte
+    /// characters place boundaries at 0/3/6/9, never 4).
+    #[test]
+    fn an_all_multibyte_value_does_not_panic() {
+        assert_eq!(mask_value("日本語です"), "日本語で••••••••");
+    }
+
+    #[test]
+    fn short_values_are_fully_masked() {
+        assert_eq!(mask_value(""), "••••••••");
+        assert_eq!(mask_value("ab"), "••••••••");
+        assert_eq!(mask_value("abcd"), "••••••••"); // exactly 4 chars — still fully masked
+    }
+
+    #[test]
+    fn ascii_values_keep_the_four_char_prefix() {
+        assert_eq!(mask_value("abcde"), "abcd••••••••");
+        assert_eq!(mask_value("supersecretvalue"), "supe••••••••");
+    }
 }
 
 #[cfg(test)]

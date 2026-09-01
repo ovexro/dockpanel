@@ -174,6 +174,59 @@ async fn validate_schedule_routes(
     Ok(())
 }
 
+/// Reject `user:<uuid>` routes pointing at a user the caller may not page:
+/// anyone other than themselves, or a user they directly manage
+/// (`users.reseller_id = caller`) — the same ownership shape `list`/`create`
+/// in `routes/users.rs` deliberately do NOT enforce (the user directory is
+/// shared across every admin on the install), but paging someone is not
+/// browsing a directory.
+///
+/// ⚠ SECURITY: `validate_route` only parses the UUID as a shape check.
+/// Without this, ANY admin could route an escalation step at ANY other
+/// user's UUID — trivially discoverable via `GET /api/users`, which lists
+/// every user on the install with no scoping — then attach that policy to
+/// an alert rule they own and trigger it, delivering the alert's
+/// subject/message to that user's real email/Slack/Discord/PagerDuty/webhook
+/// with no consent and no way for the victim to trace who set it up. Exact
+/// sibling of the `on_call_schedule:` gap `validate_schedule_routes` closed
+/// at s437 — same file, same validator set, same threat model, different
+/// route shape.
+async fn validate_user_routes(
+    db: &sqlx::PgPool,
+    input: &PolicyInput,
+    owner_id: Uuid,
+) -> Result<(), ApiError> {
+    for (i, step) in input.steps.iter().enumerate() {
+        let Some(uuid_str) = step.route.strip_prefix("user:") else {
+            continue;
+        };
+        let Ok(target_id) = Uuid::parse_str(uuid_str) else {
+            continue; // shape already rejected by validate_route
+        };
+
+        if target_id == owner_id {
+            continue; // paging yourself needs no ownership check
+        }
+
+        let managed: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT id FROM users WHERE id = $1 AND reseller_id = $2",
+        )
+        .bind(target_id)
+        .bind(owner_id)
+        .fetch_optional(db)
+        .await
+        .map_err(|e| internal_error("validate user routes", e))?;
+
+        if managed.is_none() {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                &format!("step {i}: user {target_id} does not exist"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// GET /api/escalation-policies — Admin: list this tenant's policies.
 ///
 /// ⚠ SECURITY (s437): this table carried no `user_id` at all until this
@@ -234,6 +287,7 @@ pub async fn create_policy(
     validate_input(&input)?;
     validate_webhook_routes(&input).await?;
     validate_schedule_routes(&state.db, &input, claims.sub).await?;
+    validate_user_routes(&state.db, &input, claims.sub).await?;
 
     let steps_json = serde_json::to_value(&input.steps)
         .map_err(|e| internal_error("serialize policy steps", e))?;
@@ -263,6 +317,7 @@ pub async fn update_policy(
     validate_input(&input)?;
     validate_webhook_routes(&input).await?;
     validate_schedule_routes(&state.db, &input, claims.sub).await?;
+    validate_user_routes(&state.db, &input, claims.sub).await?;
 
     let steps_json = serde_json::to_value(&input.steps)
         .map_err(|e| internal_error("serialize policy steps", e))?;

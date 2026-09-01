@@ -227,6 +227,11 @@ pub async fn clone_or_pull(
     let git_dir = format!("{site_dir}/.git");
     let mut output_buf = String::new();
 
+    // SSRF: this process is the one that actually dials `repo_url` (the panel's
+    // own check at write time runs on a different host, at a different — often
+    // much earlier — moment). See ssrf_guard's module docs.
+    crate::services::ssrf_guard::validate_repo_url_not_internal(repo_url).await?;
+
     let env_ssh = match key_path {
         Some(k) => Some(ssh_command(k)?),
         None => None,
@@ -515,6 +520,11 @@ pub async fn atomic_deploy(
     let releases_dir = format!("{site_dir}/releases");
     let shared_dir = format!("{site_dir}/shared");
     let current_link = format!("{site_dir}/current");
+
+    // SSRF: this process is the one that actually dials `repo_url` (the panel's
+    // own check at write time runs on a different host, at a different — often
+    // much earlier — moment). See ssrf_guard's module docs.
+    crate::services::ssrf_guard::validate_repo_url_not_internal(repo_url).await?;
 
     // Create directory structure
     std::fs::create_dir_all(&releases_dir)

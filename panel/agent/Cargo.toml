@@ -1,6 +1,6 @@
 [package]
 name = "dockpanel-agent"
-version = "2.197.0"
+version = "2.198.0"
 license = "AGPL-3.0-only"
 edition = "2024"
 
@@ -40,4 +40,5 @@ base64 = "0.22"
 rand = "0.9"
 rustix = { version = "1", features = ["termios", "pty", "fs", "process"] }
 libc = "0.2"
+url = "2"
 tikv-jemallocator = { version = "0.6", features = ["background_threads"] }

@@ -594,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "dockpanel-agent"
-version = "2.197.0"
+version = "2.198.0"
 dependencies = [
  "axum",
  "axum-server",
@@ -625,6 +625,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "x509-parser 0.16.0",
 ]
