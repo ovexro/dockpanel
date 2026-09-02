@@ -833,20 +833,59 @@ pub async fn add_repo(repo: Repo) -> Result<(), String> {
 }
 
 /// Delete a repository this module added. Safe to call when it is absent.
+///
+/// **The list must track upstream's ACTUAL current footprint, not just the one
+/// file `add_repo` itself references.** NodeSource's `setup_22.x` (verified
+/// live against `deb.nodesource.com`/`rpm.nodesource.com` before this list was
+/// written) additionally drops a keyring and two `Pin-Priority: 600` files
+/// that outrank a normally-installed package — leaving them behind after an
+/// operator clicks "Uninstall" silently keeps `deb.nodesource.com` as the
+/// preferred source for `nodejs`/`nsolid` on every LATER unrelated
+/// `apt-get install` (e.g. as another package's dependency), contradicting
+/// this file's own comment two functions up that failure "must leave nothing
+/// behind" — that promise was false on the ORDINARY successful uninstall path
+/// too, not only on a failed install.
+///
+/// **Deliberately NOT attempted here:** revoking the RPM-imported GPG key
+/// (`rpm -qa gpg-pubkey`) NodeSource's and Cloudflared's `.repo` `gpgkey=`
+/// lines cause `dnf`/`yum` to import on first use. It is not a file on disk —
+/// there is nothing here to `remove_file` — and matching the right
+/// `gpg-pubkey-*` package by heuristic risks revoking a key some OTHER
+/// still-active repo also relies on. Deleting the `.repo` file (below) is
+/// what actually stops the repo from being consulted; the trust-store entry
+/// surviving with no repo left pointing at it is a much smaller residual than
+/// the live, silently-preferred repo this fix closes.
 pub async fn remove_repo(repo: Repo) {
-    let paths: &[&str] = match repo {
+    for p in repo_artifact_paths(repo) {
+        let _ = tokio::fs::remove_file(p).await;
+    }
+}
+
+/// Every on-disk artifact [`add_repo`] can leave for `repo`, so [`remove_repo`]
+/// and its tests share one list instead of drifting apart the way the pre-fix
+/// version did. Pulled out of `remove_repo` itself so a unit test can assert on
+/// the path set directly, without touching the real filesystem paths involved.
+fn repo_artifact_paths(repo: Repo) -> &'static [&'static str] {
+    match repo {
         Repo::NodeSource => &[
+            // Debian: current (DEB822) + the pre-nodesource.sources filename
+            // upstream's own script still self-cleans on reinstall, for any
+            // box that added the repo under an older script version.
+            "/etc/apt/sources.list.d/nodesource.sources",
             "/etc/apt/sources.list.d/nodesource.list",
+            "/usr/share/keyrings/nodesource.gpg",
+            "/etc/apt/preferences.d/nodejs",
+            "/etc/apt/preferences.d/nsolid",
+            // RPM: both repo defs upstream's setup script can write.
             "/etc/yum.repos.d/nodesource-nodejs.repo",
+            "/etc/yum.repos.d/nodesource-nsolid.repo",
         ],
         Repo::Cloudflared => &[
             "/etc/apt/sources.list.d/cloudflared.list",
+            "/usr/share/keyrings/cloudflare-main.gpg",
             "/etc/yum.repos.d/cloudflared.repo",
         ],
         Repo::Rspamd => &["/etc/yum.repos.d/rspamd.repo"],
-    };
-    for p in paths {
-        let _ = tokio::fs::remove_file(p).await;
     }
 }
 
@@ -1015,5 +1054,59 @@ mod tests {
         for p in ["phpmyadmin", "php", "postfix-policyd", "python3-venv"] {
             assert_eq!(rpm_name(p), p, "{p} should pass through untouched");
         }
+    }
+
+    /// NodeSource's setup_22.x (verified live against deb.nodesource.com
+    /// before this test was written) writes a keyring and two Pin-Priority:600
+    /// files in addition to the .sources file — all three must be on the
+    /// cleanup list, or an uninstalled NodeSource repo keeps silently winning
+    /// over Debian's own archive for `nodejs`/`nsolid` on every later install.
+    #[test]
+    fn nodesource_cleanup_covers_the_keyring_and_both_pin_files() {
+        let paths = repo_artifact_paths(Repo::NodeSource);
+        for must_have in [
+            "/etc/apt/sources.list.d/nodesource.sources",
+            "/usr/share/keyrings/nodesource.gpg",
+            "/etc/apt/preferences.d/nodejs",
+            "/etc/apt/preferences.d/nsolid",
+            "/etc/yum.repos.d/nodesource-nodejs.repo",
+            "/etc/yum.repos.d/nodesource-nsolid.repo",
+        ] {
+            assert!(
+                paths.contains(&must_have),
+                "NodeSource cleanup list is missing {must_have}"
+            );
+        }
+    }
+
+    /// The legacy `.list` filename must stay on the list even though upstream's
+    /// own script no longer writes it — a box that added the repo under an
+    /// older script version still has it on disk.
+    #[test]
+    fn nodesource_cleanup_still_covers_the_legacy_list_filename() {
+        assert!(repo_artifact_paths(Repo::NodeSource)
+            .contains(&"/etc/apt/sources.list.d/nodesource.list"));
+    }
+
+    /// `add_repo`'s Cloudflared branch writes a keyring alongside the repo
+    /// file (pkg.rs's own `add_repo`, apt arm) — `remove_repo` must delete both.
+    #[test]
+    fn cloudflared_cleanup_covers_the_keyring_not_just_the_repo_file() {
+        let paths = repo_artifact_paths(Repo::Cloudflared);
+        assert!(paths.contains(&"/usr/share/keyrings/cloudflare-main.gpg"));
+        assert!(paths.contains(&"/etc/apt/sources.list.d/cloudflared.list"));
+        assert!(paths.contains(&"/etc/yum.repos.d/cloudflared.repo"));
+    }
+
+    /// Rspamd's footprint is a single flat repo file (add_repo's rpm-only
+    /// branch never writes a keyring) — unlike NodeSource/Cloudflared, this
+    /// list was already correct before this fix and must stay exactly that
+    /// size, not grow to match the other two by copy-paste.
+    #[test]
+    fn rspamd_cleanup_is_exactly_the_one_repo_file() {
+        assert_eq!(
+            repo_artifact_paths(Repo::Rspamd),
+            &["/etc/yum.repos.d/rspamd.repo"]
+        );
     }
 }

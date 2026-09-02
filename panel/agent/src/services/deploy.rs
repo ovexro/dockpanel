@@ -256,6 +256,13 @@ pub async fn clone_or_pull(
         if let Some(ref ssh) = env_ssh {
             cmd.env("GIT_SSH_COMMAND", ssh);
         }
+        // safe_command sets no kill_on_drop, so a timed-out (dropped) future
+        // would otherwise leave `git fetch` running in the background,
+        // holding .git/index.lock against every later deploy attempt on this
+        // site — see git_build.rs's identical fix (this crate has a second,
+        // independent clone_or_pull) and database.rs:317, migration.rs:91,
+        // database_backup.rs:424, security_scanner.rs:633 elsewhere.
+        cmd.kill_on_drop(true);
 
         let fetch = tokio::time::timeout(
             std::time::Duration::from_secs(120),
@@ -344,6 +351,8 @@ pub async fn clone_or_pull(
         if let Some(ref ssh) = env_ssh {
             cmd.env("GIT_SSH_COMMAND", ssh);
         }
+        // Same orphan-on-timeout leak as the fetch branch above — see its comment.
+        cmd.kill_on_drop(true);
 
         let clone = match tokio::time::timeout(
             std::time::Duration::from_secs(300),

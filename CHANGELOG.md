@@ -4,6 +4,52 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.204.0]
+
+### Fixed — NodeSource/Cloudflared repo cleanup left trust behind on every routine uninstall, and six timed-out privileged operations could orphan past their deadline
+
+From the s450 `dockpanel-fanout` audit of `panel/agent/src/services/pkg.rs`
+(the package-manager abstraction behind every `apt-get`/`dnf`/`yum`
+operation the agent runs as root) — the first PRIMARY pass over this file.
+
+**`remove_repo()` never deleted what `add_repo()` actually leaves behind,
+on the ordinary successful "Uninstall" path, not just a failed install.**
+Verified live against the real upstream scripts (`deb.nodesource.com` and
+`rpm.nodesource.com`'s `setup_22.x`): NodeSource additionally writes a
+keyring, a DEB822 `.sources` file, and two `Pin-Priority: 600` files that
+outrank a normally-installed package, none of which the old cleanup path
+touched; the RPM side leaves a second `.repo` file behind; Cloudflared's
+own keyring was never deleted either. The practical effect: a deliberately
+uninstalled NodeSource repo kept silently redirecting every LATER,
+unrelated `apt-get install` (e.g. as another package's dependency) to
+`deb.nodesource.com` instead of Debian's own archive — directly
+contradicting this file's own comment that a half-added repo "must leave
+nothing behind." The cleanup list now tracks upstream's real footprint;
+deliberately not attempted is revoking the RPM-imported GPG trust-store
+entry, since there is no file on disk to remove and matching the right key
+by heuristic risks revoking one another active repo still relies on.
+
+**Six call sites wrapped a privileged subprocess in a timeout without ever
+calling `.kill_on_drop(true)` on the `Command`** — the exact class already
+fixed in five sibling files, missed here. When the timeout fires and the
+Rust future is dropped, tokio's documented default leaves the child
+process running, orphaned, reparented to PID 1, entirely unbounded by the
+deadline that looked like it would stop it. Reproduced live: an orphaned
+`git fetch`/`git clone` leaves `.git/index.lock`, and the very next
+deploy/clone attempt on the same site — including an operator's ordinary
+immediate retry — fails instantly with a generic, non-actionable "Another
+git process seems to be running" error rather than succeeding or
+surfacing the real cause. Fixed in `git_build.rs` (both legs of
+`clone_or_pull`), `deploy.rs` (its own, independent second implementation
+of `clone_or_pull`), `backups.rs` (the staged `tar czf`), and
+`remote_backup.rs` (`s3_curl`, the one runner behind every S3 operation).
+
+`pkg.rs`'s own `systemd-run --wait`-backed timeout is a related but harder
+problem — proven live that killing the local waiting client has no effect
+on the remote transient unit it started — and is carried forward as sized
+tech debt rather than fixed in this pass; see `project_dockpanel_tech_debt`
+for the account.
+
 ## [2.203.0]
 
 ### Fixed — repair-walk TOCTOU, manual-prune data loss, auto-healer mid-recreate race, and 4 more from the docker_apps.rs carry list (E–I)

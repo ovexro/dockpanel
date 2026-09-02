@@ -445,7 +445,12 @@ pub async fn create_backup(domain: &str, databases: &[DbSpec]) -> Result<BackupI
 
     let tar_result = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        safe_command("tar").args(&tar_args).output(),
+        // safe_command sets no kill_on_drop, so a timed-out (dropped) future
+        // would otherwise leave `tar` running in the background against the
+        // staged plaintext copy below — see git_build.rs/deploy.rs's fetch
+        // fixes and database.rs:317, migration.rs:91, database_backup.rs:424,
+        // security_scanner.rs:633 for the same fix elsewhere in this crate.
+        safe_command("tar").args(&tar_args).kill_on_drop(true).output(),
     )
     .await;
 

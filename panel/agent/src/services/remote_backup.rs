@@ -79,7 +79,12 @@ async fn s3_curl(
 
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
-        safe_command("curl").args(&full).output(),
+        // safe_command sets no kill_on_drop, so a timed-out (dropped) future
+        // would otherwise leave `curl` running in the background against the
+        // S3 endpoint — see git_build.rs/deploy.rs/backups.rs's identical fix
+        // and database.rs:317, migration.rs:91, database_backup.rs:424,
+        // security_scanner.rs:633 for the same fix elsewhere in this crate.
+        safe_command("curl").args(&full).kill_on_drop(true).output(),
     )
     .await
     .map_err(|_| format!("{label} timed out"))?
