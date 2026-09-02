@@ -148,6 +148,32 @@ else
   fi
 fi
 
+# ── §E  remove_image rejects a leading '-' in the image id (s447) ──────────
+# Same threat class, same file, different call: the charset check at
+# `remove_image` allowed every character `docker rmi --help` needs, so
+# `DELETE /apps/images/--help` ran that flag and returned success:true with
+# no guard at all — 0 hits for `rmi` in this suite before the fix.
+# [[project_dockpanel_tech_debt_p185]] §D.
+
+REMOVE_IMG=$(flat "$(fnbody "$APPS_SRC" "remove_image")")
+if [ -z "$REMOVE_IMG" ]; then
+  bad "E0 could not extract docker_apps::remove_image"
+else
+  ok "E0 docker_apps::remove_image extracted"
+  if has "$REMOVE_IMG" 'id\.starts_with\(.-.\)'; then
+    ok "E1 remove_image rejects an image id starting with '-'"
+  else
+    bad "E1 remove_image has no leading-hyphen guard — an id starting with '-' is parsed as a docker rmi flag"
+  fi
+  CHK_AT=$(grep -bo "id.starts_with('-')" <<< "$REMOVE_IMG" | head -1 | cut -d: -f1)
+  SPAWN_AT=$(grep -bo '"rmi"' <<< "$REMOVE_IMG" | head -1 | cut -d: -f1)
+  if [ -n "$CHK_AT" ] && [ -n "$SPAWN_AT" ] && [ "$CHK_AT" -lt "$SPAWN_AT" ]; then
+    ok "E2 the validation precedes the docker rmi spawn"
+  else
+    bad "E2 the validation does not precede the docker rmi spawn (check@${CHK_AT:-none} spawn@${SPAWN_AT:-none})"
+  fi
+fi
+
 echo
 echo "----------------------------------------------"
 printf '  PASS %d  FAIL %d\n' "$PASS" "$FAIL"

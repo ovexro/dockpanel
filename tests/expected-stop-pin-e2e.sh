@@ -731,16 +731,21 @@ if AP=$(subj "$APPS"); then
       # Fixed by anchoring the if-let itself against its own known-correct
       # ABSOLUTE depth — a per-function baseline, since this file's fnbody()
       # includes the (often multi-line) signature's own closing `{` in the
-      # extraction, so a genuinely top-level statement in update_image/
-      # update_env sits at depth 1 (not 0), and update_app's sits at depth 4
-      # (inside its tokio::spawn + match arm) — AND that the call sits exactly
-      # one level deeper than THAT. Neither the if-let nor the call can be
-      # wrapped in anything extra now, and the call can't be pulled out of the
-      # if-let that guards it while the if-let itself stays put.
+      # extraction. Neither the if-let nor the call can be wrapped in
+      # anything extra now, and the call can't be pulled out of the if-let
+      # that guards it while the if-let itself stays put.
+      #
+      # s447: update_image/update_env moved from depth 1 to depth 2 (call:
+      # 2 to 3) — [[project_dockpanel_tech_debt_p185]] §A wrapped both
+      # bodies in `tokio::spawn(async move { ... })` so a dropped browser
+      # connection can no longer cancel the recreate mid-flight, adding one
+      # brace level to everything inside, this if-let included. update_app
+      # was already inside a tokio::spawn + match arm before that fix and is
+      # unchanged at depth 4/5.
       case "$f" in
         update_app)   BASE_DEPTH=4 ;;
-        update_image) BASE_DEPTH=1 ;;
-        update_env)   BASE_DEPTH=1 ;;
+        update_image) BASE_DEPTH=2 ;;
+        update_env)   BASE_DEPTH=2 ;;
       esac
       D_IF=$(depth_before "$b" 'if let Some(new_id) = result.get("container_id")')
       D_CALL=$(depth_before "$b" 'rekey_sleep_config(')

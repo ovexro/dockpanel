@@ -693,7 +693,7 @@ async fn deploy_service(
                 ..Default::default()
             }),
             None,
-            None,
+            super::docker_apps::registry_credentials_for(&svc.image),
         );
         while let Some(result) = pull.next().await {
             if let Err(e) = result {

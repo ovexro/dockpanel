@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.201.0.** The version stamp, the template count and every
+> **Reflects v2.202.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -402,7 +402,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. One-hundred-twelve suites, **3929 assertions**, all green at the current commit:
+survivable. One-hundred-fifteen suites, **3959 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -511,7 +511,10 @@ survivable. One-hundred-twelve suites, **3929 assertions**, all green at the cur
 | `notification-secrets-encryption-pin-e2e.sh` | 32 |
 | `webhook-secrets-encryption-pin-e2e.sh` | 46 |
 | `nginx-clone-env-backup-path-pin-e2e.sh` | 12 |
-| `registry-ollama-arg-validation-pin-e2e.sh` | 10 |
+| `registry-ollama-arg-validation-pin-e2e.sh` | 13 |
+| `env-mask-catalogue-secrets-pin-e2e.sh` | 13 |
+| `registry-pull-credentials-pin-e2e.sh` | 7 |
+| `update-connection-resilience-pin-e2e.sh` | 7 |
 | `admin-peer-account-protection-pin-e2e.sh` | 20 |
 | `backup-encryption-integrity-pin-e2e.sh` | 18 |
 | `cli-password-args-pin-e2e.sh` | 18 |

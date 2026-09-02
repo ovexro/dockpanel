@@ -874,7 +874,15 @@ export default function Apps() {
       setEnvEditing(false);
       loadApps();
     } catch (e) {
-      setMessage({ text: e instanceof Error ? e.message : "Failed to update env vars", type: "error" });
+      // This recreate can legitimately take up to 15 minutes (large images,
+      // slow uplinks), well past a proxy's own origin timeout — a network-level
+      // failure (not an ApiError, so the backend never got to answer) means the
+      // connection was cut, not that the update failed. The server keeps
+      // running it in the background regardless.
+      const text = !(e instanceof ApiError)
+        ? "Connection lost while saving — the update continues in the background. Refresh in a minute before retrying."
+        : e instanceof Error ? e.message : "Failed to update env vars";
+      setMessage({ text, type: "error" });
     } finally {
       setEnvSaving(false);
     }

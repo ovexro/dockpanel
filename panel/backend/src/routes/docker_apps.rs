@@ -1424,24 +1424,35 @@ pub async fn update_env(
 
     // Long verb: saving env recreates the container, and may first copy the app's data
     // out of its writable layer onto a bind mount (#110).
-    let result = agent
-        .put_long(&format!("/apps/{container_id}/env"), body, 900)
-        .await
-        .map_err(|e| agent_error("Update env", e))?;
-    if let Some(new_id) = result.get("container_id").and_then(|v| v.as_str()) {
-        rekey_sleep_config(&state.db, &container_id, new_id).await;
-    }
-    activity::log_activity(
-        &state.db,
-        claims.sub,
-        &claims.email,
-        "app.update_env",
-        Some("app"),
-        Some(&container_id),
-        None,
-        None,
-    )
-    .await;
+    //
+    // Spawned onto its own task, like `update_app` above: the browser holding
+    // this request open is proxied through Cloudflare's ~100s origin budget,
+    // well inside the 900s this can legitimately take, and if that edge cuts
+    // the connection the resulting drop must not cancel the agent call
+    // mid-recreate. The task outlives this handler; the response is simply
+    // never written if nothing is left to write it to.
+    let agent = agent.clone();
+    let db = state.db.clone();
+    let user_id = claims.sub;
+    let email = claims.email.clone();
+    let cid = container_id.clone();
+    let result = tokio::spawn(async move {
+        let result = agent
+            .put_long(&format!("/apps/{cid}/env"), body, 900)
+            .await
+            .map_err(|e| agent_error("Update env", e))?;
+        if let Some(new_id) = result.get("container_id").and_then(|v| v.as_str()) {
+            rekey_sleep_config(&db, &cid, new_id).await;
+        }
+        activity::log_activity(
+            &db, user_id, &email, "app.update_env",
+            Some("app"), Some(&cid), None, None,
+        )
+        .await;
+        Ok::<_, ApiError>(result)
+    })
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Update env task panicked: {e}")))??;
     Ok(Json(result))
 }
 
@@ -1500,25 +1511,42 @@ pub async fn update_image(
 
     // Long verb: this pulls an image and recreates the container, and may first copy the
     // app's data out of its writable layer onto a bind mount (#110).
-    let result = agent
-        .post_long(
-            &format!("/apps/{container_id}/change-image"),
-            Some(serde_json::json!({ "image": image })),
-            900,
-        )
-        .await
-        .map_err(|e| agent_error("Change image", e))?;
+    //
+    // Spawned onto its own task, like `update_env` above: this is another
+    // recreate-shaped call sitting behind a browser connection Cloudflare will
+    // cut at ~100s, well inside the 900s budget — the drop must not cancel it
+    // mid-recreate.
+    let image = image.to_string();
+    let agent = agent.clone();
+    let db = state.db.clone();
+    let user_id = claims.sub;
+    let email = claims.email.clone();
+    let cid = container_id.clone();
+    let result = tokio::spawn(async move {
+        let result = agent
+            .post_long(
+                &format!("/apps/{cid}/change-image"),
+                Some(serde_json::json!({ "image": image })),
+                900,
+            )
+            .await
+            .map_err(|e| agent_error("Change image", e))?;
 
-    if let Some(new_id) = result.get("container_id").and_then(|v| v.as_str()) {
-        rekey_sleep_config(&state.db, &container_id, new_id).await;
-    }
+        if let Some(new_id) = result.get("container_id").and_then(|v| v.as_str()) {
+            rekey_sleep_config(&db, &cid, new_id).await;
+        }
 
-    activity::log_activity(
-        &state.db, claims.sub, &claims.email, "app.change_image",
-        Some("app"), Some(&container_id), Some(image), None,
-    ).await;
+        activity::log_activity(
+            &db, user_id, &email, "app.change_image",
+            Some("app"), Some(&cid), Some(&image), None,
+        ).await;
 
-    tracing::info!("App image changed: {container_id} → {image}");
+        tracing::info!("App image changed: {cid} → {image}");
+        Ok::<_, ApiError>(result)
+    })
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Change image task panicked: {e}")))??;
+
     Ok(Json(result))
 }
 

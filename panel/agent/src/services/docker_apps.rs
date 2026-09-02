@@ -1,4 +1,5 @@
 use super::app_sidecar;
+use base64::Engine as _;
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
     RenameContainerOptions, StartContainerOptions, StopContainerOptions,
@@ -73,6 +74,46 @@ fn parse_image_ref(image: &str) -> ImageRef {
     };
 
     ImageRef { registry, repository, tag }
+}
+
+/// Look up saved registry credentials for an image reference.
+///
+/// `docker login` (agent route `registry_login`) runs through `safe_command`,
+/// which points `DOCKER_CONFIG` at [`crate::safe_cmd::DOCKER_CONFIG_DIR`] — so
+/// that is where a login actually lands, and every `create_image` pull below
+/// used to pass `credentials: None` regardless, meaning a private-image
+/// template or compose deploy failed even immediately after a successful
+/// login. Returns `None` for an unauthenticated/public pull, same as before.
+pub(crate) fn registry_credentials_for(image: &str) -> Option<bollard::auth::DockerCredentials> {
+    let config_path = format!("{}/config.json", crate::safe_cmd::DOCKER_CONFIG_DIR);
+    let content = std::fs::read_to_string(config_path).ok()?;
+    let config: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let auths = config.get("auths")?.as_object()?;
+
+    let registry = parse_image_ref(image).registry;
+    // `parse_image_ref` resolves an unqualified image to "registry-1.docker.io",
+    // but `docker login` (no host given) writes the config under Docker Hub's
+    // legacy key — the two strings never match by equality.
+    let key = if registry == "registry-1.docker.io" || registry == "docker.io" {
+        "https://index.docker.io/v1/"
+    } else {
+        &registry
+    };
+
+    let entry = auths
+        .get(key)
+        .or_else(|| auths.get(key.trim_start_matches("https://").trim_start_matches("http://")))?;
+    let auth_b64 = entry.get("auth")?.as_str()?;
+    let decoded = base64::engine::general_purpose::STANDARD.decode(auth_b64).ok()?;
+    let decoded = String::from_utf8(decoded).ok()?;
+    let (username, password) = decoded.split_once(':')?;
+
+    Some(bollard::auth::DockerCredentials {
+        username: Some(username.to_string()),
+        password: Some(password.to_string()),
+        serveraddress: Some(key.to_string()),
+        ..Default::default()
+    })
 }
 
 /// Fetch the manifest digest from a Docker registry (Docker Hub, GHCR, or generic OCI).
@@ -2914,6 +2955,16 @@ pub fn catalogue_non_secret_env(name: &str) -> bool {
     seen
 }
 
+/// The counterpart `GET /apps/{id}/env` was missing: a catalogue-declared
+/// `secret: true` name that doesn't happen to contain one of the route's
+/// substring patterns (PASSWORD/SECRET/KEY/TOKEN/CREDENTIAL/AUTH) — e.g.
+/// `DB_PASS`, `POSTGRES_PWD`, `DATABASE_URL` — was returned in the clear.
+pub fn catalogue_secret_env(name: &str) -> bool {
+    TEMPLATES
+        .iter()
+        .any(|t| t.env_vars.iter().any(|v| v.name == name && v.secret))
+}
+
 pub fn list_templates() -> Vec<AppTemplate> {
     TEMPLATES.iter().map(to_app_template).collect()
 }
@@ -3602,7 +3653,7 @@ pub async fn deploy_app(
                 ..Default::default()
             }),
             None,
-            None,
+            registry_credentials_for(template.image),
         );
         while let Some(result) = pull.next().await {
             if let Err(e) = result {
@@ -4828,7 +4879,7 @@ pub async fn update_app(container_id: &str) -> Result<UpdateResult, String> {
             ..Default::default()
         }),
         None,
-        None,
+        registry_credentials_for(&image),
     );
     let mut pull_error: Option<String> = None;
     while let Some(result) = pull.next().await {
@@ -5096,7 +5147,7 @@ pub async fn change_container_image(container_id: &str, new_image: &str) -> Resu
             ..Default::default()
         }),
         None,
-        None,
+        registry_credentials_for(new_image),
     );
     let mut last_err: Option<String> = None;
     while let Some(result) = pull.next().await {

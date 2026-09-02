@@ -840,8 +840,20 @@ async fn update(
     }
     ensure_managed(&container_id).await?;
 
-    let result = docker_apps::update_app(&container_id)
+    // Spawned onto its own task: a dropped connection (the caller is itself a
+    // spawned backend task relaying a browser request through a Cloudflare
+    // edge with a ~100s origin budget) must not cancel this future mid-recreate
+    // — between `remove_container` and `create_container` the app has no
+    // container at all, only its bind-mounted data survives.
+    let cid = container_id.clone();
+    let result = tokio::spawn(async move { docker_apps::update_app(&cid).await })
         .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("update task panicked: {e}") })),
+            )
+        })?
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -895,8 +907,9 @@ async fn get_env(
         .into_iter()
         .map(|(k, v)| {
             let upper = k.to_uppercase();
-            let is_sensitive = SENSITIVE_PATTERNS.iter().any(|pat| upper.contains(pat))
-                && !docker_apps::catalogue_non_secret_env(&k);
+            let is_sensitive = (SENSITIVE_PATTERNS.iter().any(|pat| upper.contains(pat))
+                && !docker_apps::catalogue_non_secret_env(&k))
+                || docker_apps::catalogue_secret_env(&k);
             let masked_value = if is_sensitive {
                 docker_apps::ENV_MASK.to_string()
             } else {
@@ -927,8 +940,18 @@ async fn update_env(
     }
     ensure_managed(&container_id).await?;
 
-    let new_id = docker_apps::update_env(&container_id, body.env)
+    // Spawned for the same reason as `update`, above: this recreates the
+    // container too, and must survive a dropped connection between the remove
+    // and the create.
+    let cid = container_id.clone();
+    let new_id = tokio::spawn(async move { docker_apps::update_env(&cid, body.env).await })
         .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("update task panicked: {e}") })),
+            )
+        })?
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1264,8 +1287,12 @@ async fn registry_login(
 
 /// GET /apps/registries — List configured registries.
 async fn list_registries() -> Json<serde_json::Value> {
-    let config_path = "/root/.docker/config.json";
-    let content = std::fs::read_to_string(config_path).unwrap_or_default();
+    // `docker login` (above) runs through `safe_command`, which points
+    // `DOCKER_CONFIG` at this dir — `/root/.docker/config.json` is never
+    // written by any panel-initiated login, so reading it here always
+    // reported "no registries configured" regardless of what was logged in.
+    let config_path = format!("{}/config.json", crate::safe_cmd::DOCKER_CONFIG_DIR);
+    let content = std::fs::read_to_string(&config_path).unwrap_or_default();
     let config: serde_json::Value =
         serde_json::from_str(&content).unwrap_or(serde_json::json!({}));
 
@@ -1728,16 +1755,18 @@ async fn prune_images_all() -> Result<Json<serde_json::Value>, (StatusCode, Json
 
 /// DELETE /apps/images/{id} — Remove a specific Docker image.
 async fn remove_image(Path(id): Path<String>) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    // Validate image ID: alphanumeric + : / . - _ only
+    // Validate image ID: alphanumeric + : / . - _ only, and never a leading
+    // dash — the charset alone still allows a string like "--help", which
+    // `docker rmi` reads as a flag rather than a reference and exits 0.
     let is_valid = !id.is_empty()
         && id.len() <= 256
+        && !id.starts_with('-')
         && id.chars().all(|c| c.is_ascii_alphanumeric() || c == ':' || c == '/' || c == '.' || c == '-' || c == '_');
     if !is_valid {
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid image ID"}))));
     }
 
-    // Strip sha256: prefix if present (docker images --no-trunc includes it)
-    let image_ref = if id.starts_with("sha256:") { &id } else { &id };
+    let image_ref = &id;
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(60),
         safe_command("docker")
@@ -1845,8 +1874,14 @@ async fn change_image(
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid image reference: must be <= 256 chars, alphanumeric with / : . - _ @ only, and not start with -"}))));
     }
 
-    let new_id = docker_apps::change_container_image(&container_id, &image)
+    // Spawned for the same reason as `update`, above: this recreates the
+    // container too, and must survive a dropped connection between the remove
+    // and the create.
+    let cid = container_id.clone();
+    let image_task = image.clone();
+    let new_id = tokio::spawn(async move { docker_apps::change_container_image(&cid, &image_task).await })
         .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("update task panicked: {e}")}))))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))))?;
 
     Ok(Json(serde_json::json!({

@@ -20,7 +20,7 @@ const SAFE_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin
 /// than at a call site because `env_clear()` means a unit-level `Environment=`
 /// would never reach the child, and because ~77 docker invocations share these
 /// helpers — one of them silently missing it is exactly the drift that hid this.
-const DOCKER_CONFIG_DIR: &str = "/var/lib/dockpanel/docker";
+pub const DOCKER_CONFIG_DIR: &str = "/var/lib/dockpanel/docker";
 
 /// Create an async `tokio::process::Command` with a sanitized environment.
 ///

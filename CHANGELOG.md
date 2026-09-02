@@ -4,6 +4,55 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.202.0]
+
+### Fixed — docker_apps.rs fan-out: 4 findings fixed (Update/change-image/edit-env, env mask, registry pulls, remove_image)
+
+`dockpanel-fanout` against `panel/agent/src/{routes,services}/docker_apps.rs` (the
+standing top candidate named in `feedback_dockpanel_audit_scope` — the single
+largest file in the agent crate, 86 all-time commits, and the file behind
+GitHub #110). The surface turned out to be admin-only end to end (45/46
+backend handlers `require_admin`, no app-ownership predicate exists anywhere),
+so every finding here is admin-self-harm or prospective — nothing tenant-reachable.
+
+**A dropped client connection cancelled Update / change-image / edit-env
+mid-recreate, between `remove_container` and `create_container` — the app's
+container vanished, leaving only its bind-mounted data behind.** All three
+agent handlers ran the recreate inline on the request's own connection task,
+and two of the three matching backend handlers (`update_env`, `update_image`)
+did the same rather than spawning like `update_app` already did.
+demo.dockpanel.dev is Cloudflare-proxied with a ~100s origin budget, well
+inside the 900s these calls are allowed to take, so this was routine rather
+than rare. Fixed by wrapping every one of the five calls in
+`tokio::spawn(...).await` — the spawned task now outlives a dropped
+connection because it is scheduled onto the runtime independently of the
+future awaiting its `JoinHandle`.
+
+**`GET /apps/{id}/env` returned 8 catalogue-declared secrets in the clear.**
+The mask was a substring heuristic (PASSWORD/SECRET/KEY/TOKEN/CREDENTIAL/AUTH)
+that never consulted the catalogue's own `secret: true` flag, so a name like
+`DB_PASS`, `POSTGRES_PWD`, `SURREAL_PASS`, `GOTIFY_DEFAULTUSER_PASS`,
+`PLEX_CLAIM`, `DATABASE_URL`, `CLICKHOUSE_DATABASE_URL`, or
+`REDASH_DATABASE_URL` — none of which contain one of those substrings — was
+returned unmasked. Fixed with a `catalogue_secret_env` lookup OR'd into the
+route's mask condition.
+
+**Registry login was inert for every panel-initiated image pull.**
+`GET /apps/registries` read a hardcoded `/root/.docker/config.json`, while
+every `docker` CLI call (including `docker login`) runs with
+`DOCKER_CONFIG=/var/lib/dockpanel/docker` — so the panel's "Configured
+registries" list was always empty, and separately, all four production
+`create_image` pulls (template deploy, app update, change-image, compose
+deploy) always passed `credentials: None`, so a private-image deploy failed
+even immediately after a successful login. Fixed by pointing
+`list_registries` at the directory `DOCKER_CONFIG` actually uses, and adding
+a `registry_credentials_for` lookup wired into all four pull sites.
+
+**`DELETE /apps/images/{id}` accepted a leading dash.** The charset check
+allowed every character `docker rmi --help` needs, so that request ran the
+help flag and returned `success: true`. Fixed with a leading-dash guard,
+matching the existing sibling validator on `change-image`'s `image` field.
+
 ## [2.201.0]
 
 ### Security — agent-crate fan-out: 2 findings, both fixed
