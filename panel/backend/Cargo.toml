@@ -1,6 +1,6 @@
 [package]
 name = "dockpanel-api"
-version = "2.202.1"
+version = "2.203.0"
 license = "AGPL-3.0-only"
 edition = "2024"
 

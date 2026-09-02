@@ -574,6 +574,22 @@ fn template_cmd(id: &str) -> Option<Vec<String>> {
 /// granting it does not reopen the vector this whole sidecar exists to
 /// close. Nothing else Dozzle could ask for (exec into a container, create
 /// one, touch images/volumes/networks/swarm, or any POST at all) is enabled.
+///
+/// ⚠ **`CONTAINERS=1` IS WIDER THAN "list and stream logs".** The proxy's own
+/// haproxy config grants it as a PATH PREFIX over the whole `/containers/*`
+/// family, not a per-endpoint allowlist within it — so anything reachable on
+/// this sidecar's exposed port also reaches `GET /containers/{id}/archive`
+/// (read a file out of a container's filesystem), `/export` (the whole
+/// filesystem as a tar), `/attach/ws` (attach to stdio), `/changes` and
+/// `/top`, none of which Dozzle itself calls. `EXEC=0` above stops a NEW
+/// process from being started, but reading files a running process already
+/// wrote is a materially different exposure `EXEC=0` does not close.
+/// Accepted for now, not closed: `docker-socket-proxy`'s haproxy.cfg would
+/// have to be replaced with a custom one narrowing `CONTAINERS` to the exact
+/// sub-paths Dozzle's client calls, which needs the image version PINNED
+/// FIRST (below) since a config keyed to one release's route set is not
+/// guaranteed to still parse against `:latest` next month.
+/// [[project_dockpanel_tech_debt_p185]] carry I.
 static DOZZLE_PROXY_ENV: &[(&str, &str)] = &[
     ("CONTAINERS", "1"),
     ("EVENTS", "1"),
@@ -615,7 +631,12 @@ static DOZZLE_PROXY_ENV: &[(&str, &str)] = &[
 static TEMPLATE_SIDECAR: &[(&str, app_sidecar::SidecarDef)] = &[(
     "dozzle",
     app_sidecar::SidecarDef {
-        image: "tecnativa/docker-socket-proxy:latest",
+        // Pinned, not :latest — verified equal digests at pin time
+        // (sha256:a14e639c…) so this is not a functional change, only a
+        // reproducibility one: a proxy sitting in front of the Docker socket
+        // is exactly the kind of thing that should not silently change
+        // underneath a deploy. [[project_dockpanel_tech_debt_p185]] carry I.
+        image: "tecnativa/docker-socket-proxy:v0.5.0",
         alias: "dockerproxy",
         port: 2375,
         proxy_env: DOZZLE_PROXY_ENV,
@@ -1423,7 +1444,14 @@ static TEMPLATES: &[AppTemplateDef] = &[
             EnvVarDef { name: "DB_USERNAME", label: "Database Username", default: "ninja", required: false, secret: false },
             EnvVarDef { name: "DB_PASSWORD", label: "Database Password", default: "", required: true, secret: true },
         ],
-        volumes: &["/var/app/public", "/var/app/storage"],
+        // Confirmed on the published image (s449): the app root is
+        // /var/www/app, not /var/app — the prior paths named a directory
+        // that does not exist in the image at all, so `seed_volume_from_image`
+        // (which only ever seeds an EMPTY bind) silently found nothing to
+        // copy and every invoice-ninja deploy started with no `public`/
+        // `storage` content Docker itself would otherwise have provided.
+        // [[project_dockpanel_tech_debt_p185]] carry I.
+        volumes: &["/var/www/app/public", "/var/www/app/storage"],
     },
     AppTemplateDef {
         id: "erpnext",
@@ -3051,14 +3079,35 @@ fn tar_extract_first_file(archive: &[u8]) -> Option<String> {
 /// the destination, and no image's default config needs one to be useful.
 fn tar_extract_into(archive: &[u8], dest: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>> {
     let mut written = Vec::new();
+    // Keyed by the entry's own archive-internal `name` (prefix-joined, pre-
+    // leading-component-strip — the same coordinate space a hardlink's
+    // `linkname` is written in), value is where THIS archive actually put
+    // it on disk. A type-1 entry below resolves against this, never the
+    // host filesystem — see the comment at that branch for why.
+    let mut written_by_name: std::collections::HashMap<String, std::path::PathBuf> =
+        std::collections::HashMap::new();
     let mut offset = 0usize;
     while offset + 512 <= archive.len() {
         let header = &archive[offset..offset + 512];
         if header.iter().all(|byte| *byte == 0) {
             break;
         }
-        let name_end = header[..100].iter().position(|b| *b == 0).unwrap_or(100);
-        let name = String::from_utf8_lossy(&header[..name_end]).to_string();
+        let field = |range: std::ops::Range<usize>| -> String {
+            let bytes = &header[range];
+            let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+            String::from_utf8_lossy(&bytes[..end]).to_string()
+        };
+        // POSIX ustar splits a path over 100 bytes across `name` (0..100)
+        // and a `prefix` (345..500, joined with `/`) — reading `name` alone
+        // silently truncates/misplaces any seeded path past 100 bytes.
+        let prefix = field(345..500);
+        let raw_name = field(0..100);
+        let name = if prefix.is_empty() {
+            raw_name
+        } else {
+            format!("{prefix}/{raw_name}")
+        };
+        let linkname = field(157..257);
         let octal = |range: std::ops::Range<usize>| -> Option<u32> {
             u32::from_str_radix(
                 std::str::from_utf8(&header[range])
@@ -3112,6 +3161,22 @@ fn tar_extract_into(archive: &[u8], dest: &std::path::Path) -> std::io::Result<V
                 let end = body.saturating_add(size).min(archive.len());
                 std::fs::write(&target, &archive[body.min(end)..end])?;
                 true
+            } else if kind == b'1' {
+                // Hard link (ustar typeflag '1'). Resolve `linkname` ONLY
+                // against a path THIS archive has already written, never the
+                // host filesystem — an extractor willing to hard-link an
+                // arbitrary host path into the target would hand the app a
+                // read primitive over anything the agent's uid can see. A
+                // linkname this archive hasn't written yet (out of order, or
+                // its own source path escaped/was empty) is silently
+                // skipped, same as every other unhandled kind here.
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                match written_by_name.get(&linkname) {
+                    Some(src) => std::fs::hard_link(src, &target).is_ok(),
+                    None => false,
+                }
             } else {
                 false
             };
@@ -3128,6 +3193,7 @@ fn tar_extract_into(archive: &[u8], dest: &std::path::Path) -> std::io::Result<V
                     };
                     let _ = chown_to(&target.to_string_lossy(), &owner);
                 }
+                written_by_name.insert(name.clone(), target.clone());
                 written.push(target);
             }
         }
@@ -3565,22 +3631,176 @@ async fn repair_root_owned_volumes(
     repaired
 }
 
-/// `lchown` every root-owned path under `root`, leaving every other owner alone.
+fn path_to_cstr(path: &std::path::Path) -> std::io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::other("path contains a NUL byte"))
+}
+
+fn errno_reset() {
+    unsafe { *libc::__errno_location() = 0 };
+}
+
+/// Open `name` relative to `dir_fd` (or `libc::AT_FDCWD` for an absolute
+/// path) WITHOUT following a symlink — `ELOOP` if the entry has become one
+/// since it was named, rather than opening whatever it now points at. This is
+/// the primitive the whole rewrite below is built on: every other helper here
+/// resolves ONE path component against an already-open, already-verified
+/// parent, never a multi-component path string that could have a swapped
+/// ancestor.
+fn openat_nofollow(
+    dir_fd: std::os::unix::io::RawFd,
+    name: &std::ffi::CStr,
+    extra: libc::c_int,
+) -> std::io::Result<std::os::unix::io::RawFd> {
+    let fd = unsafe {
+        libc::openat(
+            dir_fd,
+            name.as_ptr(),
+            libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_RDONLY | extra,
+        )
+    };
+    if fd < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(fd)
+    }
+}
+
+fn fstat_fd(fd: std::os::unix::io::RawFd) -> std::io::Result<libc::stat> {
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut st) } == 0 {
+        Ok(st)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// `lstat` one entry by NAME relative to an already-open parent — resolves
+/// nothing above `dir_fd`, so a swapped ANCESTOR cannot redirect it (unlike
+/// stat-then-reopen-by-full-path, which re-walks every component from `/`).
+fn fstatat_nofollow(
+    dir_fd: std::os::unix::io::RawFd,
+    name: &std::ffi::CStr,
+) -> std::io::Result<libc::stat> {
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::fstatat(dir_fd, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
+    if rc == 0 {
+        Ok(st)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+fn fchown_fd(fd: std::os::unix::io::RawFd, owner: &VolumeOwner) -> std::io::Result<()> {
+    let gid = owner.gid.unwrap_or(u32::MAX);
+    if unsafe { libc::fchown(fd, owner.uid, gid) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// `chown` one entry by name relative to an already-open parent, never
+/// following a symlink — the `fchownat`/`AT_SYMLINK_NOFOLLOW` sibling of
+/// `fstatat_nofollow` above, same reasoning.
+fn fchownat_nofollow(
+    dir_fd: std::os::unix::io::RawFd,
+    name: &std::ffi::CStr,
+    owner: &VolumeOwner,
+) -> std::io::Result<()> {
+    let gid = owner.gid.unwrap_or(u32::MAX);
+    let rc = unsafe {
+        libc::fchownat(
+            dir_fd,
+            name.as_ptr(),
+            owner.uid,
+            gid,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// List a directory's immediate child names via `fdopendir` on a DUPLICATE of
+/// `dir_fd` — `fdopendir` takes ownership of whatever fd it's given and
+/// `closedir` closes it, so duplicating first means this reads exactly the
+/// directory the caller already verified without relinquishing (or double-
+/// closing) the caller's own fd.
+fn read_dir_names(
+    dir_fd: std::os::unix::io::RawFd,
+) -> std::io::Result<Vec<std::ffi::CString>> {
+    let dup_fd = unsafe { libc::dup(dir_fd) };
+    if dup_fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let dirp = unsafe { libc::fdopendir(dup_fd) };
+    if dirp.is_null() {
+        let err = std::io::Error::last_os_error();
+        unsafe { libc::close(dup_fd) };
+        return Err(err);
+    }
+    let mut names = Vec::new();
+    loop {
+        // readdir(3): NULL means either EOF or an error, and only errno
+        // (unchanged on EOF) tells them apart — reset it before every call.
+        errno_reset();
+        let entry = unsafe { libc::readdir(dirp) };
+        if entry.is_null() {
+            let err_no = unsafe { *libc::__errno_location() };
+            unsafe { libc::closedir(dirp) };
+            return if err_no == 0 {
+                Ok(names)
+            } else {
+                Err(std::io::Error::from_raw_os_error(err_no))
+            };
+        }
+        let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
+        let bytes = name.to_bytes();
+        if bytes != b"." && bytes != b".." {
+            names.push(name.to_owned());
+        }
+    }
+}
+
+/// `chown` every root-owned path under `root`, leaving every other owner alone.
 ///
 /// The top level is probed first and the walk is skipped when nothing there is
-/// root-owned. A healthy app therefore pays one `read_dir` per update instead of
-/// a full tree walk, which matters for a database whose data directory holds tens
-/// of thousands of files.
+/// root-owned. A healthy app therefore pays one directory read per update instead
+/// of a full tree walk, which matters for a database whose data directory holds
+/// tens of thousands of files.
+///
+/// **Rewritten around open file descriptors, not path strings (TOCTOU fix).** The
+/// original walk did `symlink_metadata(path)` (confirm root-owned, confirm
+/// directory) and THEN, as a separate call, `read_dir(path)` — re-resolving the
+/// same path a second time. A process with write access to its own bind-mounted
+/// volume (which every app has, by construction) can win that race: swap the
+/// directory for a symlink to anywhere on the host between the two calls, and the
+/// second one follows it, walking (and then `lchown`ing root-owned entries under)
+/// wherever the symlink points. Every primitive below resolves at most one path
+/// component, always against an already-open parent fd (`openat`/`fstatat`/
+/// `fchownat`, all `AT_SYMLINK_NOFOLLOW`/`O_NOFOLLOW`) — there is no point in the
+/// walk where a name is looked up starting from `/` a second time, so there is no
+/// window for a swap to matter.
 fn chown_root_owned_entries(
     root: &std::path::Path,
     owner: &VolumeOwner,
 ) -> std::io::Result<usize> {
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::io::FromRawFd;
 
-    let mut worth_walking = std::fs::symlink_metadata(root)?.uid() == 0;
+    let root_cstr = path_to_cstr(root)?;
+    let root_fd = openat_nofollow(libc::AT_FDCWD, &root_cstr, libc::O_DIRECTORY)?;
+    let root_file = unsafe { std::fs::File::from_raw_fd(root_fd) };
+    let root_st = fstat_fd(root_fd)?;
+
+    let mut worth_walking = root_st.st_uid == 0;
     if !worth_walking {
-        for entry in std::fs::read_dir(root)? {
-            if std::fs::symlink_metadata(entry?.path())?.uid() == 0 {
+        for name in read_dir_names(root_fd)? {
+            if fstatat_nofollow(root_fd, &name).is_ok_and(|st| st.st_uid == 0) {
                 worth_walking = true;
                 break;
             }
@@ -3590,20 +3810,59 @@ fn chown_root_owned_entries(
         return Ok(0);
     }
 
-    let mut stack = vec![root.to_path_buf()];
     let mut changed = 0usize;
-    while let Some(path) = stack.pop() {
-        let meta = std::fs::symlink_metadata(&path)?;
-        if meta.uid() == 0 {
-            lchown_to(&path, owner)?;
-            changed += 1;
-        }
-        // Descend into real directories only. A symlink is chowned as a link when
-        // it is root-owned and is never followed, so this cannot walk out of the
-        // volume.
-        if meta.is_dir() {
-            for entry in std::fs::read_dir(&path)? {
-                stack.push(entry?.path());
+    if root_st.st_uid == 0 {
+        fchown_fd(root_fd, owner)?;
+        changed += 1;
+    }
+
+    // Each stack frame owns an open, `O_NOFOLLOW`-verified directory fd
+    // (`std::fs::File`'s `Drop` closes it). Depth-first, same order the
+    // original path-based walk used.
+    let mut stack = vec![root_file];
+    while let Some(dir) = stack.pop() {
+        use std::os::unix::io::AsRawFd;
+        let dir_fd = dir.as_raw_fd();
+        for name in read_dir_names(dir_fd)? {
+            let Ok(st) = fstatat_nofollow(dir_fd, &name) else {
+                // Gone, or turned into something `AT_SYMLINK_NOFOLLOW` can't
+                // stat, between listing and here — skip it rather than error
+                // the whole walk out over one entry.
+                continue;
+            };
+            let is_dir = st.st_mode & libc::S_IFMT == libc::S_IFDIR;
+            if is_dir {
+                // A directory's nlink counts its subdirectories (each one's
+                // `..` is a link back) — that is inherent to the filesystem,
+                // not a hardlink-attack signal, so it is never a skip
+                // condition here. Always descend regardless of ownership: a
+                // root-owned FILE may sit under a directory owned by the
+                // app itself.
+                if st.st_uid == 0 {
+                    fchownat_nofollow(dir_fd, &name, owner)?;
+                    changed += 1;
+                }
+                match openat_nofollow(dir_fd, &name, libc::O_DIRECTORY) {
+                    Ok(child_fd) => stack.push(unsafe { std::fs::File::from_raw_fd(child_fd) }),
+                    // Swapped for a symlink (or removed) between the
+                    // `fstatat` above and this open — refuse rather than
+                    // follow. The exact race this rewrite closes; skip it.
+                    Err(_) => continue,
+                }
+            } else if st.st_uid == 0 {
+                // A hardlinked entry's inode is shared with a name that may
+                // sit outside this volume entirely; chowning it would
+                // repaint that other name too. `fs.protected_hardlinks=0`
+                // (disabled on some fleet members) lets an unprivileged
+                // process hardlink to a file it does not own, so a
+                // root-owned nlink>1 entry inside an app's own volume can be
+                // a planted link to a real host file — skip it. An ordinary
+                // file's nlink is 1.
+                if st.st_nlink > 1 {
+                    continue;
+                }
+                fchownat_nofollow(dir_fd, &name, owner)?;
+                changed += 1;
             }
         }
     }
@@ -6362,6 +6621,14 @@ mod tests {
         tar_entry_mode(name, body, kind, 0o644)
     }
 
+    /// A link entry (typeflag '1' hardlink / '2' symlink) carrying a
+    /// `linkname` — `tar_header` alone leaves that field zeroed.
+    fn tar_entry_link(name: &str, kind: u8, linkname: &str) -> Vec<u8> {
+        let mut h = tar_header(name, 0, kind, 0o644);
+        h[157..157 + linkname.len()].copy_from_slice(linkname.as_bytes());
+        h
+    }
+
     fn tar_entry_mode(name: &str, body: &[u8], kind: u8, mode: u32) -> Vec<u8> {
         let mut out = tar_header(name, body.len(), kind, mode);
         out.extend_from_slice(body);
@@ -6451,6 +6718,138 @@ mod tests {
         // Idempotent: nothing root-owned is left, so the cheap probe exits at once.
         let after = chown_root_owned_entries(&root, &owner).expect("walks again");
         assert_eq!(after, 0, "a second pass has nothing left to reclaim, got {after}");
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// The actual TOCTOU-closing mechanism: a directory-shaped entry that has
+    /// become a symlink by the moment the walk goes to OPEN it (the exact
+    /// race window between the `fstatat` that classified it and the `openat`
+    /// that descends into it) must be refused, not followed. A static
+    /// symlink present from the start is already caught earlier — by
+    /// `fstatat`'s own type check, which reports a link's `S_IFLNK`, not
+    /// `S_IFDIR` — so THIS is the test that actually exercises `O_NOFOLLOW`
+    /// rather than being satisfied by that earlier, unrelated guard.
+    /// [[project_dockpanel_tech_debt_p185]] carry F.
+    #[test]
+    fn openat_nofollow_refuses_a_symlink_even_though_it_is_opened_as_a_directory() {
+        let base =
+            std::env::temp_dir().join(format!("dp-nofollow-{}", uuid::Uuid::new_v4()));
+        let real_dir = base.join("real");
+        std::fs::create_dir_all(&real_dir).expect("temp tree");
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&real_dir, &link).expect("symlink");
+
+        let base_cstr = path_to_cstr(&base).expect("cstr");
+        let base_fd = openat_nofollow(libc::AT_FDCWD, &base_cstr, libc::O_DIRECTORY)
+            .expect("open the base directory");
+
+        let name = std::ffi::CString::new("link").expect("cstr");
+        let err = openat_nofollow(base_fd, &name, libc::O_DIRECTORY)
+            .expect_err("O_NOFOLLOW must refuse to open a symlink, not follow it into a directory");
+        // Linux reports ELOOP for a bare O_NOFOLLOW refusal, but ENOTDIR when
+        // O_DIRECTORY is combined with it (the un-followed symlink itself is
+        // "not a directory") — either is a REFUSAL, which is what matters;
+        // what would be wrong is `Ok`, meaning it followed the link.
+        assert!(
+            matches!(err.raw_os_error(), Some(libc::ELOOP) | Some(libc::ENOTDIR)),
+            "expected ELOOP or ENOTDIR from O_NOFOLLOW|O_DIRECTORY on a symlink, got {err:?}"
+        );
+
+        unsafe { libc::close(base_fd) };
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// A symlink standing where a directory name is listed must never be
+    /// followed — the walk resolves fd-relative (`openat`/`O_NOFOLLOW`), so
+    /// an entry that turned into a link is refused (`ELOOP`), not descended
+    /// into. [[project_dockpanel_tech_debt_p185]] carry F.
+    #[test]
+    fn the_repair_never_follows_a_symlink_standing_where_a_directory_was_listed() {
+        use std::os::unix::fs::MetadataExt;
+        let me = unsafe { libc::getuid() };
+        if me != 0 {
+            eprintln!("note: needs root to chown; skipped for uid {me}");
+            return;
+        }
+
+        let base =
+            std::env::temp_dir().join(format!("dp-repair-link-{}", uuid::Uuid::new_v4()));
+        let root = base.join("volume");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&root).expect("temp tree");
+        std::fs::create_dir_all(&outside).expect("temp tree");
+        let sentinel = outside.join("shadow");
+        std::fs::write(&sentinel, b"root-only\n").expect("sentinel file");
+        // `outside` and its sentinel are root-owned by construction (the test
+        // runs as root). A directory ENTRY that is actually a symlink to it —
+        // the shape the walk must refuse to enter.
+        std::os::unix::fs::symlink(&outside, root.join("escape")).expect("symlink");
+
+        let owner = VolumeOwner { uid: 4242, gid: Some(4242), spec: String::new() };
+        chown_root_owned_entries(&root, &owner).expect("walks");
+
+        assert_eq!(
+            std::fs::symlink_metadata(&sentinel).expect("still there").uid(),
+            0,
+            "the walk followed a symlink out of the volume and chowned a host file"
+        );
+        // The link itself, being root-owned, IS chowned as a link (matches
+        // the migration's own `lchown` behaviour) — but its target is not.
+        assert_eq!(
+            std::fs::symlink_metadata(root.join("escape")).expect("still there").uid(),
+            4242,
+            "the symlink entry itself should be chowned as a link"
+        );
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// A root-owned entry with more than one link is a possible planted
+    /// hardlink to a real host file (`fs.protected_hardlinks=0` allows an
+    /// unprivileged process to create one inside its own volume) — the walk
+    /// must never chown it, because chowning a shared inode repaints every
+    /// name pointing at it. [[project_dockpanel_tech_debt_p185]] carry F.
+    #[test]
+    fn the_repair_skips_a_root_owned_entry_that_has_more_than_one_link() {
+        use std::os::unix::fs::MetadataExt;
+        let me = unsafe { libc::getuid() };
+        if me != 0 {
+            eprintln!("note: needs root to chown; skipped for uid {me}");
+            return;
+        }
+
+        let base =
+            std::env::temp_dir().join(format!("dp-repair-hardlink-{}", uuid::Uuid::new_v4()));
+        let root = base.join("volume");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&root).expect("temp tree");
+        std::fs::create_dir_all(&outside).expect("temp tree");
+
+        // A real host file, hardlinked from OUTSIDE the volume — nlink 2,
+        // both names root-owned by construction.
+        let real = outside.join("passwd");
+        std::fs::write(&real, b"root:x:0:0::/root:/bin/bash\n").expect("host file");
+        std::fs::hard_link(&real, root.join("linked")).expect("hard link");
+
+        // Positive control: an ordinary root-owned file, nlink 1, in the same
+        // directory — must still be reclaimed, or this test would pass
+        // just as well against a walk that skips EVERYTHING.
+        std::fs::write(root.join("ordinary"), b"x").expect("ordinary file");
+
+        let owner = VolumeOwner { uid: 4242, gid: Some(4242), spec: String::new() };
+        chown_root_owned_entries(&root, &owner).expect("walks");
+
+        assert_eq!(
+            std::fs::symlink_metadata(&real).expect("still there").uid(),
+            0,
+            "a hardlinked entry was chowned, repainting the file's other name outside the volume"
+        );
+        assert_eq!(
+            std::fs::symlink_metadata(root.join("ordinary")).expect("still there").uid(),
+            4242,
+            "the nlink guard must not suppress an ordinary, non-hardlinked entry"
+        );
 
         std::fs::remove_dir_all(&base).ok();
     }
@@ -6590,6 +6989,91 @@ mod tests {
         );
         assert!(!dir.join("link").exists(), "a symlink member was materialised");
         assert!(!dir.join("hard").exists(), "a hardlink member was materialised");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// POSIX ustar splits a path over 100 bytes across `name` (0..100) and a
+    /// `prefix` (345..500, joined with '/'). Reading `name` alone silently
+    /// truncates or misplaces a seeded path that exceeds the single-field
+    /// limit — a real shape, not a contrivance: any template nesting a few
+    /// config directories reaches it.
+    #[test]
+    fn seeding_joins_the_ustar_prefix_field_for_a_long_path() {
+        let dir = std::env::temp_dir().join(format!("dp-seed-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let deep = "d".repeat(90);
+        let prefix = format!("very/deep/{deep}");
+        let short_name = "leaf.conf";
+        assert!(
+            prefix.len() + 1 + short_name.len() > 100,
+            "test setup: the full path must not fit in the 100-byte name field alone"
+        );
+
+        let mut header = vec![0u8; 512];
+        header[..short_name.len()].copy_from_slice(short_name.as_bytes());
+        let size_field = format!("{:011o}\0", 3);
+        header[124..124 + size_field.len()].copy_from_slice(size_field.as_bytes());
+        header[156] = b'0';
+        header[345..345 + prefix.len()].copy_from_slice(prefix.as_bytes());
+        let mut archive = header;
+        archive.extend_from_slice(b"hi\n");
+        archive.resize(1024, 0);
+
+        let written = tar_extract_into(&archive, &dir).expect("extracts");
+
+        let expected = dir.join("deep").join(&deep).join("leaf.conf");
+        assert_eq!(
+            written,
+            vec![expected.clone()],
+            "the prefix-joined path was dropped or misplaced (wrote {written:?})"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&expected).expect("the long path lands"),
+            "hi\n"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A hardlink's `linkname` must resolve only against a path THIS archive
+    /// already wrote — never the host filesystem, or a seed archive gains a
+    /// read primitive over anything the agent's uid can see.
+    #[test]
+    fn seeding_hard_links_resolve_only_against_this_archives_own_entries() {
+        let dir = std::env::temp_dir().join(format!("dp-seed-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        // The ordinary in-image shape (e.g. busybox's applets): a regular
+        // file, then a hardlink whose `linkname` names it.
+        let mut archive = tar_entry("bin/real", b"#!/bin/sh\n", b'0');
+        archive.extend(tar_entry_link("bin/alias", b'1', "bin/real"));
+        // A linkname this archive never wrote — must be dropped, not
+        // resolved against the host.
+        archive.extend(tar_entry_link("bin/dangling", b'1', "/etc/shadow"));
+
+        let written = tar_extract_into(&archive, &dir).expect("extracts");
+
+        assert_eq!(
+            written,
+            vec![dir.join("real"), dir.join("alias")],
+            "wrote {written:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("alias")).expect("the hard link lands"),
+            "#!/bin/sh\n"
+        );
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            std::fs::metadata(dir.join("real")).unwrap().ino(),
+            std::fs::metadata(dir.join("alias")).unwrap().ino(),
+            "alias must be a hard link to real, not a copy"
+        );
+        assert!(
+            !dir.join("dangling").exists(),
+            "a linkname naming a path outside this archive must not resolve against the host"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

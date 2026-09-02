@@ -560,6 +560,49 @@ if [ -n "$I_GD" ] && [ -n "$I_RT" ]; then
   fi
 fi
 
+echo
+echo "== §J  compose_validate is honest about what deploy_service silently drops =="
+
+# s449: `user:`/`healthcheck:`/`entrypoint:` have no field on this deployer —
+# `deploy_service` has never read any of the three — but `compose_validate`
+# said a stack declaring one was simply "valid", with no warning that the
+# directive would be dropped on the floor at deploy time.
+# [[project_dockpanel_tech_debt_p185]] carry I.
+if [ -n "$AR" ]; then
+  CV=$(fnbody "$AR" "compose_validate")
+  if [ -z "$CV" ]; then
+    bad "J0 could not extract docker_apps::compose_validate"
+  else
+    ok "J0 docker_apps::compose_validate extracted"
+    for flag in user_ignored healthcheck_ignored entrypoint_ignored; do
+      if has "$CV" "svc\\.$flag"; then
+        ok "J1 compose_validate reads svc.$flag"
+      else
+        bad "J1 compose_validate does not read svc.$flag — the author gets no warning that this directive is dropped"
+      fi
+    done
+  fi
+else
+  bad "J $APPS_ROUTE is readable"
+fi
+
+# The flags themselves must actually be DERIVED from the parsed def, not a
+# constant — `derives` also fails on a `let _unused` or `if false` shape.
+CS=panel/agent/src/services/compose.rs
+if CSS=$(subj "$CS"); then
+  PC=$(fnbody "$CSS" "parse_compose")
+  for pair in "user_ignored:def\.user\.is_some" "healthcheck_ignored:def\.healthcheck\.is_some" "entrypoint_ignored:def\.entrypoint\.is_some"; do
+    field="${pair%%:*}"; pat="${pair#*:}"
+    if derives "$PC" "${field}: ${pat}\(\)"; then
+      ok "J2 $field is derived from the parsed definition, live"
+    else
+      bad "J2 $field is not derived from def.$field.is_some() in parse_compose, or is dead code"
+    fi
+  done
+else
+  bad "J2 $CS is readable"
+fi
+
 # ── summary ────────────────────────────────────────────────────────────
 echo
 if [ "$SKIP" -gt 0 ]; then

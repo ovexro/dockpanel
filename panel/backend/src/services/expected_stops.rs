@@ -21,6 +21,15 @@ pub const REASON_OPERATOR_STOP: &str = "operator_stop";
 pub const REASON_MANUAL_SLEEP: &str = "manual_sleep";
 pub const REASON_AUTO_SLEEP: &str = "auto_sleep";
 pub const REASON_STACK_STOP: &str = "stack_stop";
+/// Update/change-image/edit-env recreate the container — `docker rm` then
+/// `docker create` (or its blue-green equivalent) — which is genuinely
+/// exited/absent for part of that window even though nobody asked it to stay
+/// down. Recorded BEFORE the agent call starts, unlike every other reason
+/// here: those record only after a stop has already succeeded, but a
+/// recreate's whole point is to interrupt a running container on purpose, so
+/// the healer must be blind to the gap from the moment it opens, not after.
+/// [[project_dockpanel_tech_debt_p185]] carry G.
+pub const REASON_RECREATE: &str = "recreate_in_progress";
 
 /// Record that this container was stopped on purpose.
 ///

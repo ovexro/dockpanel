@@ -307,6 +307,54 @@ else
   bad "E4 $STACKS is readable"
 fi
 
+# s449: a NEW class of door, per this suite's own instruction above — the 3
+# recreate handlers (update_app, update_image, update_env) now record too, but
+# with the OPPOSITE ordering from E3/E7b's "record only after the stop
+# succeeded": these interrupt a container ON PURPOSE via the agent's own
+# remove-then-create, so the healer must be blind to that gap from the moment
+# it OPENS, not after — record before the call, clear unconditionally once it
+# returns (success or failure), or a refused/failed recreate leaves a
+# container that never actually stopped marked expected-stopped forever.
+# [[project_dockpanel_tech_debt_p185]] carry G.
+if AP=$(subj "$APPS"); then
+  declare -A RECREATE_CALL_ANCHOR=(
+    [update_app]='post_long(&agent_path, None, 900)'
+    [update_env]='put_long(&format!("/apps/{cid}/env")'
+    [update_image]='&format!("/apps/{cid}/change-image")'
+  )
+  E8_OK=0
+  for fn in update_app update_env update_image; do
+    RB=$(fnbody "$AP" "$fn")
+    RBF=$(flat "$RB")
+    if ! grep -qF 'expected_stops::record(' <<< "$RBF"; then
+      bad "E8 $fn records the expectation"
+      continue
+    fi
+    if ! grep -qF 'expected_stops::clear(' <<< "$RBF"; then
+      bad "E8 $fn clears the expectation"
+      continue
+    fi
+    ANCHOR="${RECREATE_CALL_ANCHOR[$fn]}"
+    RECPOS=$(grep -n 'expected_stops::record' <<< "$RB" | head -1 | cut -d: -f1)
+    CALLPOS=$(grep -nF "$ANCHOR" <<< "$RB" | head -1 | cut -d: -f1)
+    CLEARPOS=$(grep -n 'expected_stops::clear' <<< "$RB" | head -1 | cut -d: -f1)
+    if [ -n "$RECPOS" ] && [ -n "$CALLPOS" ] && [ -n "$CLEARPOS" ] \
+       && [ "$RECPOS" -lt "$CALLPOS" ] && [ "$CALLPOS" -lt "$CLEARPOS" ]; then
+      ok "E8 $fn records before the recreate call and clears after it (record $RECPOS < call $CALLPOS < clear $CLEARPOS)"
+      E8_OK=$((E8_OK + 1))
+    else
+      bad "E8 $fn ordering wrong (record '$RECPOS', call '$CALLPOS' via anchor '$ANCHOR', clear '$CLEARPOS') — recording after the call would mark a still-running container; clearing before it would un-suppress the healer mid-recreate"
+    fi
+  done
+  if [ "$E8_OK" -eq 3 ]; then
+    ok "E8-summary all 3 recreate doors record-before/clear-after around their agent call"
+  else
+    bad "E8-summary only $E8_OK/3 recreate doors correctly ordered — the auto-healer can revive a container mid-migrate"
+  fi
+else
+  bad "E8 $APPS is readable"
+fi
+
 # ⛔ THE LIST ABOVE IS A LITERAL, AND A LITERAL CANNOT SEE A DOOR IT DOES NOT
 # NAME. `git_deploys::stop` shipped 2026-03-18, this table arrived 2026-08-22,
 # and E1-E5 were green for the whole gap because a fifth door is unrepresentable

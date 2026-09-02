@@ -174,6 +174,34 @@ else
   fi
 fi
 
+# ── §F  prune_images_all never widens to -a (s449) ──────────────────────────
+# Different threat class from §A-E (not an argv-injection guard) but same
+# file, same "an admin-reachable docker verb takes an unsafe flag" shape:
+# `-a` on `image prune` reaches every image not backing a running container,
+# not just dangling ones — including git-deploy rollback targets
+# (`dockpanel-git-<name>:<hash>`, no pull fallback) and manual snapshots
+# (`dockpanel-snapshot:*`), neither re-pullable. The project's own C4 rule
+# for the UNATTENDED reclaim (`tests/unattended-host-scope-pin-e2e.sh`)
+# already forbids this; this handler is the MANUAL button and had no such
+# guard. [[project_dockpanel_tech_debt_p185]] §E.
+
+PRUNE=$(flat "$(fnbody "$APPS_SRC" "prune_images_all")")
+if [ -z "$PRUNE" ]; then
+  bad "F0 could not extract docker_apps::prune_images_all"
+else
+  ok "F0 docker_apps::prune_images_all extracted"
+  if has "$PRUNE" '"image", *"prune", *"-af"|"image", *"prune", *"-a"'; then
+    bad "F1 prune_images_all passes -a — it can remove a locally built image with no registry to restore from"
+  else
+    ok "F1 prune_images_all never passes -a"
+  fi
+  if has "$PRUNE" 'label!=dockpanel\.managed=true'; then
+    ok "F2 prune_images_all filters on the same dockpanel.managed label as the scoped reclaim"
+  else
+    bad "F2 prune_images_all has no label filter — diverges from the scoped reclaim's own C4 precedent"
+  fi
+fi
+
 echo
 echo "----------------------------------------------"
 printf '  PASS %d  FAIL %d\n' "$PASS" "$FAIL"

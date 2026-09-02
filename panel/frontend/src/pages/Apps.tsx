@@ -66,8 +66,9 @@ interface DeployedApp {
   stack_id: string | null;
   // Set by the panel (not the agent) when this container is stopped because
   // something asked it to be: 'operator_stop' | 'manual_sleep' | 'auto_sleep' |
-  // 'stack_stop'. Absent means the panel has no record of a deliberate stop,
-  // which for an exited container means it went down on its own.
+  // 'stack_stop' | 'recreate_in_progress'. Absent means the panel has no
+  // record of a deliberate stop, which for an exited container means it went
+  // down on its own.
   expected_stop_reason?: string;
 }
 
@@ -350,6 +351,8 @@ function stopReasonLabel(reason?: string): string {
       return "auto-slept while idle";
     case "stack_stop":
       return "stopped with its stack";
+    case "recreate_in_progress":
+      return "recreating (update in progress)";
     default:
       return "stopped by the panel";
   }
@@ -2994,9 +2997,9 @@ volumes:
                       onClick={() => { setPruneArmed(false); handlePruneImages(); }}
                       disabled={imagePruning}
                       className="px-3 py-1.5 text-xs font-medium bg-danger-500 text-white rounded disabled:opacity-50"
-                      title="Removes ALL unused images host-wide — irreversible"
+                      title="Removes dangling (untagged) images host-wide — irreversible. Rollback and snapshot images stay tagged, so they're kept."
                     >
-                      {imagePruning ? "Pruning..." : "Confirm — prune all unused"}
+                      {imagePruning ? "Pruning..." : "Confirm — prune dangling images"}
                     </button>
                     <button
                       onClick={() => setPruneArmed(false)}
@@ -3011,7 +3014,7 @@ volumes:
                     onClick={() => setPruneArmed(true)}
                     disabled={imagePruning}
                     className="px-3 py-1.5 text-xs font-medium bg-warn-500/10 text-warn-400 rounded hover:bg-warn-500/20 disabled:opacity-50"
-                    title="Removes ALL unused images host-wide — irreversible"
+                    title="Removes dangling (untagged) images host-wide — irreversible. Rollback and snapshot images stay tagged, so they're kept."
                   >
                     {imagePruning ? "Pruning..." : "Prune Unused"}
                   </button>

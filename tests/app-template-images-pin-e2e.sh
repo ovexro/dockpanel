@@ -255,10 +255,14 @@ else
   ok "the catalogue itself never references the host Docker socket path"
 fi
 
-if grep -qF '"dozzle",app_sidecar::SidecarDef{image:"tecnativa/docker-socket-proxy:latest"' <<<"$FLAT"; then
-  ok "dozzle's sidecar pins the tecnativa/docker-socket-proxy image"
-else
+if ! grep -qF '"dozzle",app_sidecar::SidecarDef{' <<<"$FLAT"; then
   bad "dozzle's TEMPLATE_SIDECAR entry changed or is missing"
+elif grep -qF 'image:"tecnativa/docker-socket-proxy:latest"' <<<"$FLAT"; then
+  bad "dozzle's sidecar is back on :latest — a proxy in front of the Docker socket must be version-pinned, not silently changeable underneath a deploy"
+elif grep -qE 'image:"tecnativa/docker-socket-proxy:v[0-9]+\.[0-9]+\.[0-9]+"' <<<"$FLAT"; then
+  ok "dozzle's sidecar pins the tecnativa/docker-socket-proxy image to a specific version"
+else
+  bad "dozzle's sidecar image field changed shape — re-read it"
 fi
 
 # Deny-by-default, spelled out explicitly rather than left to the image's own

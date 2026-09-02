@@ -638,16 +638,37 @@ async fn unexpose_domain(domain: &str, host_port: Option<u16>, response: &mut se
     // The vhost is rendered from the same template a site's is, so the only
     // thing in it identifying the app is the `proxy_pass` to the port the
     // container published.
-    let config_path = format!("{}/{domain}.conf", nginx::sites_dir());
+    //
+    // BOTH the live path and the parked one, per `nginx::vhost_paths`'s own
+    // reasoning for existing at all: `expose_domain` writes whichever one
+    // `vhost_target` picks (a disabled domain's write goes to the parked
+    // path, invisible to nginx), so removing only the live path stranded the
+    // parked file for good on a removed app whose domain happened to be
+    // disabled at the time — the domain became permanently unreclaimable, and
+    // silently: `is_valid_domain` sees no vhost and no error, and a
+    // re-deploy under the same domain would find the STALE parked body
+    // sitting there ready to be restored by a future enable. Same ownership
+    // check on each: the parked body is a frozen copy of the same rendered
+    // vhost, so its `proxy_pass` still names this container's port.
+    // [[project_dockpanel_tech_debt_p185]] carry I.
+    let (live_path, parked_path) = nginx::vhost_paths(domain);
     let mut removed_vhost = false;
-    if std::path::Path::new(&config_path).exists() {
-        if ownership::app_vhost(&config_path, host_port).may_delete() {
-            std::fs::remove_file(&config_path).ok();
+    for (config_path, is_live) in [(&live_path, true), (&parked_path, false)] {
+        if !std::path::Path::new(config_path).exists() {
+            continue;
+        }
+        if ownership::app_vhost(config_path, host_port).may_delete() {
+            std::fs::remove_file(config_path).ok();
             removed_vhost = true;
-            if let Err(e) = nginx::reload().await {
-                tracing::warn!("Auto-proxy cleanup: nginx reload failed after removing config for {domain}: {e}");
+            // The parked file is never read by nginx (that is its entire
+            // purpose), so removing it owes no reload — only the live path
+            // going away needs nginx told.
+            if is_live {
+                if let Err(e) = nginx::reload().await {
+                    tracing::warn!("Auto-proxy cleanup: nginx reload failed after removing config for {domain}: {e}");
+                }
             }
-            tracing::info!("Auto-proxy cleanup: removed nginx config for {domain}");
+            tracing::info!("Auto-proxy cleanup: removed nginx config for {domain} ({config_path})");
         } else {
             tracing::warn!(
                 "Auto-proxy cleanup: LEAVING {config_path} in place — it does not \
@@ -1497,6 +1518,29 @@ async fn compose_validate(
                         "message": "Database without environment variables — password/root may use defaults",
                     }));
                 }
+
+                // This deployer has no field for user/healthcheck/entrypoint —
+                // saying "valid" over a compose file that declares one would
+                // silently drop a directive the author wrote and expects
+                // honoured. [[project_dockpanel_tech_debt_p185]] carry I.
+                if svc.user_ignored {
+                    warnings.push(serde_json::json!({
+                        "service": svc.key,
+                        "message": "'user:' is not supported and will be ignored — the image's own default user runs this container",
+                    }));
+                }
+                if svc.healthcheck_ignored {
+                    warnings.push(serde_json::json!({
+                        "service": svc.key,
+                        "message": "'healthcheck:' is not supported and will be ignored — Docker's own healthcheck state will not reflect it",
+                    }));
+                }
+                if svc.entrypoint_ignored {
+                    warnings.push(serde_json::json!({
+                        "service": svc.key,
+                        "message": "'entrypoint:' is not supported and will be ignored — the image's own ENTRYPOINT runs unchanged",
+                    }));
+                }
             }
         }
         Err(e) => {
@@ -1739,11 +1783,22 @@ async fn list_images() -> Result<Json<serde_json::Value>, (StatusCode, Json<serd
 }
 
 /// POST /apps/images/prune — Remove unused Docker images.
+///
+/// Deliberately NOT `-a`: `-a` widens the sweep from dangling (untagged)
+/// images to every image not backing a running container, which reaches
+/// git-deploy rollback targets (`dockpanel-git-<name>:<hash>`, kept for
+/// `deploy_or_update`'s rollback path with no pull fallback) and manual
+/// snapshots (`dockpanel-snapshot:*`) — neither can be re-pulled from a
+/// registry. Mirrors the scoped reclaim's own C4 rule
+/// (`diagnostics.rs`'s `docker-reclaim` arm, `tests/unattended-host-scope-
+/// pin-e2e.sh` §C4): the label filter is defense in depth for a dangling
+/// image that happens to carry the label, not what makes this safe — the
+/// dropped `-a` is.
 async fn prune_images_all() -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(120),
         safe_command("docker")
-            .args(["image", "prune", "-af"])
+            .args(["image", "prune", "-f", "--filter", "label!=dockpanel.managed=true"])
             .output(),
     ).await
         .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Image prune timed out (120s)"}))))?

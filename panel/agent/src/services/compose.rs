@@ -65,6 +65,16 @@ pub struct ComposeService {
     /// either. Everything else is passed through, which is how a pasted Traefik
     /// label block reaches Docker.
     pub labels: HashMap<String, String>,
+    /// Whether the compose file declared `user:`, `healthcheck:` or
+    /// `entrypoint:` for this service — this deployer has no field for any
+    /// of the three, so they are read here ONLY to say so; `deploy_service`
+    /// silently ignores them same as before. `compose_validate` is the
+    /// reader: a stack that says "valid" while quietly dropping a directive
+    /// the author wrote is the honesty gap these three exist to close.
+    /// [[project_dockpanel_tech_debt_p185]] carry I.
+    pub user_ignored: bool,
+    pub healthcheck_ignored: bool,
+    pub entrypoint_ignored: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +129,13 @@ struct ServiceDef {
     cap_add: Option<Vec<String>>,
     devices: Option<Vec<String>>,
     security_opt: Option<Vec<String>>,
+    // Read-only-to-warn: this deployer has no field for any of these three,
+    // so `deploy_service` never sees them — they exist here purely so
+    // `compose_validate` can tell the author their compose file's directive
+    // will be silently dropped, rather than saying "valid" over it.
+    user: Option<serde_yaml_ng::Value>,
+    healthcheck: Option<serde_yaml_ng::Value>,
+    entrypoint: Option<serde_yaml_ng::Value>,
 }
 
 #[derive(Deserialize)]
@@ -231,6 +248,25 @@ pub fn parse_compose(yaml: &str, stack_id: Option<&str>) -> Result<Vec<ComposeSe
         if def.devices.is_some() {
             return Err(format!("Service '{name}': device mounts are not allowed"));
         }
+        // `security_opt` was parsed into ServiceDef but never read here — the
+        // comment above claimed every dangerous field was "parsed so we can
+        // explicitly reject them," which was true for every field but this
+        // one. The backend's own `validate_compose_yaml` (routes/mod.rs)
+        // already rejects the same shape before a request reaches the agent,
+        // but the agent must not rely on that alone: it is a second machine
+        // reachable over its own HTTP API, and a gap in either layer should
+        // not depend on the other layer having no gap of its own. Same rule,
+        // same wording, as the backend's check — `unconfined` disables
+        // seccomp/AppArmor confinement entirely; `no-new-privileges:true`
+        // (what this deployer sets by default, below) is unaffected.
+        // [[project_dockpanel_tech_debt_p185]] carry I.
+        if let Some(ref opts) = def.security_opt {
+            for opt in opts {
+                if opt.to_lowercase().contains("unconfined") {
+                    return Err(format!("Service '{name}': security_opt '{opt}' is not allowed"));
+                }
+            }
+        }
 
         let image = match &def.image {
             Some(img) => img.clone(),
@@ -336,6 +372,9 @@ pub fn parse_compose(yaml: &str, stack_id: Option<&str>) -> Result<Vec<ComposeSe
             command,
             depends_on,
             labels,
+            user_ignored: def.user.is_some(),
+            healthcheck_ignored: def.healthcheck.is_some(),
+            entrypoint_ignored: def.entrypoint.is_some(),
         });
     }
 
@@ -1189,5 +1228,89 @@ services:
     privileged: true
 "#;
         assert!(parse_compose(yaml, None).is_err());
+    }
+
+    /// `security_opt` was parsed into `ServiceDef` but the rejection loop
+    /// never read it — every OTHER dangerous field above it in the same
+    /// struct was checked, this one silently was not. Positive control
+    /// alongside it: `no-new-privileges:true` (what this deployer sets by
+    /// default for every service it creates) must stay allowed, or the fix
+    /// would reject the panel's own hardening default.
+    /// [[project_dockpanel_tech_debt_p185]] carry I.
+    #[test]
+    fn security_opt_unconfined_is_rejected_but_hardening_opts_are_not() {
+        let unconfined = r#"
+services:
+  bad:
+    image: x:1
+    security_opt:
+      - seccomp:unconfined
+"#;
+        assert!(
+            parse_compose(unconfined, None).is_err(),
+            "seccomp:unconfined must be rejected — it disables the syscall filter entirely"
+        );
+
+        let apparmor_unconfined = r#"
+services:
+  bad:
+    image: x:1
+    security_opt:
+      - apparmor:unconfined
+"#;
+        assert!(
+            parse_compose(apparmor_unconfined, None).is_err(),
+            "apparmor:unconfined must be rejected — it disables AppArmor confinement entirely"
+        );
+
+        let hardened = r#"
+services:
+  fine:
+    image: x:1
+    security_opt:
+      - no-new-privileges:true
+"#;
+        assert!(
+            parse_compose(hardened, None).is_ok(),
+            "no-new-privileges:true is a hardening option, not a dangerous one, and must stay allowed"
+        );
+    }
+
+    /// This deployer has no field for `user:`/`healthcheck:`/`entrypoint:` —
+    /// `compose_validate` reads these three flags to warn the author instead
+    /// of silently dropping their directive while saying "valid".
+    /// [[project_dockpanel_tech_debt_p185]] carry I.
+    #[test]
+    fn user_healthcheck_and_entrypoint_are_flagged_as_ignored_when_declared() {
+        let yaml = r#"
+services:
+  full:
+    image: x:1
+    user: "1000:1000"
+    healthcheck:
+      test: ["CMD", "true"]
+    entrypoint: ["/bin/sh"]
+"#;
+        let services = parse_compose(yaml, None).expect("parses");
+        let svc = &services[0];
+        assert!(svc.user_ignored, "user: was declared and must be flagged");
+        assert!(svc.healthcheck_ignored, "healthcheck: was declared and must be flagged");
+        assert!(svc.entrypoint_ignored, "entrypoint: was declared and must be flagged");
+    }
+
+    /// Positive control for the arm above: a service that declares NONE of
+    /// the three must not be flagged, or the fix would warn on every stack.
+    #[test]
+    fn user_healthcheck_and_entrypoint_are_not_flagged_when_absent() {
+        let yaml = r#"
+services:
+  plain:
+    image: x:1
+"#;
+        let services = parse_compose(yaml, None).expect("parses");
+        let svc = &services[0];
+        assert!(!svc.user_ignored);
+        assert!(!svc.healthcheck_ignored);
+        assert!(!svc.entrypoint_ignored);
     }
 }

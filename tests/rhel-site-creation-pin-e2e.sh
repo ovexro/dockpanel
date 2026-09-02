@@ -260,9 +260,12 @@ echo "§7 every other reader/writer of a site's vhost shares the one decision, n
 
 # The class of defect: ~25 call sites across a dozen files independently
 # hardcoded the Debian path. Each subject below must call through sites_dir()
-# rather than spelling /etc/nginx/sites-enabled itself. mail.rs is a deliberate
-# exception — it already tried both literal paths for the PANEL's own vhost
-# before this fix existed, which is a different (already-correct) shape.
+# — or, s449, through `vhost_paths()`/`vhost_target()`, which themselves
+# resolve through `sites_dir_for` and additionally know the PARKED path
+# sites_dir() alone does not — rather than spelling /etc/nginx/sites-enabled
+# itself. mail.rs is a deliberate exception — it already tried both literal
+# paths for the PANEL's own vhost before this fix existed, which is a
+# different (already-correct) shape.
 declare -A PROPAGATION=(
   ["ssl.rs (routes)"]="panel/agent/src/routes/ssl.rs"
   ["ownership.rs"]="$OWNERSHIP_RS"
@@ -279,10 +282,10 @@ for label in "${!PROPAGATION[@]}"; do
   src=$(strip "$f")
   if hasE "$src" '"/etc/nginx/sites-enabled/'; then
     bad "$label still hardcodes the Debian vhost directory literally"
-  elif has "$src" 'sites_dir()'; then
+  elif hasE "$src" 'sites_dir\(\)|vhost_paths\(|vhost_target\('; then
     ok "$label reads the vhost directory through the shared decision"
   else
-    bad "$label neither hardcodes nor calls sites_dir() — re-derive what changed"
+    bad "$label neither hardcodes nor calls sites_dir()/vhost_paths()/vhost_target() — re-derive what changed"
   fi
 done
 

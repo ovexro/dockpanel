@@ -271,10 +271,39 @@ fi
 
 # The narrowest rule that repairs what we did: reclaim root and nothing else. An
 # ownership somebody chose deliberately is not ours to rewrite.
+# s449: rewritten around fd-relative syscalls (openat/fstatat, all
+# O_NOFOLLOW/AT_SYMLINK_NOFOLLOW) to close a TOCTOU — a path-based
+# `symlink_metadata` then `read_dir` re-resolves the path twice, and an app
+# with write access to its own bind mount can swap a directory for a symlink
+# in between (project_dockpanel_tech_debt_p185 carry F). Keys on the new
+# spelling; the capability (root-only filter) is unchanged.
 case "$FLAT" in
-  *'ifmeta.uid()==0{'*)
+  *'st.st_uid==0'*)
     ok "the repair reclaims ONLY root-owned paths" ;;
   *) bad "the repair is not filtered to root-owned paths — it would rewrite an ownership a human chose" ;;
+esac
+
+# F fix: every path lookup in the walk must be fd-relative (openat/fstatat/
+# fchownat with O_NOFOLLOW/AT_SYMLINK_NOFOLLOW), never a path string handed
+# to std::fs — the latter re-resolves from '/' and reopens the TOCTOU window.
+case "$FLAT" in
+  *'openat(dir_fd,name.as_ptr(),libc::O_NOFOLLOW'*)
+    ok "the walk opens each entry O_NOFOLLOW, relative to its already-open parent" ;;
+  *) bad "the walk does not open entries O_NOFOLLOW against an open parent fd — the TOCTOU is back" ;;
+esac
+case "$FLAT" in
+  *'fstatat(dir_fd,name.as_ptr(),&mutst,libc::AT_SYMLINK_NOFOLLOW)'*)
+    ok "the walk stats each entry fd-relative, never following a symlink" ;;
+  *) bad "the walk does not stat entries via fstatat/AT_SYMLINK_NOFOLLOW" ;;
+esac
+
+# A root-owned entry with nlink>1 is a planted hardlink to a real host file
+# (fs.protected_hardlinks=0 lets an unprivileged process create one inside
+# its own volume) — chowning it would repaint that other name too.
+case "$FLAT" in
+  *'st.st_nlink>1'*)
+    ok "the walk skips a root-owned entry with more than one link" ;;
+  *) bad "the walk has no nlink guard — a hardlinked host file inside the volume would be repainted" ;;
 esac
 
 # Root-run images have nothing to repair, and resolve_volume_owner is what says so.

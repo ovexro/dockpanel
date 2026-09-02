@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.202.1.** The version stamp, the template count and every
+> **Reflects v2.203.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -402,7 +402,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. One-hundred-fifteen suites, **3959 assertions**, all green at the current commit:
+survivable. One-hundred-fifteen suites, **3976 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -445,7 +445,7 @@ survivable. One-hundred-fifteen suites, **3959 assertions**, all green at the cu
 | `mail-client-view-pin-e2e.sh` | 23 |
 | `mail-sender-identity-pin-e2e.sh` | 38 |
 | `ownership-delete-pin-e2e.sh` | 44 |
-| `compose-stack-pin-e2e.sh` | 49 |
+| `compose-stack-pin-e2e.sh` | 56 |
 | `container-identity-pin-e2e.sh` | 42 |
 | `unattended-host-scope-pin-e2e.sh` | 118 |
 | `status-page-gate-pin-e2e.sh` | 52 |
@@ -471,11 +471,11 @@ survivable. One-hundred-fifteen suites, **3959 assertions**, all green at the cu
 | `whmcs-config-writable-pin-e2e.sh` | 8 |
 | `system-logs-scope-pin-e2e.sh` | 15 |
 | `pipefail-sigpipe-pin-e2e.sh` | 9 |
-| `expected-stop-pin-e2e.sh` | 54 |
+| `expected-stop-pin-e2e.sh` | 58 |
 | `install-integrity-pin-e2e.sh` | 58 |
 | `ship-gate-pin-e2e.sh` | 19 |
 | `app-template-images-pin-e2e.sh` | 19 |
-| `app-volume-ownership-pin-e2e.sh` | 35 |
+| `app-volume-ownership-pin-e2e.sh` | 38 |
 | `theme-contrast-pin-e2e.sh` | 27 |
 | `db-schema-browser-pin-e2e.sh` | 23 |
 | `client-surface-gating-pin-e2e.sh` | 38 |
@@ -511,7 +511,7 @@ survivable. One-hundred-fifteen suites, **3959 assertions**, all green at the cu
 | `notification-secrets-encryption-pin-e2e.sh` | 32 |
 | `webhook-secrets-encryption-pin-e2e.sh` | 46 |
 | `nginx-clone-env-backup-path-pin-e2e.sh` | 12 |
-| `registry-ollama-arg-validation-pin-e2e.sh` | 13 |
+| `registry-ollama-arg-validation-pin-e2e.sh` | 16 |
 | `env-mask-catalogue-secrets-pin-e2e.sh` | 13 |
 | `registry-pull-credentials-pin-e2e.sh` | 7 |
 | `update-connection-resilience-pin-e2e.sh` | 7 |

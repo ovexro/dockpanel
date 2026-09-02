@@ -4,6 +4,128 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.203.0]
+
+### Fixed — repair-walk TOCTOU, manual-prune data loss, auto-healer mid-recreate race, and 4 more from the docker_apps.rs carry list (E–I)
+
+The E–I sized carries from the s446 `docker_apps.rs` fan-out
+(`project_dockpanel_tech_debt_p185`/`p186`), picked up after last session's
+fresh-VPS drive verified the fix list's own prerequisite (carry J, GitHub
+#110).
+
+**F — the ownership-repair walk had a TOCTOU race between listing a
+directory and reading it.** `chown_root_owned_entries` (the #110 repair
+mechanism) called `symlink_metadata` to confirm an entry was a root-owned
+directory, then separately called `read_dir` on the same path — re-resolving
+it a second time. A process with write access to its own bind-mounted
+volume (every app has this, by construction) could swap the directory for a
+symlink to anywhere on the host in the window between the two calls, and
+the walk would follow it, `lchown`ing whatever it found there to the app's
+own uid. Rewritten around `openat`/`fstatat`/`fchownat`, all
+`O_NOFOLLOW`/`AT_SYMLINK_NOFOLLOW`: every lookup resolves at most one path
+component, always against an already-open, already-verified parent file
+descriptor, so there is no point in the walk where a name is looked up from
+`/` a second time. Also closes a related gap: a root-owned entry with more
+than one link (`fs.protected_hardlinks=0` on some fleet members lets an
+unprivileged process hardlink to a file it does not own) is now skipped
+rather than chowned, since chowning a shared inode repaints every name
+pointing at it, not just the one inside the volume.
+
+**E — the manual "prune unused images" button could delete git-deploy
+rollback images and snapshots with no way to get them back.** `docker image
+prune -af` widens the sweep from dangling (untagged) images to every image
+not backing a running container — including `dockpanel-git-<name>:<hash>`
+(the rollback target `deploy_or_update` falls back to, with no pull
+fallback) and `dockpanel-snapshot:*` (manual operator snapshots). The
+project's own unattended-reclaim path already forbids `-a` for exactly this
+reason (pin C4); this was the one door that didn't. Fixed to mirror the
+scoped reclaim exactly — no `-a`, plus the same
+`label!=dockpanel.managed=true` filter.
+
+**G — none of the three recreate doors (Update/change-image/edit-env)
+recorded an expected stop, so the 120s auto-healer could revive a container
+mid-recreate.** A container being remove-then-created for an update is
+genuinely absent or exited for part of that window even though nobody
+asked it to stay down; without a recorded expectation, `auto_healer`'s
+restart loop can race the agent's own `docker create`, producing a torn
+`docker cp`. Recorded BEFORE the agent call starts (the opposite of every
+other reason this table holds, which record only after a stop has already
+succeeded — here the whole point is to interrupt a running container on
+purpose) and cleared unconditionally once the call returns, success or
+failure, on all three doors.
+
+**H — the seeder that restores an image's shipped content into a bind
+mount ignored the ustar `prefix` field and dropped hardlinks.** POSIX
+ustar splits a path over 100 bytes across `name` and a `prefix` field;
+reading `name` alone silently truncated or misplaced any seeded path past
+the limit. Hardlink entries (busybox's applets are the common shape) were
+silently dropped entirely. Fixed: paths join `prefix`+`name` when a prefix
+is present; a hardlink resolves its `linkname` only against a path this
+same archive has already written — never the host filesystem, which would
+otherwise hand the extractor a host-read primitive via a dangling
+linkname.
+
+**I — honesty/consistency bundle:**
+- The Dozzle sidecar's ACL comment claimed `CONTAINERS=1` grants only
+  container-listing; it is actually a path-prefix grant over the whole
+  `/containers/*` family, also reaching `archive`/`export`/`attach`/
+  `changes`/`top` — none of which Dozzle calls. Comment corrected to say
+  so; the sidecar's `docker-socket-proxy` image is now pinned to `v0.5.0`
+  (verified equal digest to the `:latest` it replaces) rather than
+  floating, a prerequisite for ever narrowing the ACL further with a
+  custom haproxy.cfg.
+- The agent-side compose parser declared a `security_opt` field "parsed so
+  we can explicitly reject" dangerous options, but never actually read
+  it — `seccomp:unconfined`/`apparmor:unconfined` passed straight through
+  to a stack deployed via the agent's own compose door. The backend's
+  separate validator already catches this; the agent must not rely on
+  that alone, since it is a second machine reachable over its own HTTP
+  API. Now rejected at the agent too, matching the backend's exact rule.
+- `compose_validate` said a stack was simply "valid" even when it declared
+  `user:`/`healthcheck:`/`entrypoint:` — none of which this deployer has
+  ever read — silently dropping the directive at deploy time with no
+  warning given at validate time. Now flagged.
+- Exposing a domain writes to whichever path `vhost_target` picks (a
+  disabled domain's write goes to the PARKED path, invisible to nginx);
+  removing an app only ever checked the live path, so an app removed
+  while its domain happened to be disabled permanently stranded its
+  parked vhost file — silently unreclaimable. `unexpose_domain` now
+  checks and removes both paths `vhost_target` can produce, using the
+  same ownership check on each (the parked body is a frozen copy of the
+  same rendered vhost, so its `proxy_pass` still names the container's
+  port).
+- The Invoice Ninja template bound `/var/app/{public,storage}` — confirmed
+  against the live image (`invoiceninja/invoiceninja:5`, pulled and
+  inspected) that no such path exists; the real app root is
+  `/var/www/app`. Every deploy silently seeded nothing.
+
+Two items from the same carry list were sized and deliberately NOT touched
+this session, because the right fix is a design decision rather than a
+mechanical one: ad-hoc compose deploys (no `stack_id`) all resolve to the
+same literal `"adhoc"` scope, so two unrelated ad-hoc stacks declaring a
+same-named volume silently share one Docker volume — fixing this by
+minting a unique per-deploy scope would break idempotent re-deploy of the
+same paste, which may be relied on. And the backend's volume-backup
+executor's volume leg is dead twice over (`as_array()` on a
+`{"volumes": [...]}` object always returns `None`; the per-volume object it
+would then read has no `name` field, only `source`/`destination`) — moot
+today (0 policy rows exist), but the deeper question of what "volume
+backup" should even mean for the bind-mounted apps this panel actually
+deploys needs answering before either bug is worth fixing in isolation.
+`container_policies` (no bindable subject — only `deploy` reads it,
+admin-only) is unchanged, filed as design debt.
+
+Pin coverage: 3 existing suites extended
+(`registry-ollama-arg-validation-pin-e2e.sh` +3,
+`app-volume-ownership-pin-e2e.sh` +3, `expected-stop-pin-e2e.sh` +4,
+`compose-stack-pin-e2e.sh` +7), 2 widened rather than extended
+(`app-template-images-pin-e2e.sh`, `rhel-site-creation-pin-e2e.sh`), plus 4
+new Rust unit tests — all mutation-tested (each arm confirmed red against
+the exact regression it exists to catch, then confirmed green again). Full
+local pin sweep 116/116; `cargo test` 295/0/4-ignored (agent, +8 from
+baseline), 473/0 (backend, unchanged); `cargo audit` unchanged (agent 2,
+backend 1, cli 0).
+
 ## [2.202.1]
 
 ### Fixed — CI's own test suite has been red since v2.201.0

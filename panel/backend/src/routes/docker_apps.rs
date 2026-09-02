@@ -1199,7 +1199,7 @@ pub async fn app_logs(
 pub async fn update_app(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(container_id): Path<String>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
@@ -1238,6 +1238,29 @@ pub async fn update_app(
         };
 
         emit("pull", "Pulling latest image", "in_progress", None);
+
+        // Recorded BEFORE the recreate starts, not after it succeeds (the
+        // opposite of stop_app/sleep_container above): the whole point of this
+        // call is to interrupt a running container on purpose, via a remove
+        // then create the agent performs internally, and the healer's 120s
+        // tick must be blind to that gap from the moment it opens — not after,
+        // by which point it may already have "healed" a container mid-recreate
+        // into a torn `docker cp`. Cleared unconditionally once the call
+        // returns, success or failure, or a refused/failed update would leave
+        // a container that never actually stopped marked expected-stopped
+        // forever, silently suppressing its next genuine crash.
+        // [[project_dockpanel_tech_debt_p185]] carry G.
+        let container_name = resolve_container_name(&agent, &cid).await;
+        if let Some(ref name) = container_name {
+            expected_stops::record(
+                &db,
+                server_id,
+                name,
+                expected_stops::REASON_RECREATE,
+                Some(&email),
+            )
+            .await;
+        }
 
         let agent_path = format!("/apps/{}/update", cid);
         // `post_long`, not `post`: this call pulls an image AND may copy an app's data out
@@ -1347,6 +1370,13 @@ pub async fn update_app(
             }
         }
 
+        // Every exit path above — the call succeeded, or it failed at any
+        // point (pull, migrate, remove, create) — reaches here, so this runs
+        // regardless. See the record() comment above for why that matters.
+        if let Some(ref name) = container_name {
+            expected_stops::clear(&db, server_id, name).await;
+        }
+
         tokio::time::sleep(Duration::from_secs(60)).await;
         logs.lock().unwrap_or_else(|e| e.into_inner()).remove(&deploy_id);
     });
@@ -1382,7 +1412,7 @@ pub async fn app_env(
 pub async fn update_env(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-    ServerScope(_server_id, agent): ServerScope,
+    ServerScope(server_id, agent): ServerScope,
     Path(container_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -1437,10 +1467,30 @@ pub async fn update_env(
     let email = claims.email.clone();
     let cid = container_id.clone();
     let result = tokio::spawn(async move {
-        let result = agent
-            .put_long(&format!("/apps/{cid}/env"), body, 900)
-            .await
-            .map_err(|e| agent_error("Update env", e))?;
+        // Recorded BEFORE the recreate starts and cleared unconditionally
+        // once the call returns, same reasoning as `update_app` above — the
+        // healer's 120s tick must be blind to the recreate's own gap from the
+        // moment it opens, and a row left behind after a refused/failed call
+        // would suppress this container's next genuine crash forever.
+        // [[project_dockpanel_tech_debt_p185]] carry G.
+        let container_name = resolve_container_name(&agent, &cid).await;
+        if let Some(ref name) = container_name {
+            expected_stops::record(
+                &db,
+                server_id,
+                name,
+                expected_stops::REASON_RECREATE,
+                Some(&email),
+            )
+            .await;
+        }
+
+        let outcome = agent.put_long(&format!("/apps/{cid}/env"), body, 900).await;
+        if let Some(ref name) = container_name {
+            expected_stops::clear(&db, server_id, name).await;
+        }
+        let result = outcome.map_err(|e| agent_error("Update env", e))?;
+
         if let Some(new_id) = result.get("container_id").and_then(|v| v.as_str()) {
             rekey_sleep_config(&db, &cid, new_id).await;
         }
@@ -1523,14 +1573,32 @@ pub async fn update_image(
     let email = claims.email.clone();
     let cid = container_id.clone();
     let result = tokio::spawn(async move {
-        let result = agent
+        // Recorded BEFORE the recreate starts and cleared unconditionally
+        // once the call returns, same reasoning as `update_app`/`update_env`
+        // above. [[project_dockpanel_tech_debt_p185]] carry G.
+        let container_name = resolve_container_name(&agent, &cid).await;
+        if let Some(ref name) = container_name {
+            expected_stops::record(
+                &db,
+                server_id,
+                name,
+                expected_stops::REASON_RECREATE,
+                Some(&email),
+            )
+            .await;
+        }
+
+        let outcome = agent
             .post_long(
                 &format!("/apps/{cid}/change-image"),
                 Some(serde_json::json!({ "image": image })),
                 900,
             )
-            .await
-            .map_err(|e| agent_error("Change image", e))?;
+            .await;
+        if let Some(ref name) = container_name {
+            expected_stops::clear(&db, server_id, name).await;
+        }
+        let result = outcome.map_err(|e| agent_error("Change image", e))?;
 
         if let Some(new_id) = result.get("container_id").and_then(|v| v.as_str()) {
             rekey_sleep_config(&db, &cid, new_id).await;

@@ -1158,8 +1158,8 @@
       "image": "invoiceninja/invoiceninja:5",
       "name": "Invoice Ninja",
       "volumes": [
-        "/var/app/public",
-        "/var/app/storage"
+        "/var/www/app/public",
+        "/var/www/app/storage"
       ]
     },
     {
