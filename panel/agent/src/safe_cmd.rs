@@ -68,6 +68,32 @@ pub fn safe_command_sync(binary: &str) -> std::process::Command {
 /// can read the result back.
 const CAPTURE_DIR: &str = "/var/lib/dockpanel/run";
 
+/// The filesystem path capture logic actually writes to.
+///
+/// Identical to [`CAPTURE_DIR`] in production. Under `cargo test` it
+/// resolves instead to a scratch directory under the process's own temp
+/// dir: `cargo test` runs unprivileged (concretely: GitHub Actions' runner
+/// user), which cannot `create_dir_all` anything under `/var/lib` — every
+/// `DockerEnvFile` test failed with `PermissionDenied` in CI from the
+/// moment those tests started actually calling `.new()` (v2.201.0) because
+/// nothing distinguished a test run from a production one. `CAPTURE_DIR`
+/// itself stays the literal production path so the RHEL SELinux pin below
+/// keeps measuring what actually ships.
+///
+/// Branches on the `cfg!(test)` macro rather than a `#[cfg(test)]`
+/// attribute deliberately: an attribute would put the literal token
+/// `#[cfg(test)]` ahead of the real `#[cfg(test)] mod tests` block this
+/// file already ends with, and every pin suite that reads this file treats
+/// the FIRST such token as "everything after this is test code, stop
+/// measuring" — see reference_dockpanel_ops_p7's mid-file cfg(test) gate.
+fn capture_dir() -> std::path::PathBuf {
+    if cfg!(test) {
+        std::env::temp_dir().join("dockpanel-test-capture")
+    } else {
+        std::path::PathBuf::from(CAPTURE_DIR)
+    }
+}
+
 /// Counter making capture filenames unique within a process.
 static CAPTURE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -352,16 +378,16 @@ struct Capture {
 
 impl Capture {
     fn new() -> std::io::Result<Self> {
-        std::fs::create_dir_all(CAPTURE_DIR)?;
+        std::fs::create_dir_all(capture_dir())?;
         let _ = std::fs::set_permissions(
-            CAPTURE_DIR,
+            capture_dir(),
             std::os::unix::fs::PermissionsExt::from_mode(0o700),
         );
         Self::sweep_stale();
         let n = CAPTURE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let base = format!("{}-{}", std::process::id(), n);
-        let out = std::path::Path::new(CAPTURE_DIR).join(format!("{base}.out"));
-        let err = std::path::Path::new(CAPTURE_DIR).join(format!("{base}.err"));
+        let out = capture_dir().join(format!("{base}.out"));
+        let err = capture_dir().join(format!("{base}.err"));
         for p in [&out, &err] {
             use std::os::unix::fs::OpenOptionsExt;
             std::fs::OpenOptions::new()
@@ -378,7 +404,7 @@ impl Capture {
     /// `tokio::time::timeout`) leaves its pair behind. Drop anything older than
     /// an hour so a box that times out repeatedly does not accumulate them.
     fn sweep_stale() {
-        let Ok(entries) = std::fs::read_dir(CAPTURE_DIR) else {
+        let Ok(entries) = std::fs::read_dir(capture_dir()) else {
             return;
         };
         let cutoff = std::time::Duration::from_secs(3600);
@@ -455,14 +481,13 @@ impl DockerEnvFile {
     pub fn new(vars: &[(&str, &str)]) -> std::io::Result<Self> {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
-        std::fs::create_dir_all(CAPTURE_DIR)?;
+        std::fs::create_dir_all(capture_dir())?;
         let _ = std::fs::set_permissions(
-            CAPTURE_DIR,
+            capture_dir(),
             std::os::unix::fs::PermissionsExt::from_mode(0o700),
         );
         let n = CAPTURE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = std::path::Path::new(CAPTURE_DIR)
-            .join(format!("env-{}-{n}", std::process::id()));
+        let path = capture_dir().join(format!("env-{}-{n}", std::process::id()));
         let mut body = String::new();
         for (k, v) in vars {
             // `docker --env-file` reads one `KEY=VALUE` per line — an embedded

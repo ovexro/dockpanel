@@ -4,6 +4,29 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.202.1]
+
+### Fixed — CI's own test suite has been red since v2.201.0
+
+`safe_cmd.rs`'s `DockerEnvFile` (the 0600 `--env-file` credential guard
+v2.201.0 shipped) and the older `Capture` (systemd-run stdout/stderr
+staging) both write under the hardcoded production path
+`/var/lib/dockpanel/run`. Their tests call that same code directly, so on
+GitHub Actions' unprivileged runner — which cannot `create_dir_all` under
+`/var/lib` — 4 `DockerEnvFile` tests have failed with `PermissionDenied` on
+every push since v2.201.0's release, silently, because the CI run that
+introduced the bug wasn't followed by a session that checked CI status
+before its next push. Not a production defect: this box (and every real
+install) runs the agent as root with `/var/lib/dockpanel` already present,
+so nothing shipped was ever broken. Fixed with a `capture_dir()` resolver
+that returns the real path in production and a scratch temp directory
+under `cfg!(test)` — using the `cfg!()` macro rather than a `#[cfg(test)]`
+attribute deliberately, since an attribute would have planted a second,
+earlier `#[cfg(test)]` token ahead of this file's real test module and
+blinded every pin suite that stops reading a file at the first one.
+Verified both ways: `cargo test` (debug, matching CI) and `cargo test
+--release` both green, full local pin sweep 116/116.
+
 ## [2.202.0]
 
 ### Fixed — docker_apps.rs fan-out: 4 findings fixed (Update/change-image/edit-env, env mask, registry pulls, remove_image)
