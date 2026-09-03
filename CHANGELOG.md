@@ -4,6 +4,111 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.212.0]
+
+### Fixed — CMS one-click installers had no timeout on any spawn, two frameworks silently mangled certain passwords, and neither downloaded artifact was integrity-checked
+
+From this session's `dockpanel-fanout` audit of `services/cms.rs` + `routes/cms.rs` — a genuine
+LOC-ranked rotation pick (never previously a PRIMARY fan-out target), reached only after 32 other
+candidates across `panel/agent/src/{routes,services}` were checked and disqualified by the
+two-direction pre-selection check (in-file citation grep + memory-mention grep), the most
+thorough pre-selection pass run to date.
+
+**`run_cmd`/`run_cmd_in` — the shared helper all 5 CMS installers (Laravel, Drupal, Joomla,
+Symfony, CodeIgniter) route every `composer`/`drush`/`php`/`curl`/`unzip` call through — had zero
+`kill_on_drop` and zero `tokio::time::timeout` anywhere.** The established timeout-orphan class
+this project has now fixed 9 times (`docker_apps.rs`, `pkg.rs` — see below, `database_backup.rs`,
+`wp_vulnerability.rs`, `backups.rs`, `security.rs`, `database.rs`, `image_scanner.rs`,
+`sbom_scanner.rs`), never swept in this file. A stalled network fetch or a DB that never comes up
+could hang an install request indefinitely; a cancelled/timed-out child would run unattended
+rather than dying with it. Fixed on both helpers, `ensure_composer()`'s own curl call, and
+`install_joomla()`'s tag-resolution/download/unzip calls, with per-operation-appropriate bounds
+(300s for `composer`, 180s for a DB-writing CLI installer, 120s for a package download, 60s for a
+quick metadata fetch or `php artisan` call).
+
+**Off-menu, found by the setup critic while it was checking this session's own citations**:
+`services/pkg.rs::enable_php_stream` was miscited by both the finder and the skeptic as an
+*already-fixed* precedent for the item above — it actually has a `tokio::time::timeout` with
+**zero** `kill_on_drop` anywhere in the file. The reason is structural, not an oversight at the
+call site: it spawns via `safe_command_unsandboxed()`, whose `UnsandboxedCommand` builds its own
+inner `tokio::process::Command` for `systemd-run` internally — no caller can reach that `Command`
+to chain `.kill_on_drop(true)` onto it. Fixed at the source, in `safe_cmd.rs` itself, which
+closes the gap for every one of the ~48 `safe_command_unsandboxed` call sites across 8 files as a
+consequence of fixing the one place that could actually fix it, not just `pkg.rs`.
+
+**Laravel's `.env` writer quoted a value only if it contained a space — never for `#`.**
+`vlucas/phpdotenv` (Laravel's bundled parser) treats a bare `#` as an unconditional comment-start
+in its unquoted-value state, with no whitespace precondition: a password like `Tr0ub#dor` (no
+space, so never quoted, and it passed this project's own validation) was written as
+`DB_PASSWORD=Tr0ub` — silently truncated, install reports success, the real DB password is wrong.
+Fixed: unconditional double-quoting with `\`, `"`, and `$` all escaped (a bare `$` inside
+phpdotenv's double-quoted state starts variable interpolation unless escaped) — verified against
+the real library, round-tripping `#`, space, `"`, `'`, `\`, `$`, and all of them combined in one
+value in a scratch Composer project.
+
+**CodeIgniter's `.env` writer never quoted anything.** CI4 rolls its own dotenv parser (not
+phpdotenv), whose `sanitizeValue()` throws an uncaught `InvalidArgumentException` for any
+unquoted value containing whitespace — and that fires in `Boot::bootWeb()` *before* CI4 installs
+its own exception handler, so it's a raw fatal on every request, not a graceful 500. Fixed with
+the same unconditional double-quoting, but a **different** escape set than Laravel's: `\` and `"`
+only, deliberately leaving `$` un-escaped, because CI4's own unquoting regex recognizes only
+those two backslash sequences — a `\$` would desync that regex rather than produce a literal `$`.
+Verified against CI4's actual parser source. **One residual limitation, CI4's own and not fixable
+from this side**: `resolveNestedVariables()` runs after unquoting and substitutes any literal
+`${SOME_SET_ENV_VAR}` substring against the process environment, with no escape mechanism CI4
+provides at all. Given `safe_command`'s child environment is a fixed, minimal set (`PATH`,
+`HOME`, `LANG`, `LC_ALL`, `DOCKER_CONFIG` — nothing password-shaped), this is a theoretical
+residual, not a practical one, but it is documented in the code rather than silently left out.
+
+**`ensure_composer()` downloaded `composer.phar` via a bare `curl` with zero integrity check**
+before making it executable and using it as the install engine for 4 of 5 CMS installers. Fixed:
+fetches the `.sha256` sidecar `getcomposer.org` itself publishes at the same path, verifies
+before `chmod +x` — fails closed (removes the phar) on any mismatch or fetch failure.
+
+**`install_joomla()` downloaded the release zip via a bare `curl` with zero integrity check.**
+Unlike `composer.phar`, GitHub does not publish a discrete checksum file for release assets —
+Joomla instead documents a per-package SHA-256 table inside the release notes' free-text body
+(confirmed stable in format across the 8 most recent releases sampled, including betas/RCs).
+Fixed: switched tag-resolution from the old `curl -sI` HEAD-redirect trick to GitHub's Releases
+JSON API (one call now yields both the tag and the checksum table), extracts the hash tied to the
+exact filename about to be downloaded, verifies before `unzip` — fails closed on any parse,
+fetch, or mismatch failure. **Honest caveat**: this checksum lives in free-text release notes,
+not a versioned API field — if Joomla ever changes that table's format, this fails closed (no
+checksum found → install aborts with a clear error) rather than silently skipping verification,
+but it is not as durable a guarantee as a dedicated checksums file would be.
+
+**`install_drupal()`'s `db_url` (`mysql://{user}:{pass}@{host}/{db}`, passed to `drush` as one
+argv) validated `db_pass` only for newline/CR/null, and never validated `db_host` at all — unlike
+every other credential field.** Verified empirically against PHP's actual `parse_url()` (which
+Drupal's own connection-options code feeds this string through with no `urldecode()` anywhere on
+the path) that `/` and `?` break parsing outright, and `#` does too in the password — but in
+`db_host`, `#` doesn't fail, it silently **truncates the host into a URL fragment**, worse than a
+clean error. **Percent-encoding was considered and rejected**: the same Drupal code path never
+decodes escapes, so an encoded `#`/`/` would reach the database driver as a literal `%23`/`%2F`
+instead of round-tripping to the real credential — confirmed by reading Drupal's actual source,
+not assumed. Fixed instead by rejecting `#`, `/`, `?` in `db_pass` (added to the existing
+denylist) and adding new allowlist validation for `db_host` (previously unvalidated).
+
+**Confirmed correct, not a bug**: Joomla's install CLI receives both `--admin-user=` and
+`--admin-username=` with the same value, which reads like a duplicate flag pair. Pulled Joomla's
+actual install form definition and CLI command builder — they are two genuinely distinct,
+both-required fields (display name vs. login name), and this project's API only exposes one of
+them to fill both. No change made.
+
+**Deferred, not this session's to fix — same as the prior session's ledger, not new**: the
+SSRF-via-registry-host primitive in `image_scanner.rs`/`sbom_scanner.rs` the completeness critic
+re-surfaced while scanning the wider agent crate for anything comparably severe. Still needs a
+private-registry-allowlist design, not a denylist; unchanged by this release.
+
+New pin suite: `tests/cms-installer-hardening-pin-e2e.sh`, 32 assertions, mutation-tested via a
+targeted `git stash` of the 3 touched source files (`services/cms.rs`, `routes/cms.rs`,
+`safe_cmd.rs`) — 26 of 32 correctly went red against the pre-fix code on the first pass; the
+remaining 6 included 2 genuinely vacuous passes (functions that don't exist at all pre-fix
+trivially satisfy an absence check) and one assertion caught as too weak by this session's own
+mutation test (it checked `db_host` was *referenced* in the validation body, which was already
+true pre-fix via the unrelated per-CMS extraction code — tightened to check the actual validator
+call, then reconfirmed red pre-fix / green post-fix).
+
 ## [2.211.0]
 
 ### Fixed — image/SBOM scanner installers trusted a moving target; a timed-out scan could outlive its own timeout; fresh CMS installs left DB credentials world-readable

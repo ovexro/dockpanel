@@ -50,9 +50,18 @@ async fn install(
             return Err(err(StatusCode::BAD_REQUEST, "Invalid admin_email"));
         }
     }
-    // Validate db_pass: no newlines or null bytes
+    // Validate db_pass: no newlines/null bytes, and none of '#' '/' '?' —
+    // install_drupal() builds `mysql://{user}:{pass}@{host}/{db}` and hands
+    // it to drush as one `--db-url=` argv; empirically verified against
+    // PHP's own parse_url() (which Drupal's Connection::
+    // createConnectionOptionsFromUrl() feeds this string through
+    // unmodified, no urldecode() anywhere on the path) that '/' and '?'
+    // make parse_url() fail outright and '#' does too when in the password —
+    // percent-encoding was considered and rejected, since that same parser
+    // never decodes escapes, so an encoded char would reach the DB driver
+    // as a literal "%23" instead of round-tripping.
     if let Some(ref db_pass) = body.db_pass {
-        if db_pass.is_empty() || db_pass.contains('\n') || db_pass.contains('\r') || db_pass.contains('\0') {
+        if db_pass.is_empty() || db_pass.contains(['\n', '\r', '\0', '#', '/', '?']) {
             return Err(err(StatusCode::BAD_REQUEST, "Invalid db_pass"));
         }
     }
@@ -61,6 +70,23 @@ async fn install(
         if admin_pass.is_empty() || admin_pass.contains('\n') || admin_pass.contains('\r') || admin_pass.contains('\0') {
             return Err(err(StatusCode::BAD_REQUEST, "Invalid admin_pass"));
         }
+    }
+    // Validate db_host: previously had NO validation at all, unlike every
+    // other credential field. A literal '#' here is worse than in db_pass —
+    // parse_url() doesn't fail, it silently truncates the host and turns
+    // the rest into a URL fragment (empirically verified), which would
+    // point install_drupal()'s drush call at the wrong database host
+    // without any error surfacing. Hostname-charset allowlist, same shape
+    // as is_valid_db_identifier above; ':' allowed for an optional port.
+    fn is_valid_db_host(s: &str) -> bool {
+        !s.is_empty()
+            && s.len() <= 255
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':')
+    }
+    if let Some(ref db_host) = body.db_host
+        && !is_valid_db_host(db_host)
+    {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid db_host"));
     }
 
     let title = body.title.as_deref().unwrap_or("My Site");

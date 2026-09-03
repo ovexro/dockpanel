@@ -171,6 +171,15 @@ impl UnsandboxedCommand {
         cmd.env("PATH", SAFE_PATH);
         cmd.args(cap.properties());
         cmd.args(&self.argv);
+        // Callers building the inner argv have no way to reach this
+        // `Command` themselves, so `kill_on_drop` must be set HERE — the one
+        // place that can. Without it, a caller-side `tokio::time::timeout`
+        // around this future does not kill `systemd-run` on expiry: the
+        // future is dropped, but the child (and whatever it started via
+        // `--wait`) keeps running orphaned. Same class as every
+        // caller-missing-`.kill_on_drop(true)` bug already fixed on the
+        // `safe_command`-built path (s446-s457).
+        cmd.kill_on_drop(true);
         let raw = cmd.output().await?;
         Ok(cap.finish(raw))
     }
@@ -192,6 +201,7 @@ impl UnsandboxedCommand {
         cmd.args(&self.argv);
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::piped());
+        cmd.kill_on_drop(true);
         let mut child = cmd.spawn()?;
 
         let (tx, lines) = tokio::sync::mpsc::channel::<String>(128);
