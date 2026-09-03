@@ -547,11 +547,29 @@ pub async fn import_site_files(
         }
     }
 
-    // Fix ownership
-    let _ = safe_command("chown")
-        .args(["-R", "www-data:www-data", &dest])
-        .output()
-        .await;
+    // Fix ownership — everything except `.git`, which stays root's. For
+    // node/proxy/python, `dest` IS the site root — the same directory
+    // `deploy.rs::clone_or_pull` clones `.git` into, so handing it over here
+    // gives the app `config`/`hooks/` that deploy runs as root next. For
+    // php/static, `dest` nests under `{site_dir}/public`, one level below any
+    // `.git` — this check is then a no-op, applied uniformly for simplicity and
+    // because a stray nested `.git` shouldn't be silently handed over either.
+    if let Ok(mut entries) = tokio::fs::read_dir(&dest).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if entry.file_name() == std::ffi::OsStr::new(".git") {
+                continue;
+            }
+            let _ = safe_command("chown")
+                .args(["-R", "www-data:www-data", &entry.path().to_string_lossy()])
+                .output()
+                .await;
+        }
+    }
+    let git_dir = format!("{dest}/.git");
+    if Path::new(&git_dir).exists() {
+        let _ = safe_command("chown").args(["-R", "root:root", &git_dir]).output().await;
+        let _ = safe_command("chmod").args(["-R", "go-rwx", &git_dir]).output().await;
+    }
 
     Ok(format!("Copied files to {dest}"))
 }

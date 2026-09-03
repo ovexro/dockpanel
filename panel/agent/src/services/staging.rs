@@ -42,12 +42,27 @@ pub async fn clone_files(source_domain: &str, target_domain: &str) -> Result<Str
         return Err(format!("rsync failed: {stderr}"));
     }
 
-    // Fix ownership to www-data
-    safe_command("chown")
-        .args(["-R", "www-data:www-data", &target])
-        .output()
-        .await
-        .ok();
+    // Fix ownership to www-data — everything except `.git`, which stays root's.
+    // rsync just copied the source tree verbatim, `.git` included if the source
+    // is git-deployed; handing it to www-data gives the app `config`/`hooks/`
+    // that `deploy.rs::clone_or_pull` runs as root on the next deploy. Mirrors
+    // `deploy.rs::hand_tree_to_web_user`.
+    if let Ok(mut entries) = tokio::fs::read_dir(&target).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if entry.file_name() == std::ffi::OsStr::new(".git") {
+                continue;
+            }
+            let _ = safe_command("chown")
+                .args(["-R", "www-data:www-data", &entry.path().to_string_lossy()])
+                .output()
+                .await;
+        }
+    }
+    let git_dir = format!("{target}.git");
+    if Path::new(&git_dir).exists() {
+        let _ = safe_command("chown").args(["-R", "root:root", &git_dir]).output().await;
+        let _ = safe_command("chmod").args(["-R", "go-rwx", &git_dir]).output().await;
+    }
 
     Ok(format!("Cloned {source} → {target}"))
 }
@@ -78,12 +93,23 @@ pub async fn sync_files(source_domain: &str, target_domain: &str) -> Result<Stri
         return Err(format!("rsync failed: {stderr}"));
     }
 
-    // Fix ownership
-    safe_command("chown")
-        .args(["-R", "www-data:www-data", &target])
-        .output()
-        .await
-        .ok();
+    // Fix ownership — everything except `.git`. See `clone_files` above for why.
+    if let Ok(mut entries) = tokio::fs::read_dir(&target).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if entry.file_name() == std::ffi::OsStr::new(".git") {
+                continue;
+            }
+            let _ = safe_command("chown")
+                .args(["-R", "www-data:www-data", &entry.path().to_string_lossy()])
+                .output()
+                .await;
+        }
+    }
+    let git_dir = format!("{target}.git");
+    if Path::new(&git_dir).exists() {
+        let _ = safe_command("chown").args(["-R", "root:root", &git_dir]).output().await;
+        let _ = safe_command("chmod").args(["-R", "go-rwx", &git_dir]).output().await;
+    }
 
     Ok(format!("Synced {source} → {target}"))
 }

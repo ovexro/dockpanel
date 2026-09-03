@@ -63,13 +63,32 @@ fn validate_domain(domain: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Fix ownership to www-data for a site directory.
+/// Fix ownership to www-data for a site directory, without handing over `.git`.
+///
+/// No caller today has a `.git` present the moment this runs — Composer refuses
+/// a non-empty target and Joomla's release zip ships none — so this is
+/// prospective: once the CMS is live and running as www-data, a future
+/// compromise of the app itself could create one, and this keeps that from
+/// becoming a route to root (see `deploy.rs::hand_tree_to_web_user`, and
+/// `deploy.rs::clone_or_pull`, which is what would run `.git`'s hooks as root).
 async fn chown_site(path: &str) {
-    safe_command("chown")
-        .args(["-R", "www-data:www-data", path])
-        .output()
-        .await
-        .ok();
+    if let Ok(mut entries) = tokio::fs::read_dir(path).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if entry.file_name() == std::ffi::OsStr::new(".git") {
+                continue;
+            }
+            safe_command("chown")
+                .args(["-R", "www-data:www-data", &entry.path().to_string_lossy()])
+                .output()
+                .await
+                .ok();
+        }
+    }
+    let git_dir = format!("{path}/.git");
+    if std::path::Path::new(&git_dir).exists() {
+        safe_command("chown").args(["-R", "root:root", &git_dir]).output().await.ok();
+        safe_command("chmod").args(["-R", "go-rwx", &git_dir]).output().await.ok();
+    }
 }
 
 /// Ensure Composer is installed at /usr/local/bin/composer.

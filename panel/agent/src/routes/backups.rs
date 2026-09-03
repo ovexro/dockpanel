@@ -74,6 +74,11 @@ async fn restore(
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
+    // `restore_backup`'s tar extraction runs `--no-same-owner`, which leaves the
+    // whole site root:root — unwritable by the www-data-running app until this
+    // runs. Mirrors `restic_restore`'s own call to the same helper, below.
+    chown_restored_tree(&format!("/var/www/{domain}")).await;
+
     let mut payload = serde_json::to_value(&report)
         .unwrap_or_else(|_| serde_json::json!({}));
     if let Some(obj) = payload.as_object_mut() {
@@ -135,6 +140,10 @@ async fn restore_file(
     backups::restore_single_file(&domain, &filename, &body.path)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
+
+    // Same gap as `restore` above — the extracted member comes back root-owned.
+    chown_restored_tree(&format!("/var/www/{domain}")).await;
+
     Ok(Json(serde_json::json!({ "success": true, "restored_path": body.path })))
 }
 

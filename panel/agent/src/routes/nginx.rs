@@ -1873,8 +1873,25 @@ async fn clone_site(Json(body): Json<CloneRequest>) -> Result<Json<serde_json::V
         return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Clone failed: {stderr}")));
     }
 
-    // Fix ownership
-    let _ = safe_command("chown").args(["-R", "www-data:www-data", &target_dir]).output().await;
+    // Fix ownership — everything except `.git`, which stays root's. Same shape
+    // as `services/staging.rs::clone_files` (a second implementation of the
+    // same clone-a-site feature); see `deploy.rs::hand_tree_to_web_user`.
+    if let Ok(mut entries) = tokio::fs::read_dir(&target_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if entry.file_name() == std::ffi::OsStr::new(".git") {
+                continue;
+            }
+            let _ = safe_command("chown")
+                .args(["-R", "www-data:www-data", &entry.path().to_string_lossy()])
+                .output()
+                .await;
+        }
+    }
+    let git_dir = format!("{target_dir}/.git");
+    if std::path::Path::new(&git_dir).exists() {
+        let _ = safe_command("chown").args(["-R", "root:root", &git_dir]).output().await;
+        let _ = safe_command("chmod").args(["-R", "go-rwx", &git_dir]).output().await;
+    }
 
     // Get size
     let du_output = safe_command("du").args(["-sb", &target_dir]).output().await;

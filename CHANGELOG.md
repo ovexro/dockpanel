@@ -4,6 +4,45 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.210.0]
+
+### Fixed — six sites could hand a git-deployed site's `.git` to www-data on clone/sync/import; the flagship backup-restore path left every restored site root-owned and unwritable
+
+From the s456 `dockpanel-fanout` audit of the `.git`-blind recursive chown bug class — a
+standing carry since s377, escalated to "recommend its own dedicated dockpanel-fanout rep" in
+this project's own tech-debt ledger and left unaddressed across five more sessions until this
+one closed it directly.
+
+**Six call sites recursively `chown -R www-data:www-data`'d a directory that can be a Git Deploy
+site root without excluding `.git`**, handing the web application (running as www-data,
+attacker-influenced) write access to `.git/config` and `.git/hooks/` — the exact defect
+`deploy.rs::hand_tree_to_web_user` and `routes/backups.rs::chown_restored_tree` (s453) were
+already fixed to avoid, now ported to the remaining sites: `app_process.rs::create_app_service`,
+`staging.rs::clone_files`/`sync_files`, `nginx.rs::clone_site`, `migration.rs::import_site_files`,
+and `cms.rs`'s shared `chown_site` helper (covers all 5 CMS installers — Laravel, Drupal, Joomla,
+Symfony, CodeIgniter). Currently PROSPECTIVE rather than realized: the only code that runs `git`
+as root against a `/var/www` path (`deploy.rs::clone_or_pull`) already carries independent
+`GIT_NO_EXEC` + `discard_repo_we_do_not_own` protections, so this closes a violation of the
+project's own stated invariant and a fragile, coincidental mitigation gap — not an open RCE on
+this box today. Three originally-flagged sites (two nginx fastcgi-cache-dir chowns, one
+single-file `.env` chown) and one more (`diagnostics.rs`'s create-root self-heal, which only ever
+runs against a directory it just created empty) were re-verified structurally unable to reach
+`.git` and correctly left unchanged.
+
+**The primary, documented "Restore a Backup" feature left every restored site `root:root`-owned
+and unwritable by the app** — found by the completeness critic, off the original topic menu.
+`services/backups.rs::restore_inner`'s tar extraction runs `--no-same-owner
+--no-same-permissions`, and no chown call existed anywhere on that path; the git-aware
+`chown_restored_tree` helper already lived in the same file but was wired only to the separate,
+opt-in Restic restore lane. Every ordinary site owner who backed up and restored a site through
+the base Backups page — no git-deploy, no special config — hit a site the web server could no
+longer write to. Fixed by calling the existing helper from `routes/backups.rs::restore` and
+`::restore_file` after a successful restore, mirroring its pre-existing `restic_restore` caller.
+
+31 new pin assertions (`tests/git-blind-chown-and-restore-ownership-pin-e2e.sh`, new file,
+mutation-tested via whole-tree `git stash` — 20/31 correctly failed against pre-fix code, 11
+correctly stayed green as positive controls on untouched invariants).
+
 ## [2.209.0]
 
 ### Fixed — database-container network reconcile could silently orphan unrelated tenants' databases; a non-admin site owner could OOM-kill the shared agent with one file download

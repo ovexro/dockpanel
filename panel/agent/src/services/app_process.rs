@@ -183,11 +183,26 @@ WantedBy=multi-user.target
 
     // Create working directory if it doesn't exist
     std::fs::create_dir_all(&working_dir).ok();
-    // Set ownership
-    safe_command_sync("chown")
-        .args(["-R", "www-data:www-data", &format!("/var/www/{domain}")])
-        .output()
-        .ok();
+    // Set ownership — everything except `.git`, which stays root's. A git-deployed
+    // Node/Python app runs this on every (re)create; handing `.git` to www-data
+    // gives the app `config`/`hooks/` that `deploy.rs::clone_or_pull` runs as root
+    // on the next deploy. Mirrors `deploy.rs::hand_tree_to_web_user`.
+    let site_dir = format!("/var/www/{domain}");
+    if let Ok(entries) = std::fs::read_dir(&site_dir) {
+        for entry in entries.flatten() {
+            if entry.file_name() == std::ffi::OsStr::new(".git") {
+                continue;
+            }
+            let _ = safe_command_sync("chown")
+                .args(["-R", "www-data:www-data", &entry.path().to_string_lossy()])
+                .output();
+        }
+    }
+    let git_dir = format!("{site_dir}/.git");
+    if std::path::Path::new(&git_dir).exists() {
+        let _ = safe_command_sync("chown").args(["-R", "root:root", &git_dir]).output();
+        let _ = safe_command_sync("chmod").args(["-R", "go-rwx", &git_dir]).output();
+    }
 
     // Reload systemd and enable+start the service
     safe_command_sync("systemctl")
