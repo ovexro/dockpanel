@@ -4,6 +4,65 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.206.0]
+
+### Fixed — WordPress toolkit: hardening checks could grade a config "pass" while it was actually insecure, and every wp-cli/tar subprocess in the file could be orphaned by a timeout
+
+From the s452 `dockpanel-fanout` audit of `panel/agent/src/services/wp_vulnerability.rs`
+(picked as this session's rotation target per [[feedback_dockpanel_audit_scope]]'s
+pre-selection check, after `deploy.rs` and `ssl.rs` — both zero in-file citations —
+turned out to carry substantial undocumented prior scrutiny under the "zero mentions"
+heuristic).
+
+**A hand-authored `wp-config.php` with a conditional `define()` (`if (…) { define('X', true); }
+else { define('X', false); }`) could report the dead branch's value as the live one.**
+`wp_constant()` picked the textual-first match with no control-flow awareness, so a
+site whose *running* value was insecure (e.g. `DISALLOW_FILE_EDIT` actually `false`)
+could still show a green "pass" if the `true` branch happened to be written first —
+the panel's own hardening-verification checks, silently wrong in the unsafe direction.
+Fixed: a same-named constant defined more than once with `if`/`elseif`/`else` syntax
+between the occurrences now grades as unverifiable (fails safe) rather than trusted —
+the existing `ConstValue::Expr` "cannot verify, never a pass" machinery every check
+already used for other unparseable cases. A plain accidental duplicate define with no
+conditional between the two occurrences is unaffected (PHP's own first-wins rule still
+applies there, unchanged).
+
+**None of the crate's wp-cli/tar/sudo subprocesses in this file set `kill_on_drop(true)`,
+and the crate's single wp-cli choke point (`wp_at_root`, which every WP operation in the
+panel funnels through — including all three `wp_vulnerability.rs` entry points) had no
+timeout at all.** Same class as the `kill_on_drop` gaps fixed in v2.204.0/v2.205.0, just
+never reaching this file: `grep -n kill_on_drop` over `wordpress.rs` returned nothing
+before this fix, and the existing pin suite never scanned it. Fixed at 6 sites: `wp_at_root`
+(now timeout-bounded at 600s + `kill_on_drop`), `install()`'s two hand-rolled wp-cli calls
+(predate `wp_at_root`, same fix applied directly), and 3 sites that already had a timeout
+wrap but were still missing `kill_on_drop` — `create_update_snapshot`'s and
+`rollback_from_snapshot`'s tar, and `health_check`'s sudo'd wp-cli eval.
+
+**`wp_hardening`, a DB table from the same migration as `wp_vuln_scans`, had zero writers
+and zero readers anywhere in the tree** (completeness-critic finding, off the original
+menu) — every hardening check has always been a pure live round-trip with no persisted
+history. Fixed: `security_check`'s backend handler now upserts one row per check into
+`wp_hardening` on every call, mirroring the write `vuln_scan` already does into its
+sibling table.
+
+Extended `tests/timeout-orphan-kill-on-drop-pin-e2e.sh` 22→29 assertions (new section H:
+the 6 `wordpress.rs` sites; extended section I: reachability for its routes). All 6 new
+sites individually mutation-tested (reverted one at a time, confirmed exactly its own
+assertion goes red, restored). Added 5 new unit tests for the conditional-`define()` fix,
+including one end-to-end through `check_security()`.
+
+**Not fixed this session, filed as tech debt:** the stale (~2.5-3yr-old), hardcoded
+14-plugin vulnerability database and its lack of an in-product staleness caveat (a
+structurally correct fix needs a live/synced feed, not a version bump that would just
+re-stale later); a narrow `version_lt()` segment-shift false negative (needs a
+non-numeric qualifier sitting between two numeric groups — realistic only for
+premium/beta plugin builds); the `harden`/`update-with-rollback` race (no per-site lock
+anywhere in the agent — a rollback can silently undo a hardening write with no
+re-verification and no notification). The tenant-isolation/authorization path for all
+three `wp_vulnerability.rs` entry points was audited and found already correct — the
+backend re-derives site ownership and domain from an owned row before ever calling the
+agent, the same pattern already fixed in `backup_orchestrator.rs`.
+
 ## [2.205.0]
 
 ### Fixed — a timed-out database restore or mailbox restore could keep writing after the panel reported failure

@@ -88,12 +88,25 @@ pub(crate) async fn wp_at_root(
     if skip_plugins {
         cmd.arg("--skip-plugins").arg("--skip-themes");
     }
-    let out = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| format!("wp-cli error: {e}"))?;
+    // This is the crate's single wp-cli choke point (see the doc comment above),
+    // so it ran every plugin install, core update and db import unbounded — no
+    // timeout at all, and no kill_on_drop either. A hang here (a stalled
+    // download, a locked wp_options table) blocked the request forever, and even
+    // an upstream cancellation (the connection closing, a future request-level
+    // timeout) would have left the wp-cli child running orphaned rather than
+    // stopped — the exact "timeout doesn't actually stop the thing" class fixed
+    // elsewhere in the agent crate, just never reaching wordpress.rs's own only
+    // subprocess entry point.
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        cmd.stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "wp-cli timed out".to_string())?
+    .map_err(|e| format!("wp-cli error: {e}"))?;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -257,24 +270,39 @@ pub async fn install(
     wp(domain, &["core", "download", "--force"]).await?;
 
     // Create wp-config.php (--skip-plugins --skip-themes for safety)
-    let out = safe_command(WP_CLI)
-        .args([
-            "config",
-            "create",
-            &format!("--dbname={db_name}"),
-            &format!("--dbuser={db_user}"),
-            &format!("--dbpass={db_pass}"),
-            &format!("--dbhost={db_host}"),
-            "--skip-plugins",
-            "--skip-themes",
-            "--allow-root",
-            &format!("--path={path}"),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| format!("wp config create: {e}"))?;
+    //
+    // These two calls predate `wp_at_root` — the file's own doc comment on that
+    // function is what a hand-rolled second implementation already cost once —
+    // and never got folded into it, so they kept its exact pre-fix shape: no
+    // timeout, no kill_on_drop. Same fix, applied directly here rather than
+    // rerouting through wp_at_root (whose signature assumes --skip-plugins
+    // covers both plugins and themes together, which happens to match here, but
+    // these two calls carry additional db-credential args wp_at_root's plain
+    // `args: &[&str]` already accepts fine — kept separate only to avoid
+    // widening this session's diff into a call-site migration).
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        safe_command(WP_CLI)
+            .args([
+                "config",
+                "create",
+                &format!("--dbname={db_name}"),
+                &format!("--dbuser={db_user}"),
+                &format!("--dbpass={db_pass}"),
+                &format!("--dbhost={db_host}"),
+                "--skip-plugins",
+                "--skip-themes",
+                "--allow-root",
+                &format!("--path={path}"),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "wp config create timed out".to_string())?
+    .map_err(|e| format!("wp config create: {e}"))?;
 
     if !out.status.success() {
         return Err(format!(
@@ -284,25 +312,30 @@ pub async fn install(
     }
 
     // Install WordPress (--skip-plugins --skip-themes for safety)
-    let out = safe_command(WP_CLI)
-        .args([
-            "core",
-            "install",
-            &format!("--url={url}"),
-            &format!("--title={title}"),
-            &format!("--admin_user={admin_user}"),
-            &format!("--admin_password={admin_pass}"),
-            &format!("--admin_email={admin_email}"),
-            "--skip-plugins",
-            "--skip-themes",
-            "--allow-root",
-            &format!("--path={path}"),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| format!("wp core install: {e}"))?;
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        safe_command(WP_CLI)
+            .args([
+                "core",
+                "install",
+                &format!("--url={url}"),
+                &format!("--title={title}"),
+                &format!("--admin_user={admin_user}"),
+                &format!("--admin_password={admin_pass}"),
+                &format!("--admin_email={admin_email}"),
+                "--skip-plugins",
+                "--skip-themes",
+                "--allow-root",
+                &format!("--path={path}"),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "wp core install timed out".to_string())?
+    .map_err(|e| format!("wp core install: {e}"))?;
 
     if !out.status.success() {
         return Err(format!(
@@ -486,6 +519,7 @@ pub async fn create_update_snapshot(domain: &str) -> Result<String, String> {
         std::time::Duration::from_secs(120),
         safe_command("tar")
             .args(["czf", &snapshot_path, "-C", "/var/www", &format!("{domain}/public")])
+            .kill_on_drop(true)
             .output()
     ).await
         .map_err(|_| "Snapshot tar timed out".to_string())?
@@ -534,6 +568,7 @@ pub async fn rollback_from_snapshot(domain: &str, snapshot_path: &str) -> Result
         std::time::Duration::from_secs(120),
         safe_command("tar")
             .args(["xzf", snapshot_path, "-C", "/var/www"])
+            .kill_on_drop(true)
             .output()
     ).await
         .map_err(|_| "Rollback timed out".to_string())?
@@ -568,6 +603,7 @@ pub async fn health_check(domain: &str) -> bool {
             .args(["-u", "www-data", WP_CLI, "eval", "echo 'OK';",
                    "--skip-plugins", "--skip-themes", "--allow-root",
                    &format!("--path={}", site_path(domain).unwrap_or_default())])
+            .kill_on_drop(true)
             .output()
     ).await;
 

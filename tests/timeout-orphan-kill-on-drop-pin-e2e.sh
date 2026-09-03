@@ -72,6 +72,8 @@ BACKUPS_SVC="$REPO/panel/agent/src/services/backups.rs"
 REMOTE_BACKUP_SVC="$REPO/panel/agent/src/services/remote_backup.rs"
 DATABASE_BACKUP_SVC="$REPO/panel/agent/src/services/database_backup.rs"
 MAIL_ROUTE="$REPO/panel/agent/src/routes/mail.rs"
+WORDPRESS_SVC="$REPO/panel/agent/src/services/wordpress.rs"
+WORDPRESS_ROUTE="$REPO/panel/agent/src/routes/wordpress.rs"
 SAFE_CMD="$REPO/panel/agent/src/safe_cmd.rs"
 
 PASS=0
@@ -205,7 +207,37 @@ windowHasKillOnDrop "$MAIL_ROUTE" '"xzf", backup_file,' \
   "mail.rs's mailbox_restore tar xzf carries kill_on_drop(true)"
 
 echo
-echo "== H. reachability: git legs, the database-backup dump/restore entrypoints, and the mailbox tar entrypoints all sit behind live, unauthenticated-beyond-the-flat-token HTTP endpoints =="
+echo "== H. wordpress.rs: the crate's single wp-cli choke point + its own 5 pre-existing subprocess sites are all annotated (s452 dockpanel-fanout run wf_72e4e04f-373, rotation target wp_vulnerability.rs) =="
+# wp_at_root's own doc comment already says every wp-cli invocation in this
+# crate goes through it — which means it was ALSO the single highest-leverage
+# gap: no timeout at all (so no kill_on_drop could matter until one was added
+# here) protecting info/plugins/themes/update/plugin_action/theme_action AND
+# every wp_vulnerability.rs entry point (scan_site/check_security/
+# apply_hardening, via set_wp_constant) in one place.
+windowHasKillOnDrop "$WORDPRESS_SVC" 'cmd.stdout(Stdio::piped())' \
+  "wordpress.rs's wp_at_root (the crate's single wp-cli choke point) carries kill_on_drop(true)"
+# install()'s two raw wp-cli calls predate wp_at_root and bypass it entirely —
+# a second hand-rolled implementation, the exact shape wp_at_root's own doc
+# comment warns went wrong once already, just for THIS bug class instead.
+windowHasKillOnDrop "$WORDPRESS_SVC" '&format!("--dbname={db_name}")' \
+  "wordpress.rs's install() wp config create carries kill_on_drop(true)"
+windowHasKillOnDrop "$WORDPRESS_SVC" '&format!("--admin_password={admin_pass}")' \
+  "wordpress.rs's install() wp core install carries kill_on_drop(true)"
+# These three already had a tokio::time::timeout wrap (120s/120s/15s) before
+# this session — the exact "timeout doesn't actually stop the thing" shape:
+# the future gets dropped on expiry, but without kill_on_drop the child
+# (a tar extracting into a live site's document root, or a sudo'd wp-cli
+# eval) keeps running orphaned rather than being bounded by the timeout that
+# looked like it would stop it.
+windowHasKillOnDrop "$WORDPRESS_SVC" '"czf", &snapshot_path, "-C", "/var/www"' \
+  "wordpress.rs's create_update_snapshot tar czf carries kill_on_drop(true)"
+windowHasKillOnDrop "$WORDPRESS_SVC" '"xzf", snapshot_path, "-C", "/var/www"' \
+  "wordpress.rs's rollback_from_snapshot tar xzf carries kill_on_drop(true)"
+windowHasKillOnDrop "$WORDPRESS_SVC" '"-u", "www-data", WP_CLI, "eval"' \
+  "wordpress.rs's health_check sudo wp-cli eval carries kill_on_drop(true)"
+
+echo
+echo "== I. reachability: git legs, the database-backup dump/restore entrypoints, the mailbox tar entrypoints, and the wordpress.rs subprocess sites all sit behind live, unauthenticated-beyond-the-flat-token HTTP endpoints =="
 # Not a security claim on their own (this suite is a reliability/operational-
 # honesty pin, matching how the finding itself was framed) — just confirming
 # the routes that reach the fixed functions still exist, so this suite does
@@ -229,6 +261,13 @@ if grep -q '"/mail/backup"' "$MAIL_ROUTE" 2>/dev/null && grep -q '"/mail/restore
   ok "mail.rs's route table still registers /mail/backup and /mail/restore"
 else
   bad "mail.rs's route table no longer visibly registers /mail/backup or /mail/restore — re-scope this pin"
+fi
+if grep -q '"/wordpress/{domain}/install"' "$WORDPRESS_ROUTE" 2>/dev/null \
+  && grep -q '"/wordpress/{domain}/update-with-rollback"' "$WORDPRESS_ROUTE" 2>/dev/null \
+  && grep -q '"/wordpress/{domain}/harden"' "$WORDPRESS_ROUTE" 2>/dev/null; then
+  ok "wordpress.rs's route table still registers install, update-with-rollback, and harden (the routes that reach wp_at_root, the two install() calls, and both snapshot/rollback tars)"
+else
+  bad "wordpress.rs's route table no longer visibly registers install, update-with-rollback, or harden — re-scope this pin"
 fi
 
 echo

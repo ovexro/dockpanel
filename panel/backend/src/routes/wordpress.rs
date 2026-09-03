@@ -415,6 +415,39 @@ pub async fn security_check(
         .await
         .map_err(|e| agent_error("Security check", e))?;
 
+    // Persist one row per check, matching the sibling `wp_vuln_scans` table
+    // this migration created alongside `wp_hardening` — that one gets written
+    // from `vuln_scan` below; this table never got its own writer, so every
+    // hardening check has always been a pure live round-trip with no history:
+    // refresh the page, restart the backend, or come back next week and there
+    // is no record of what a site's hardening status was or when it was last
+    // checked. `UPSERT` on `(site_id, check_name)` so a re-check updates the
+    // existing row rather than accumulating one per run.
+    if let Some(checks) = result.as_array() {
+        for check in checks {
+            let (Some(check_name), Some(status)) =
+                (check.get("name").and_then(|v| v.as_str()), check.get("status").and_then(|v| v.as_str()))
+            else {
+                continue;
+            };
+            let details = check.get("description").and_then(|v| v.as_str()).unwrap_or("");
+            sqlx::query(
+                "INSERT INTO wp_hardening (site_id, check_name, status, details, checked_at) \
+                 VALUES ($1, $2, $3, $4, NOW()) \
+                 ON CONFLICT (site_id, check_name) DO UPDATE SET \
+                 status = EXCLUDED.status, details = EXCLUDED.details, checked_at = EXCLUDED.checked_at",
+            )
+            .bind(id)
+            .bind(check_name)
+            .bind(status)
+            .bind(details)
+            .execute(&state.db)
+            .await
+            .map_err(|e| tracing::warn!("Failed to persist wp_hardening row for {check_name}: {e}"))
+            .ok();
+        }
+    }
+
     Ok(Json(result))
 }
 
