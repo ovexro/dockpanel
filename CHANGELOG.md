@@ -4,6 +4,74 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.207.0]
+
+### Fixed — site backup/restore: 9 more orphan-on-timeout subprocess sites, two defence-in-depth archive-parsing guards, a silent-failure Restic endpoint, and a `.git`-blind chown
+
+From the s453 `dockpanel-fanout` audit of `panel/agent/src/services/backups.rs` +
+`panel/agent/src/routes/backups.rs` (picked as this session's rotation target per
+[[feedback_dockpanel_audit_scope]]'s pre-selection check — zero in-file citations, and
+the file's only two prior memory touches were narrow single-bug sweeps, never a
+PRIMARY finder/skeptic pass).
+
+**9 of the file's 12 subprocess call sites wrapped a `tokio::time::timeout` around a
+`tar`/`restic` invocation without ever chaining `.kill_on_drop(true)`** — the same gap
+class fixed in the three immediately preceding releases, this time inside the file that
+already carried the ONE already-fixed reference site. Two of the nine (`restore_inner`'s
+main tar extraction and `restore_single_file`) write directly into a site's **live,
+publicly-served webroot**, so a timeout firing left an orphaned `tar` still writing
+there in the background after the caller had already been told the operation failed.
+Fixed: `.kill_on_drop(true)` added to all 9 sites — `extract_payload`, `restore_inner`,
+`list_backup_files`, `restore_single_file` in `services/backups.rs`, and every
+`safe_command("restic"/"which")` call in the Restic incremental-backup lane.
+
+**The Restic restore endpoint (`--target /`) had no structural confinement to the
+site's own webroot** — it relied on an unchecked runtime invariant instead of the
+structural guarantee the tar-based restore lane already gets for free from relative
+archive members. Fixed: `--include {site_dir}` added to the restore call. Unreachable
+in production today (restic isn't installed on this box and the shipped frontend never
+calls this lane), but cheap to close before it ever gets a UI.
+
+**Two archive-parsing guards, both defence-in-depth (no reachable attack path found —
+both require an attacker to already have direct filesystem write access to a site's
+backup directory, which exceeds what either bug alone would grant):**
+a hand-crafted archive whose top-level `.dockpanel-backup` payload member is itself a
+symlink was extracted and read through without complaint; `extract_payload` now refuses
+when that member resolves to a symlink instead of a real directory. A restored
+`manifest.json`'s `file` field (JSON inside the archive) was joined onto the dump
+staging directory with no validation — an absolute path there makes `PathBuf::join`
+discard the base entirely and point straight at an arbitrary root-readable file;
+`restore_inner` now rejects an empty, `/`-containing, `..`-containing, or absolute
+`file` value before it is ever joined.
+
+**`GET .../restic/snapshots` never checked the command's exit status**, unlike its two
+sibling Restic handlers — a wrong/rotated password or a locked/corrupted repo produced
+empty stdout, which `serde_json::from_slice` failed to parse, and `unwrap_or_default()`
+silently turned that into `{"snapshots": [], "total": 0}` with HTTP 200: indistinguishable
+from a site that genuinely has no backups yet. Fixed to check `output.status.success()`
+and surface `stderr`, mirroring the two siblings.
+
+**The post-restic-restore `chown -R www-data:www-data` handed the application `.git`
+if the site uses Git Deploy** — undoing `deploy.rs`'s own careful root-owned-`.git`
+invariant and reopening the exact hook-execution-as-root path that invariant exists to
+close. Fixed to mirror `deploy.rs::hand_tree_to_web_user`'s existing split: chown
+everything except `.git` to `www-data`, then explicitly re-secure `.git` to `root`. This
+is 1 of 8 `.git`-blind recursive chowns tracked since s377/p108 across the agent crate —
+the other 7, in different files, remain open and are filed as a future rotation target.
+
+**Also reviewed and found sound, no fix needed:** classic tar symlink-directory escapes
+and a `tar --wildcards` metacharacter trick were both proven blocked by GNU tar's own
+default protections (execution-verified, not just read); `secure_backup_tree()`'s
+permission-repair timing was proven to leave no live `www-data`-reachable window, since
+the tree's root directory bit stays `0700` continuously from first boot.
+
+5 new unit tests (2 for the archive-parsing guards, mutation-tested), 12 new pin
+assertions (9 kill_on_drop sites + the `.git`-skip chown, `tests/timeout-orphan-kill-on-drop-pin-e2e.sh`
+29 → 41). See `project_dockpanel_tech_debt_p192` for the full account, including the
+UPHELD/RESIZED verdicts on every finding and the carried debt (per-domain Restic
+passwords, the dangling-symlink-on-failed-restore residue, the remaining 7 `.git`-blind
+chown sites, a pin-coverage gap for the permission-timing invariant).
+
 ## [2.206.0]
 
 ### Fixed — WordPress toolkit: hardening checks could grade a config "pass" while it was actually insecure, and every wp-cli/tar subprocess in the file could be orphaned by a timeout

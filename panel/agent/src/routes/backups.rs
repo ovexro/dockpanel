@@ -167,7 +167,7 @@ use crate::safe_cmd::safe_command;
 async fn ensure_restic() -> Result<(), ApiErr> {
     let has_restic = tokio::time::timeout(
         std::time::Duration::from_secs(3),
-        safe_command("which").arg("restic").output()
+        safe_command("which").arg("restic").kill_on_drop(true).output()
     ).await.ok().and_then(|r| r.ok()).map(|o| o.status.success()).unwrap_or(false);
 
     if !has_restic {
@@ -215,6 +215,7 @@ async fn restic_backup(
             std::time::Duration::from_secs(30),
             safe_command("restic")
                 .args(["-r", &repo, "--password-file", password_file, "init"])
+                .kill_on_drop(true)
                 .output()
         ).await;
 
@@ -231,6 +232,7 @@ async fn restic_backup(
         safe_command("restic")
             .args(["-r", &repo, "--password-file", password_file,
                    "backup", &site_dir, "--tag", &domain, "--json"])
+            .kill_on_drop(true)
             .output()
     ).await
         .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Backup timed out (10min)"))?
@@ -281,10 +283,22 @@ async fn restic_snapshots(
         std::time::Duration::from_secs(15),
         safe_command("restic")
             .args(["-r", &repo, "--password-file", password_file, "snapshots", "--json"])
+            .kill_on_drop(true)
             .output()
     ).await
         .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Timeout"))?
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Restic: {e}")))?;
+
+    // Unlike `restic_backup`/`restic_restore`, this path used to skip the exit
+    // check entirely: a wrong/rotated password or a locked/corrupted repo
+    // produces empty stdout, which `serde_json::from_slice` fails to parse —
+    // and `unwrap_or_default()` silently turned that failure into "0
+    // snapshots", indistinguishable from a site that genuinely has none yet.
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(err(StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Failed to list restic snapshots: {}", stderr.chars().take(300).collect::<String>())));
+    }
 
     let snapshots: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap_or_default();
     let total = snapshots.len();
@@ -293,6 +307,38 @@ async fn restic_snapshots(
         "snapshots": snapshots,
         "total": total,
     })))
+}
+
+/// Hand a restored site tree back to the web server without exposing `.git`.
+///
+/// A restic restore run as root (this agent) reproduces each member's
+/// original uid/gid, so `.git` — if this site uses Git Deploy — comes back
+/// however `deploy.rs::hand_tree_to_web_user` last left it: root-owned,
+/// unreadable to www-data. A blanket `chown -R www-data:www-data` over the
+/// whole tree would undo exactly that: it hands the application `.git/config`
+/// and `.git/hooks/`, which the next `git_build.rs` deploy then reads and
+/// executes as root — the same defect `deploy.rs` was fixed to avoid (see its
+/// own `hand_tree_to_web_user` doc comment). Mirror that split here: chown
+/// everything except `.git` to www-data, then explicitly re-secure `.git` to
+/// root, rather than trust whatever ownership the restore happened to leave it at.
+async fn chown_restored_tree(target: &str) {
+    if let Ok(entries) = std::fs::read_dir(target) {
+        for entry in entries.flatten() {
+            if entry.file_name() == std::ffi::OsStr::new(".git") {
+                continue;
+            }
+            let _ = safe_command("chown")
+                .args(["-R", "www-data:www-data", &entry.path().to_string_lossy()])
+                .output()
+                .await;
+        }
+    }
+
+    let git_dir = format!("{target}/.git");
+    if std::path::Path::new(&git_dir).exists() {
+        let _ = safe_command("chown").args(["-R", "root:root", &git_dir]).output().await;
+        let _ = safe_command("chmod").args(["-R", "go-rwx", &git_dir]).output().await;
+    }
 }
 
 /// POST /backups/{domain}/restic/restore/{snapshot_id} — Restore from Restic snapshot.
@@ -311,6 +357,7 @@ async fn restic_restore(
 
     let repo = format!("/var/backups/dockpanel/restic/{}", domain.replace('.', "_"));
     let password_file = "/etc/dockpanel/restic-password";
+    let site_dir = format!("/var/www/{domain}");
 
     // The repository has to exist before a restore can name a snapshot in it.
     // `restic_snapshots` already checks this and answers an empty list; restore
@@ -320,11 +367,18 @@ async fn restic_restore(
             "No restic repository for this site on this server — nothing to restore from."));
     }
 
+    // `--target /` reproduces each snapshot member at its original absolute
+    // path; every snapshot this agent itself produces (`restic_backup` above
+    // always sources from exactly `site_dir`) is confined to that tree
+    // already. `--include` makes that confinement structural rather than an
+    // unchecked invariant — the same guarantee the tar-based restore lane
+    // gets for free from `-C site_root_str` on relative archive members.
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(600),
         safe_command("restic")
             .args(["-r", &repo, "--password-file", password_file,
-                   "restore", &snapshot_id, "--target", "/"])
+                   "restore", &snapshot_id, "--target", "/", "--include", &site_dir])
+            .kill_on_drop(true)
             .output()
     ).await
         .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Restore timed out"))?
@@ -336,11 +390,7 @@ async fn restic_restore(
             &format!("Restore failed: {}", stderr.chars().take(300).collect::<String>())));
     }
 
-    // Fix ownership
-    let _ = safe_command("chown")
-        .args(["-R", "www-data:www-data", &format!("/var/www/{domain}")])
-        .output()
-        .await;
+    chown_restored_tree(&site_dir).await;
 
     tracing::info!("Restic restore completed for {domain} from {snapshot_id}");
     Ok(Json(serde_json::json!({ "ok": true, "snapshot_id": snapshot_id })))
