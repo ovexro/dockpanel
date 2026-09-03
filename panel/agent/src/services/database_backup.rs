@@ -203,6 +203,7 @@ pub async fn dump_mysql(
         ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to spawn docker exec: {e}"))?;
 
@@ -212,6 +213,7 @@ pub async fn dump_mysql(
     let mut gzip_child = safe_command("gzip")
         .stdin(docker_stdout.into_owned_fd().map_err(|_| "Failed to get fd")?)
         .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to spawn gzip: {e}"))?;
 
@@ -232,14 +234,18 @@ pub async fn dump_mysql(
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(600),
         async {
-            let docker_status = docker_child.wait().await
+            // wait_with_output (not wait): docker_child's stderr is piped above but was
+            // never otherwise drained — mariadb-dump writing past the pipe buffer (many
+            // routines/triggers, or NOTICE-level chatter) would block on write(2) and hang
+            // the dump until this outer timeout, same bug class as the missing kill_on_drop.
+            let docker_output = docker_child.wait_with_output().await
                 .map_err(|e| format!("docker exec wait error: {e}"))?;
             let _gzip_status = gzip_child.wait().await
                 .map_err(|e| format!("gzip wait error: {e}"))?;
             write_handle.await
                 .map_err(|e| format!("write task error: {e}"))?
                 .map_err(|e| format!("file write error: {e}"))?;
-            if !docker_status.success() {
+            if !docker_output.status.success() {
                 return Err("MySQL dump failed (docker exec returned non-zero)".to_string());
             }
             Ok(())
@@ -318,6 +324,7 @@ pub async fn dump_postgres(
         ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to spawn docker exec: {e}"))?;
 
@@ -327,6 +334,7 @@ pub async fn dump_postgres(
     let mut gzip_child = safe_command("gzip")
         .stdin(docker_stdout.into_owned_fd().map_err(|_| "Failed to get fd")?)
         .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to spawn gzip: {e}"))?;
 
@@ -345,14 +353,18 @@ pub async fn dump_postgres(
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(600),
         async {
-            let docker_status = docker_child.wait().await
+            // wait_with_output (not wait): docker_child's stderr is piped above but was
+            // never otherwise drained — pg_dump writing past the pipe buffer (many
+            // objects, or NOTICE-level chatter) would block on write(2) and hang the
+            // dump until this outer timeout, same bug class as the missing kill_on_drop.
+            let docker_output = docker_child.wait_with_output().await
                 .map_err(|e| format!("docker exec wait error: {e}"))?;
             let _gzip_status = gzip_child.wait().await
                 .map_err(|e| format!("gzip wait error: {e}"))?;
             write_handle.await
                 .map_err(|e| format!("write task error: {e}"))?
                 .map_err(|e| format!("file write error: {e}"))?;
-            if !docker_status.success() {
+            if !docker_output.status.success() {
                 return Err("PostgreSQL dump failed (docker exec returned non-zero)".to_string());
             }
             Ok(())
@@ -502,6 +514,7 @@ pub async fn restore_mysql(
     let mut gunzip_child = safe_command("gunzip")
         .args(["-c", filepath])
         .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to spawn gunzip: {e}"))?;
 
@@ -527,6 +540,7 @@ pub async fn restore_mysql(
         .stdin(gunzip_stdout.into_owned_fd().map_err(|_| "Failed to get fd")?)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to spawn docker exec: {e}"))?;
 
@@ -590,6 +604,7 @@ pub async fn restore_postgres(
     let mut gunzip_child = safe_command("gunzip")
         .args(["-c", filepath])
         .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to spawn gunzip: {e}"))?;
 
@@ -611,6 +626,7 @@ pub async fn restore_postgres(
         .stdin(gunzip_stdout.into_owned_fd().map_err(|_| "Failed to get fd")?)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to spawn docker exec: {e}"))?;
 
@@ -669,6 +685,7 @@ pub async fn restore_mongo(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to spawn docker exec: {e}"))?;
 

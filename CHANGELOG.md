@@ -4,6 +4,52 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.205.0]
+
+### Fixed — a timed-out database restore or mailbox restore could keep writing after the panel reported failure
+
+From the s451 `dockpanel-fanout` audit of `panel/agent/src/services/database_backup.rs`
+(the first PRIMARY pass over this file), rotation-picked per
+[[feedback_dockpanel_audit_scope]] after v2.204.0's own new pin suite was
+found to falsely claim this file was already covered.
+
+**5 of the file's 6 privileged dump/restore functions never set
+`kill_on_drop(true)` on their child processes** — only `dump_mongo` did.
+On an actual 600s timeout, the spawned `mariadb-dump`/`pg_dump`/`mariadb`/
+`psql`/`mongorestore` process (and its paired `gzip`/`gunzip`) kept running,
+orphaned, after `tokio::time::timeout` returned. For a **restore**, this is
+worse than a stale file: the underlying client keeps writing into a live
+customer database after the panel has already reported the restore as
+failed, so an operator who retries — or takes a different recovery action —
+risks a data-corrupting concurrent-write race against the original restore
+silently finishing in the background. Fixed at all 9 call sites
+(`dump_mysql`/`dump_postgres` each spawn 2 children — docker+gzip;
+`restore_mysql`/`restore_postgres` each spawn 2 — gunzip+docker;
+`restore_mongo` spawns 1 — docker), matching the pattern already used
+by `dump_mongo` and re-applied crate-wide in v2.204.0. Folded in the same
+pass: `dump_mysql`/`dump_postgres` piped the docker child's stderr but never
+drained it (`.wait()` instead of `.wait_with_output()`), which could hang a
+dump on unusually verbose `mariadb-dump`/`pg_dump` output until the same
+timeout — now drained like every sibling call site already does.
+
+**The completeness critic found the identical bug, off the original menu,
+in an unrelated file**: `panel/agent/src/routes/mail.rs`'s `mailbox_backup`/
+`mailbox_restore` (`tar czf`/`xzf` under a 300s timeout) — invisible to
+every earlier "grep `services/` for `kill_on_drop`" sweep because this
+feature's subprocess logic is inlined directly in the route handler, not a
+service module. This file has exactly one commit in its entire history (it
+created the whole mail-hosting feature at v2.173.0) and had never been
+touched by any audit since — 38 releases. On a mailbox large enough that
+`tar` exceeds 300s, the orphaned process kept extracting into
+`/var/vmail/{domain}` after the panel reported failure, skipping the
+ownership-repair step that follows a successful restore. Fixed with the
+same pattern.
+
+Verification: 22 pin assertions (was 9 — the suite's own header previously,
+incorrectly, claimed this file needed none), all 11 new sites individually
+mutation-tested. `cargo test`: agent 299/0/4-ignored, backend 473/0
+(unchanged). Full local pin sweep 117/117.
+
 ## [2.204.0]
 
 ### Fixed — NodeSource/Cloudflared repo cleanup left trust behind on every routine uninstall, and six timed-out privileged operations could orphan past their deadline

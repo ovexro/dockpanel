@@ -2126,7 +2126,9 @@ async fn mailbox_backup(Json(body): Json<MailboxBackupRequest>) -> Result<Json<s
     // `--` ends option parsing so a local-part beginning with '-' can't be read as a tar flag.
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        safe_command("tar").args(["czf", &backup_file, "-C", &format!("/var/vmail/{domain}"), "--", user]).output()
+        safe_command("tar").args(["czf", &backup_file, "-C", &format!("/var/vmail/{domain}"), "--", user])
+            .kill_on_drop(true)
+            .output()
     ).await
         .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Backup timed out"))?
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Backup failed: {e}")))?;
@@ -2178,7 +2180,9 @@ async fn mailbox_restore(Json(body): Json<serde_json::Value>) -> Result<Json<ser
     // Restore
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        safe_command("tar").args(["xzf", backup_file, "-C", &maildir]).output()
+        safe_command("tar").args(["xzf", backup_file, "-C", &maildir])
+            .kill_on_drop(true)
+            .output()
     ).await
         .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Restore timed out"))?
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Restore failed: {e}")))?;
