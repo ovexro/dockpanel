@@ -4,6 +4,48 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.209.0]
+
+### Fixed — database-container network reconcile could silently orphan unrelated tenants' databases; a non-admin site owner could OOM-kill the shared agent with one file download
+
+From the s455 `dockpanel-fanout` audit of `panel/agent/src/services/database.rs` +
+`panel/agent/src/routes/database.rs` — the direct follow-up on this project's own s297 UNBUILT
+flag ("database.rs never audited"), which s454's fan-out had just found was invisible to the
+rotation's own selection bookkeeping.
+
+**`reconcile_network_icc()` — the one-time migration that hardens the shared `dockpanel-db`
+bridge (disables inter-container communication) for installs whose network predates that
+default — aborted on the FIRST reconnect failure**, and by that point the network had already
+been torn down and recreated: every container later in the batch than the failure was left with
+**zero network attachment**, silently taking their published `127.0.0.1` port bindings offline —
+a live database outage for tenants who had nothing to do with whichever request triggered the
+reconcile, with no server-side record of which containers were left orphaned. Live-proven against
+a real, fully disposable Docker network (never the shared `dockpanel-db`): two real containers
+straddling a deliberately-unconnectable id both now end up reconnected, and the aggregated error
+names every container that actually failed. Prospective on this box today — no legacy
+(pre-hardening) `dockpanel-db` network currently exists — but real and deterministic in the code
+for any install that hasn't yet run this one-time reconcile.
+
+**`GET /files/{domain}/download` read an entire file into memory before sending a single response
+byte, with no size cap** — unlike its sibling `read_file` (the text-editor "open" path, capped at
+2MB in the very same file). Found by the completeness critic, who went outside the session's
+menu into `panel/agent/src/routes/files.rs` after confirming zero prior audit history there.
+The agent is the *one* process per box mediating deploys, backups, terminal sessions and Docker
+orchestration for every tenant, and runs under a 512MB `MemoryMax` cgroup; a site's own webroot
+routinely holds files well past any upload cap (database dumps, unrotated logs, media), with no
+per-site disk quota. An ordinary, non-admin site owner downloading a large-enough file already
+in their own webroot could OOM-kill the shared agent with one HTTP request — every other
+tenant's in-flight deploy, backup, or terminal session on that box would fail during the
+crash+restart window, and a repeated trigger could crash-loop the unit past its restart limit
+until an operator manually resets it. Fixed by streaming the response instead of buffering it —
+memory use becomes constant regardless of file size, so no arbitrary download cap is needed.
+
+11 new pin assertions (`tests/database-icc-reconcile-and-file-download-pin-e2e.sh`, new file,
+mutation-tested via whole-tree `git stash` — 10/11 correctly failed against pre-fix code, the
+11th a positive control on an untouched sibling function), plus a live Docker-backed regression
+test for the reconcile fix (creates two real disposable containers and a disposable network,
+never the real `dockpanel-db`).
+
 ## [2.208.0]
 
 ### Fixed — security surface: SSH `Include` drop-ins ignored (live wrong port reported), firewalld-only boxes 424 on firewall rule changes, RHEL auth-log blindness, and a shell quote-splitting bypass in git-deploy hook validation

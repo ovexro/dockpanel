@@ -783,30 +783,42 @@ async fn ensure_network(docker: &Docker) -> Result<(), String> {
 
 /// Create the shared DB bridge with inter-container communication disabled.
 async fn create_db_network(docker: &Docker) -> Result<(), String> {
+    create_db_network_at(docker, DB_NETWORK).await
+}
+
+async fn create_db_network_at(docker: &Docker, network: &str) -> Result<(), String> {
     use bollard::network::CreateNetworkOptions;
     docker
         .create_network(CreateNetworkOptions {
-            name: DB_NETWORK,
+            name: network,
             driver: "bridge",
             options: HashMap::from([("com.docker.network.bridge.enable_icc", "false")]),
             ..Default::default()
         })
         .await
         .map_err(|e| format!("Failed to create network: {e}"))?;
-    tracing::info!("Created Docker network: {DB_NETWORK} (enable_icc=false)");
+    tracing::info!("Created Docker network: {network} (enable_icc=false)");
     Ok(())
 }
 
 /// Recreate `dockpanel-db` with ICC disabled, reconnecting every attached DB container.
 /// One-time reconcile for pre-s242 installs whose network still has ICC enabled.
 async fn reconcile_network_icc(docker: &Docker, attached: &[String]) -> Result<(), String> {
+    reconcile_network_icc_at(docker, DB_NETWORK, attached).await
+}
+
+async fn reconcile_network_icc_at(
+    docker: &Docker,
+    network: &str,
+    attached: &[String],
+) -> Result<(), String> {
     use bollard::network::{ConnectNetworkOptions, DisconnectNetworkOptions};
     // Disconnect so the network can be removed. Published 127.0.0.1 ports are
     // re-established from the container's HostConfig on reconnect (lab-verified).
     for cid in attached {
         let _ = docker
             .disconnect_network(
-                DB_NETWORK,
+                network,
                 DisconnectNetworkOptions {
                     container: cid.as_str(),
                     force: true,
@@ -815,24 +827,52 @@ async fn reconcile_network_icc(docker: &Docker, attached: &[String]) -> Result<(
             .await;
     }
     docker
-        .remove_network(DB_NETWORK)
+        .remove_network(network)
         .await
         .map_err(|e| format!("Failed to remove legacy DB network for ICC reconcile: {e}"))?;
-    create_db_network(docker).await?;
+    create_db_network_at(docker, network).await?;
+
+    // Best-effort, not abort-on-first-failure: the network was already torn
+    // down and recreated above, so a container this loop never REACHES has
+    // ZERO network attachment — its published port stops routing, a silent
+    // live outage for whichever tenant owns it, who may have nothing to do
+    // with the request that triggered this reconcile. The old `?` here
+    // meant the first Docker-daemon hiccup left every LATER container in
+    // `attached` orphaned with no record of which ones. Known residual
+    // limitation, not fixed here: once this function returns (however many
+    // reconnects failed), `ensure_network`'s `icc_off` check short-circuits
+    // true on every future call — a container that failed to reconnect has
+    // no automatic retry and needs the manual command below.
+    let mut failed: Vec<String> = Vec::new();
     for cid in attached {
-        docker
+        if let Err(e) = docker
             .connect_network(
-                DB_NETWORK,
+                network,
                 ConnectNetworkOptions {
                     container: cid.as_str(),
                     endpoint_config: Default::default(),
                 },
             )
             .await
-            .map_err(|e| format!("Failed to reconnect {cid} to hardened DB network: {e}"))?;
+        {
+            tracing::error!("Failed to reconnect {cid} to hardened DB network: {e}");
+            failed.push(cid.clone());
+        }
     }
+
+    if !failed.is_empty() {
+        return Err(format!(
+            "Reconciled {network} to enable_icc=false, but {} of {} container(s) failed to \
+             reconnect and are now offline (no network attached): {}. Reconnect manually: \
+             `docker network connect {network} <container>`.",
+            failed.len(),
+            attached.len(),
+            failed.join(", "),
+        ));
+    }
+
     tracing::info!(
-        "Reconciled {DB_NETWORK} to enable_icc=false ({} container(s) reconnected)",
+        "Reconciled {network} to enable_icc=false ({} container(s) reconnected)",
         attached.len()
     );
     Ok(())
@@ -859,5 +899,115 @@ mod tests {
     fn tenant_role_sql_escapes_password_quote() {
         let sql = tenant_role_sql("app", "a'b");
         assert!(sql[0].contains("PASSWORD 'a''b'"));
+    }
+
+    /// s455: `reconcile_network_icc_at` used to abort on the FIRST reconnect
+    /// failure, silently orphaning every container later in `attached` — its
+    /// network was already torn down, so a container the loop never reached
+    /// had ZERO attachment. Proven against a REAL, fully disposable Docker
+    /// network (never the real `dockpanel-db`, so this cannot touch
+    /// production networking on this box): two real containers straddle a
+    /// third id that cannot possibly connect, forcing a real mid-loop
+    /// failure. Both real containers must still end up connected, and the
+    /// error must name exactly the bad id.
+    #[tokio::test]
+    #[ignore = "creates real containers and a real (disposable) network; run with cargo test -p dockpanel-agent reconcile_network_icc -- --ignored --nocapture"]
+    async fn reconcile_network_icc_reconnects_every_container_despite_one_bad_id() {
+        use bollard::container::{Config, CreateContainerOptions, RemoveContainerOptions};
+        use bollard::network::{ConnectNetworkOptions, CreateNetworkOptions};
+
+        let docker = Docker::connect_with_local_defaults().expect("docker connect");
+        let tag = uuid::Uuid::new_v4();
+        let network = format!("dp-test-reconcile-net-{tag}");
+        let name_a = format!("dp-test-reconcile-a-{tag}");
+        let name_b = format!("dp-test-reconcile-b-{tag}");
+
+        for name in [&name_a, &name_b] {
+            docker
+                .create_container(
+                    Some(CreateContainerOptions { name: name.as_str(), platform: None }),
+                    Config {
+                        image: Some("alpine:latest".to_string()),
+                        // Never started; connect/disconnect only needs the
+                        // container to exist, not to be running.
+                        cmd: Some(vec!["dockpanel-test-probe".to_string()]),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("create test container");
+        }
+
+        // `reconcile_network_icc_at` mirrors the real `ensure_network` flow,
+        // which only ever calls it when the network ALREADY exists (just
+        // with the wrong ICC setting) — set that up for real here too.
+        docker
+            .create_network(CreateNetworkOptions {
+                name: network.as_str(),
+                driver: "bridge",
+                ..Default::default()
+            })
+            .await
+            .expect("create disposable test network");
+        for name in [&name_a, &name_b] {
+            docker
+                .connect_network(
+                    &network,
+                    ConnectNetworkOptions { container: name.as_str(), endpoint_config: Default::default() },
+                )
+                .await
+                .expect("attach test container to disposable network");
+        }
+
+        // Cannot possibly exist — forces connect_network to fail for exactly
+        // this one entry, in the MIDDLE of the batch, so an abort-on-first-
+        // failure loop would silently orphan name_b.
+        let fake_id = format!("dp-test-nonexistent-{tag}");
+        let attached = vec![name_a.clone(), fake_id.clone(), name_b.clone()];
+
+        let result = reconcile_network_icc_at(&docker, &network, &attached).await;
+
+        let mut orphaned: Vec<String> = Vec::new();
+        for name in [&name_a, &name_b] {
+            let connected = docker
+                .inspect_container(name, None)
+                .await
+                .ok()
+                .and_then(|c| c.network_settings)
+                .and_then(|ns| ns.networks)
+                .map(|nets| nets.contains_key(network.as_str()))
+                .unwrap_or(false);
+            if !connected {
+                orphaned.push(name.clone());
+            }
+        }
+
+        // Cleanup runs regardless of what the assertions below find — this
+        // must never leave a disposable test container/network OR its
+        // anonymous volume behind, so `v: true` is explicit here.
+        for name in [&name_a, &name_b] {
+            let _ = docker
+                .remove_container(
+                    name,
+                    Some(RemoveContainerOptions {
+                        v: true,
+                        force: true,
+                        ..Default::default()
+                    }),
+                )
+                .await;
+        }
+        let _ = docker.remove_network(&network).await;
+
+        assert!(result.is_err(), "expected an aggregated error naming the bad id");
+        let msg = result.unwrap_err();
+        assert!(msg.contains(&fake_id), "error must name the failed container: {msg}");
+        assert!(!msg.contains(&name_a), "must not blame a container that actually succeeded: {msg}");
+        assert!(!msg.contains(&name_b), "must not blame a container that actually succeeded: {msg}");
+        assert!(
+            orphaned.is_empty(),
+            "these real containers — on either side of the bad id in the same batch — were \
+             never reconnected: {orphaned:?} (an abort-on-first-failure loop is back)"
+        );
     }
 }

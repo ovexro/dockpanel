@@ -1,4 +1,5 @@
 use axum::{
+    body::Body,
     extract::{Path, Query},
     http::StatusCode,
     routing::{delete, get, post, put},
@@ -186,6 +187,16 @@ async fn delete_entry(
 }
 
 /// GET /files/{domain}/download?path= — Download a file as raw bytes.
+///
+/// Streamed, not read into memory whole: a site's own webroot routinely holds
+/// files well past the file manager's 2MB text-editor cap (DB dumps, logs,
+/// media) with no per-site disk quota (see `resolve_safe_path`'s own callers),
+/// and this handler is reachable by the site's own non-admin owner. The
+/// agent — the one process per box mediating deploys/backups/terminal/Docker
+/// for every tenant — runs under a 512MB `MemoryMax` cgroup
+/// (`dockpanel-agent.service`); `tokio::fs::read`-ing an arbitrarily large
+/// file into a `Vec<u8>` before sending a single response byte let an
+/// ordinary tenant OOM-kill it with one request.
 async fn download_file(
     Path(domain): Path<String>,
     Query(q): Query<PathQuery>,
@@ -201,8 +212,13 @@ async fn download_file(
         return Err(err(StatusCode::BAD_REQUEST, "Cannot download a directory"));
     }
 
-    let bytes = tokio::fs::read(&safe)
+    let file = tokio::fs::File::open(&safe)
         .await
+        .map_err(|_| err(StatusCode::NOT_FOUND, "File not found"))?;
+    let len = file
+        .metadata()
+        .await
+        .map(|m| m.len())
         .map_err(|_| err(StatusCode::NOT_FOUND, "File not found"))?;
 
     let filename = safe
@@ -210,6 +226,8 @@ async fn download_file(
         .and_then(|f| f.to_str())
         .unwrap_or("download");
     let safe_filename = filename.replace('"', "").replace(['\\', '\n', '\r'], "");
+
+    let stream = tokio_util::io::ReaderStream::new(file);
 
     Ok((
         [
@@ -221,8 +239,9 @@ async fn download_file(
                 axum::http::header::CONTENT_TYPE,
                 "application/octet-stream".to_string(),
             ),
+            (axum::http::header::CONTENT_LENGTH, len.to_string()),
         ],
-        bytes,
+        Body::from_stream(stream),
     ))
 }
 
