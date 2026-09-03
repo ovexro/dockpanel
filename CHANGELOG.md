@@ -4,6 +4,56 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.211.0]
+
+### Fixed — image/SBOM scanner installers trusted a moving target; a timed-out scan could outlive its own timeout; fresh CMS installs left DB credentials world-readable
+
+From the s457 `dockpanel-fanout` audit of `services/image_scanner.rs` + `routes/image_scan.rs` —
+a route/service pair never previously the PRIMARY target of a fan-out, picked via LOC-ranking
+over the remaining unaudited `panel/agent/src/{routes,services}` files.
+
+**`install_grype()` and `install_syft()` fetched Anchore's `install.sh` from the mutable `main`
+branch ref and let it resolve "latest" at install time** — no tag pinned, so a run today and a
+run next month could silently install different binaries. Anchore's own `install.sh` already
+sha256-verifies the downloaded archive against its published `checksums.txt` unconditionally
+(confirmed by reading the script directly, not assumed), so this was a reproducibility gap, not
+a missing-integrity-check one. Fixed by pinning both the script fetch and the installed release
+to a specific version tag (`GRYPE_VERSION`/`SYFT_VERSION`) via `install.sh`'s own documented
+`TAG` argument.
+
+**Neither scanner's process spawns set `kill_on_drop`** — a grype/syft child that outlives its
+180s timeout keeps running after the caller is told it "timed out," the same orphan class this
+project has already fixed in `docker_apps.rs`, `pkg.rs`, `database_backup.rs`,
+`wp_vulnerability.rs`, and `backups.rs` (s446–453); these two files were never swept in that
+arc. Fixed on all 5 spawn sites across both files.
+
+**Off-menu, found by the completeness critic**: `wordpress.rs::install` and 4 of `cms.rs`'s 5
+CMS installers (Laravel, Drupal, Joomla, CodeIgniter — Symfony's install path takes no DB
+credentials at all) wrote a DB-credential-bearing file (`wp-config.php` / `.env` /
+`settings.php` / `configuration.php`) at the process umask's default 644, with no `chmod`
+anywhere on the install path. `wp_vulnerability.rs` already had a "wp-config-perms" hardening
+check for exactly this (`chmod 640`) but it only ran via the separate opt-in
+`POST /wordpress/{domain}/harden` pass, never on install itself. **Honest scope, live-verified
+on this box before shipping**: tightening permissions closes reads from any *other* local OS
+account. It does not, and structurally cannot, isolate one tenant's own www-data-identity
+PHP-FPM pool or client-role shell from another tenant's credential file — every site's pool
+currently shares the identical `www-data:www-data` identity (confirmed: a 600-mode file owned
+by `www-data` is still readable by a process running as `www-data`; only a genuinely different
+user was denied). That deeper isolation gap is the separate, already-tracked per-site-OS-user
+architecture question — unchanged by this fix.
+
+**Deferred, not fixed this session**: `scan_image()`/`generate_sbom()` accept an
+attacker-shaped `host:port` image reference with no registry allowlist — grype/syft make their
+own outbound HTTPS connection independent of any local Docker daemon, a live-verified
+connectivity-probing SSRF primitive (reachable only by an admin-role, per-server-scoped backend
+caller). A naive RFC1918/loopback denylist would break a legitimate self-hosted
+private-registry use case, so this needs an explicit allowlist design rather than a rushed fix.
+
+New pin suite: `tests/scanner-supply-chain-and-credential-perms-pin-e2e.sh`, 20 assertions,
+mutation-tested via a targeted `git stash` of just the 4 touched files (18/20 correctly red
+against pre-fix code, 2 positive controls — Symfony correctly left unwired, WordPress's
+pre-existing `chown` untouched — correctly stayed green).
+
 ## [2.210.0]
 
 ### Fixed — six sites could hand a git-deployed site's `.git` to www-data on clone/sync/import; the flagship backup-restore path left every restored site root-owned and unwritable

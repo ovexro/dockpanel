@@ -91,6 +91,19 @@ async fn chown_site(path: &str) {
     }
 }
 
+/// Tighten a freshly-written DB-credential file (an app's .env/settings.php/
+/// configuration.php) to 640 so it isn't left at the process umask's default
+/// 644. `chown_site` above already sets both owner AND group to www-data, so
+/// this closes reads from any OTHER local account on the box — it does not
+/// and cannot isolate one tenant's www-data-identity process from another's,
+/// since every site's PHP-FPM pool and every client-role shell share that
+/// same identity (nginx.rs hardcodes user=www-data/group=www-data for every
+/// pool); that cross-tenant isolation gap is the separate, already-tracked
+/// per-site-OS-user architecture question (#85), unchanged by this fix.
+async fn secure_credential_file(path: &str) {
+    safe_command("chmod").args(["640", path]).output().await.ok();
+}
+
 /// Ensure Composer is installed at /usr/local/bin/composer.
 pub async fn ensure_composer() -> Result<(), String> {
     if std::path::Path::new(COMPOSER).exists() {
@@ -181,6 +194,7 @@ pub async fn install_laravel(
     // No symlink needed — Laravel already uses public/ as document root.
 
     chown_site(&site_dir).await;
+    secure_credential_file(&env_file).await;
 
     Ok("Laravel installed successfully".into())
 }
@@ -254,6 +268,8 @@ pub async fn install_drupal(
     .await?;
 
     chown_site(&site_dir).await;
+    // drush writes settings.php under the recommended-project's web/ docroot.
+    secure_credential_file(&format!("{site_dir}/web/sites/default/settings.php")).await;
 
     Ok("Drupal installed successfully".into())
 }
@@ -330,6 +346,7 @@ pub async fn install_joomla(
     .await?;
 
     chown_site(&public_dir).await;
+    secure_credential_file(&format!("{public_dir}/configuration.php")).await;
 
     Ok("Joomla installed successfully".into())
 }
@@ -431,6 +448,7 @@ pub async fn install_codeigniter(
         .map_err(|e| format!("Failed to write .env: {e}"))?;
 
     chown_site(&site_dir).await;
+    secure_credential_file(&env_file).await;
 
     Ok("CodeIgniter installed successfully".into())
 }

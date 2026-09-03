@@ -13,6 +13,9 @@ use std::time::Duration;
 const SYFT_DIR: &str = "/var/lib/dockpanel/scanners";
 const SYFT_BIN: &str = "/var/lib/dockpanel/scanners/syft";
 
+// Same pinning rationale as image_scanner.rs's GRYPE_VERSION — see that comment.
+const SYFT_VERSION: &str = "v1.51.1";
+
 /// True if the syft binary is present at the managed path.
 pub async fn is_installed() -> bool {
     tokio::fs::metadata(SYFT_BIN).await.is_ok()
@@ -30,13 +33,13 @@ pub async fn install_syft() -> Result<(), String> {
         .map_err(|e| format!("create {SYFT_DIR}: {e}"))?;
 
     let cmd = format!(
-        "curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-         | sh -s -- -b {SYFT_DIR}"
+        "curl -sSfL https://raw.githubusercontent.com/anchore/syft/{SYFT_VERSION}/install.sh \
+         | sh -s -- -b {SYFT_DIR} {SYFT_VERSION}"
     );
 
     let output = tokio::time::timeout(
         Duration::from_secs(180),
-        safe_command("sh").args(["-c", &cmd]).output(),
+        safe_command("sh").args(["-c", &cmd]).kill_on_drop(true).output(),
     )
     .await
     .map_err(|_| "syft install timed out after 180s".to_string())?
@@ -82,6 +85,7 @@ pub async fn generate_sbom(image: &str) -> Result<String, String> {
         Duration::from_secs(180),
         safe_command(SYFT_BIN)
             .args([image, "-o", "spdx-json", "-q"])
+            .kill_on_drop(true)
             .output(),
     )
     .await

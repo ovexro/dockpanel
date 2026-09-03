@@ -351,6 +351,20 @@ pub async fn install(
         .await
         .ok();
 
+    // wp-cli's `config create` leaves wp-config.php at the process umask's default
+    // (644 here) — tighten to 640, same fix wp_vulnerability.rs's "wp-config-perms"
+    // hardening check already applies, but on a POST-INSTALL opt-in pass only.
+    // This blocks reads from any OTHER local account on the box; it does not (and
+    // via chmod alone cannot) isolate this site from another tenant's own PHP-FPM
+    // pool or client-role shell, since every site currently shares the identical
+    // www-data:www-data identity — that is the separate, already-tracked
+    // per-site-OS-user architecture question (#85), unchanged by this fix.
+    safe_command("chmod")
+        .args(["640", &format!("{path}/wp-config.php")])
+        .output()
+        .await
+        .ok();
+
     Ok("WordPress installed successfully".into())
 }
 

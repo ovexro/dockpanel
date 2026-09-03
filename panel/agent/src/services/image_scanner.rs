@@ -16,6 +16,14 @@ const GRYPE_DIR: &str = "/var/lib/dockpanel/scanners";
 const GRYPE_BIN: &str = "/var/lib/dockpanel/scanners/grype";
 const GRYPE_DB_CACHE: &str = "/var/lib/dockpanel/scanners/grype-db";
 
+// Pinned to a known release rather than "latest" so the exact binary we run is
+// reviewable and reproducible. Anchore's install.sh already sha256-verifies the
+// downloaded archive against its release checksums.txt unconditionally (read
+// upstream to confirm — not gated behind any flag), so this pin closes the
+// remaining gap: without a TAG argument the script both re-resolves "latest"
+// on every install AND is fetched from the mutable `main` ref. Bump deliberately.
+const GRYPE_VERSION: &str = "v0.118.0";
+
 #[derive(Serialize, Clone)]
 pub struct ImageScanResult {
     pub image: String,
@@ -57,15 +65,17 @@ pub async fn install_grype() -> Result<(), String> {
 
     // Anchore's installer writes the binary to the path passed via `-b`. We
     // pin it inside /var/lib/dockpanel (writable under systemd ProtectSystem=strict)
-    // rather than /usr/local/bin.
+    // rather than /usr/local/bin. Both the script fetch AND the binary download are
+    // pinned to GRYPE_VERSION (a tag, not `main`) so nothing here resolves "latest"
+    // at install time.
     let cmd = format!(
-        "curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
-         | sh -s -- -b {GRYPE_DIR}"
+        "curl -sSfL https://raw.githubusercontent.com/anchore/grype/{GRYPE_VERSION}/install.sh \
+         | sh -s -- -b {GRYPE_DIR} {GRYPE_VERSION}"
     );
 
     let output = tokio::time::timeout(
         Duration::from_secs(180),
-        safe_command("sh").args(["-c", &cmd]).output(),
+        safe_command("sh").args(["-c", &cmd]).kill_on_drop(true).output(),
     )
     .await
     .map_err(|_| "grype install timed out after 180s".to_string())?
@@ -86,6 +96,7 @@ pub async fn install_grype() -> Result<(), String> {
         safe_command(GRYPE_BIN)
             .args(["db", "update"])
             .env("GRYPE_DB_CACHE_DIR", GRYPE_DB_CACHE)
+            .kill_on_drop(true)
             .output(),
     )
     .await;
@@ -123,6 +134,7 @@ pub async fn scan_image(image: &str) -> Result<ImageScanResult, String> {
         safe_command(GRYPE_BIN)
             .args([image, "-o", "json"])
             .env("GRYPE_DB_CACHE_DIR", GRYPE_DB_CACHE)
+            .kill_on_drop(true)
             .output(),
     )
     .await
