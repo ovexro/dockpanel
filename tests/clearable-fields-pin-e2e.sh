@@ -102,7 +102,13 @@ fi
 pairs=$(printf '%s\n' "$nulled" \
   | while IFS= read -r entry; do
       col=${entry%@*}
-      printf '%s\n' "$guarded" | "$G" -qx -- "$col" && printf '%s\n' "$entry"
+      # NOT `... | "$G" -qx ...` — `-q` closes the read end on its first
+      # match, and `$guarded` is 100+ lines: a race between that early close
+      # and printf still writing turns into a broken-pipe failure here that
+      # has nothing to do with membership (CI hit it; this box did not in 8
+      # runs). Draining the match fully avoids the race the same way this
+      # project's own `has()`/`hasre()` helpers already do elsewhere.
+      [ -n "$(printf '%s\n' "$guarded" | "$G" -x -- "$col")" ] && printf '%s\n' "$entry"
     done | sort -u | tr '\n' ' ' | sed 's/ *$//')
 
 # Every surviving pair needs a written reason. Keep this list SHORT — a pair
