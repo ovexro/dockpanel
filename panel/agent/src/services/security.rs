@@ -61,29 +61,103 @@ pub struct SecurityOverview {
     pub ssl_certs_count: usize,
 }
 
+/// Which `firewall-cmd` removal this entry needs, so `remove_firewall_rule`
+/// can resolve a bare display number back to the right command — firewalld
+/// has no ufw-style numbered-rule identity of its own.
+enum FirewalldKind {
+    Service(String),
+    Port(String, String),
+    /// The exact `--list-rich-rules` line, so removal round-trips through
+    /// the same text firewalld itself considers canonical.
+    Rich(String),
+}
+
+struct FirewalldEntry {
+    rule: FirewallRule,
+    kind: FirewalldKind,
+}
+
+/// Services, ports, AND rich rules (deny/source-restricted entries this
+/// file's own `add_firewall_rule` writes), in one continuously-numbered
+/// list — the numbers the Security page shows must be the same numbers
+/// `remove_firewall_rule` resolves, or "delete rule 3" deletes the wrong
+/// thing the moment a rich rule exists.
+async fn firewalld_entries() -> Vec<FirewalldEntry> {
+    let zone = fw_out(&["--get-default-zone"]).await.trim().to_string();
+    let mut entries = Vec::new();
+    let mut number = 0;
+
+    for item in fw_out(&["--zone", zone.as_str(), "--list-services"]).await.split_whitespace() {
+        number += 1;
+        entries.push(FirewalldEntry {
+            rule: FirewallRule {
+                number,
+                to: format!("{item} (service)"),
+                action: "ALLOW IN".into(),
+                from: "Anywhere".into(),
+            },
+            kind: FirewalldKind::Service(item.to_string()),
+        });
+    }
+    for item in fw_out(&["--zone", zone.as_str(), "--list-ports"]).await.split_whitespace() {
+        number += 1;
+        let (port, proto) = item.split_once('/').unwrap_or((item, "tcp"));
+        entries.push(FirewalldEntry {
+            rule: FirewallRule {
+                number,
+                to: item.to_string(),
+                action: "ALLOW IN".into(),
+                from: "Anywhere".into(),
+            },
+            kind: FirewalldKind::Port(port.to_string(), proto.to_string()),
+        });
+    }
+    for line in fw_out(&["--zone", zone.as_str(), "--list-rich-rules"]).await.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        number += 1;
+        let (to, action, from) = parse_rich_rule_display(line);
+        entries.push(FirewalldEntry {
+            rule: FirewallRule { number, to, action, from },
+            kind: FirewalldKind::Rich(line.to_string()),
+        });
+    }
+    entries
+}
+
+/// Display-friendly (to, action, from) for one `--list-rich-rules` line.
+/// Not a general rich-rule parser — only understands the port+protocol(+
+/// source) shape `add_firewall_rule` itself ever writes via `rich_rule_spec`.
+fn parse_rich_rule_display(line: &str) -> (String, String, String) {
+    let action = if line.contains("reject") || line.contains(" drop") || line.ends_with("drop") {
+        "DENY IN"
+    } else {
+        "ALLOW IN"
+    };
+    let to = match (quoted_after(line, "port=\""), quoted_after(line, "protocol=\"")) {
+        (Some(p), Some(pr)) => format!("{p}/{pr}"),
+        _ => "(rich rule)".to_string(),
+    };
+    let from = quoted_after(line, "address=\"").unwrap_or_else(|| "Anywhere".to_string());
+    (to, action.to_string(), from)
+}
+
+fn quoted_after(line: &str, marker: &str) -> Option<String> {
+    let idx = line.find(marker)?;
+    let rest = &line[idx + marker.len()..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
 /// firewalld's equivalent of the ufw view: the default zone's target as the
 /// policy, and its open services and ports as the rule list. Reported in the
 /// same shape so the Security page needs no per-firewall branch.
 async fn firewalld_status() -> Result<FirewallStatus, String> {
     let zone = fw_out(&["--get-default-zone"]).await.trim().to_string();
     let target = fw_out(&["--zone", &zone, "--get-target"]).await.trim().to_string();
-
-    let mut rules = Vec::new();
-    let mut number = 0;
-    for (kind, args) in [
-        ("service", vec!["--zone", zone.as_str(), "--list-services"]),
-        ("port", vec!["--zone", zone.as_str(), "--list-ports"]),
-    ] {
-        for item in fw_out(&args).await.split_whitespace() {
-            number += 1;
-            rules.push(FirewallRule {
-                number,
-                to: if kind == "service" { format!("{item} (service)") } else { item.to_string() },
-                action: "ALLOW IN".into(),
-                from: "Anywhere".into(),
-            });
-        }
-    }
+    let rules = firewalld_entries().await.into_iter().map(|e| e.rule).collect();
 
     Ok(FirewallStatus {
         active: true,
@@ -238,12 +312,8 @@ pub async fn add_firewall_rule(
         return Err(format!("Invalid protocol '{proto}': must be 'tcp' or 'udp'"));
     }
 
-    let port_proto = format!("{port}/{proto_lower}");
-
-    let mut args: Vec<String> = vec![action_lower];
-
+    // Validate source IP — basic check for alphanumeric, dots, colons, slashes
     if let Some(source) = from {
-        // Validate source IP — basic check for alphanumeric, dots, colons, slashes
         if source.is_empty()
             || !source
                 .chars()
@@ -251,6 +321,30 @@ pub async fn add_firewall_rule(
         {
             return Err(format!("Invalid source address: {source}"));
         }
+    }
+
+    // This used to always shell to `ufw`, which isn't installed anywhere in
+    // the RHEL family — `setup.sh` targets it as a first-class platform, and
+    // every one of these mutating actions 424'd there while the read-only
+    // status view above already spoke firewalld correctly (same s265 split
+    // `get_firewall_status`/`change_ssh_port` were already fixed for).
+    if crate::services::firewall::detect().await == crate::services::firewall::Firewall::Firewalld {
+        let ok = if action_lower == "allow" && from.is_none() {
+            crate::services::firewall::add_port(&port.to_string(), &proto_lower).await
+        } else {
+            crate::services::firewall::add_rich_rule(&port.to_string(), &proto_lower, &action_lower, from).await
+        };
+        return if ok {
+            Ok(())
+        } else {
+            Err("firewall-cmd failed to add the rule".to_string())
+        };
+    }
+
+    let port_proto = format!("{port}/{proto_lower}");
+    let mut args: Vec<String> = vec![action_lower];
+
+    if let Some(source) = from {
         args.push("from".into());
         args.push(source.to_string());
         args.push("to".into());
@@ -280,10 +374,29 @@ pub async fn add_firewall_rule(
     Ok(())
 }
 
-/// Delete a firewall rule by its number.
+/// Delete a firewall rule by its display number — the same number
+/// `get_firewall_status`/`firewalld_status` reported it as.
 pub async fn remove_firewall_rule(rule_num: usize) -> Result<(), String> {
     if rule_num == 0 {
         return Err("Rule number must be >= 1".into());
+    }
+
+    if crate::services::firewall::detect().await == crate::services::firewall::Firewall::Firewalld {
+        let entries = firewalld_entries().await;
+        let entry = entries
+            .into_iter()
+            .find(|e| e.rule.number == rule_num)
+            .ok_or_else(|| format!("No firewall rule numbered {rule_num}"))?;
+        let ok = match &entry.kind {
+            FirewalldKind::Service(name) => crate::services::firewall::remove_service(name).await,
+            FirewalldKind::Port(port, proto) => crate::services::firewall::remove_port(port, proto).await,
+            FirewalldKind::Rich(raw) => crate::services::firewall::remove_rich_rule_raw(raw).await,
+        };
+        return if ok {
+            Ok(())
+        } else {
+            Err(format!("firewall-cmd failed to remove rule {rule_num}"))
+        };
     }
 
     let output = tokio::time::timeout(
@@ -380,21 +493,99 @@ pub async fn get_fail2ban_status() -> Result<Fail2banStatus, String> {
     })
 }
 
-/// Read SSH configuration values from /etc/ssh/sshd_config.
-/// Returns (port, password_auth_enabled, root_login_enabled).
-pub async fn parse_ssh_config() -> (u16, bool, bool) {
-    let content = match tokio::fs::read_to_string("/etc/ssh/sshd_config").await {
-        Ok(c) => c,
-        Err(_) => return (22, true, true), // defaults
+/// Expand one `Include` argument (a single path, or a glob with one `*`) to
+/// the files it matches, sorted lexically — the order OpenSSH itself
+/// processes a glob's matches in.
+async fn expand_include_arg(dir: &std::path::Path, arg: &str) -> Vec<std::path::PathBuf> {
+    let path = if arg.starts_with('/') {
+        std::path::PathBuf::from(arg)
+    } else {
+        dir.join(arg)
     };
+    let Some(name) = path.file_name().and_then(|f| f.to_str()) else {
+        return Vec::new();
+    };
+    if !name.contains('*') {
+        return if tokio::fs::metadata(&path).await.is_ok() {
+            vec![path]
+        } else {
+            Vec::new()
+        };
+    }
+    let parent = path.parent().unwrap_or(std::path::Path::new("/"));
+    let (prefix, suffix) = name.split_once('*').unwrap_or((name, ""));
+    let mut matches = Vec::new();
+    if let Ok(mut entries) = tokio::fs::read_dir(parent).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if let Some(fname) = entry.file_name().to_str() {
+                if fname.len() >= prefix.len() + suffix.len()
+                    && fname.starts_with(prefix)
+                    && fname.ends_with(suffix)
+                {
+                    matches.push(entry.path());
+                }
+            }
+        }
+    }
+    matches.sort();
+    matches
+}
 
-    let mut port: u16 = 22;
-    let mut password_auth = true;
-    let mut root_login = true;
+/// `sshd_config` and its `Include`d drop-ins, linearized into the order
+/// sshd itself evaluates directives in — each `Include` line is spliced in
+/// place with the lines of every file it matches, one level deep (the
+/// stock `Include /etc/ssh/sshd_config.d/*.conf` never nests further in
+/// practice; a deeper Include inside a drop-in falls through as an
+/// unrecognized line, same as any other keyword this parser doesn't know).
+/// OpenSSH's own rule is "the first obtained value wins", so callers must
+/// scan this in order and stop at the first match per keyword — reading
+/// only `/etc/ssh/sshd_config` silently ignores every drop-in that
+/// overrides it, which is exactly what a distro cloud-init image and this
+/// project's own `port.conf`-style admin drop-ins both do.
+async fn linearized_sshd_lines(main_path: &std::path::Path) -> Vec<(std::path::PathBuf, String)> {
+    let mut out = Vec::new();
+    let Ok(content) = tokio::fs::read_to_string(main_path).await else {
+        return out;
+    };
+    let dir = main_path.parent().unwrap_or(std::path::Path::new("/etc/ssh"));
 
     for line in content.lines() {
         let trimmed = line.trim();
-        // Skip comments and empty lines
+        if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            let mut parts = trimmed.splitn(2, char::is_whitespace);
+            let keyword = parts.next().unwrap_or("");
+            if keyword.eq_ignore_ascii_case("include") {
+                for arg in parts.next().unwrap_or("").split_whitespace() {
+                    for matched in expand_include_arg(dir, arg).await {
+                        if let Ok(inc) = tokio::fs::read_to_string(&matched).await {
+                            for inc_line in inc.lines() {
+                                out.push((matched.clone(), inc_line.to_string()));
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+        out.push((main_path.to_path_buf(), line.to_string()));
+    }
+    out
+}
+
+/// Read SSH configuration values from /etc/ssh/sshd_config and its Includes.
+/// Returns (port, password_auth_enabled, root_login_enabled).
+pub async fn parse_ssh_config() -> (u16, bool, bool) {
+    parse_ssh_config_at(std::path::Path::new("/etc/ssh/sshd_config")).await
+}
+
+async fn parse_ssh_config_at(main_path: &std::path::Path) -> (u16, bool, bool) {
+    let mut port: u16 = 22;
+    let mut password_auth = true;
+    let mut root_login = true;
+    let (mut port_set, mut pw_set, mut root_set) = (false, false, false);
+
+    for (_, line) in linearized_sshd_lines(main_path).await {
+        let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
@@ -405,16 +596,19 @@ pub async fn parse_ssh_config() -> (u16, bool, bool) {
         }
 
         match parts[0] {
-            "Port" => {
+            "Port" if !port_set => {
                 if let Ok(p) = parts[1].parse::<u16>() {
                     port = p;
+                    port_set = true;
                 }
             }
-            "PasswordAuthentication" => {
+            "PasswordAuthentication" if !pw_set => {
                 password_auth = parts[1].eq_ignore_ascii_case("yes");
+                pw_set = true;
             }
-            "PermitRootLogin" => {
+            "PermitRootLogin" if !root_set => {
                 root_login = !parts[1].eq_ignore_ascii_case("no");
+                root_set = true;
             }
             _ => {}
         }
@@ -514,12 +708,51 @@ pub async fn change_ssh_port(port: u16) -> Result<(), String> {
     restart_sshd().await
 }
 
-/// Modify a single directive in /etc/ssh/sshd_config.
-/// If the directive exists (commented or not), replace it. Otherwise append.
+/// Modify a single directive across /etc/ssh/sshd_config and its Includes.
+/// If the directive exists (commented or not) ANYWHERE in the Include chain,
+/// replace it in the file that actually governs it. Otherwise append to the
+/// main file.
+///
+/// Writing to the main file unconditionally — the old behavior — could
+/// report success while sshd kept the old value: OpenSSH's `Include` is
+/// processed inline, at the point it appears, and "the first obtained value
+/// wins" — so a drop-in matched by `Include /etc/ssh/sshd_config.d/*.conf`
+/// (which every stock sshd_config ships near the top) overrides anything the
+/// main file sets afterward. Live on this exact box: `Port` in
+/// `sshd_config.d/port.conf` and `PasswordAuthentication` in
+/// `50-cloud-init.conf` both win over the main file's own commented
+/// defaults; a write that only ever touched `sshd_config` would silently do
+/// nothing to what sshd actually enforces.
 async fn modify_sshd_config(key: &str, value: &str) -> Result<(), String> {
-    let config_path = "/etc/ssh/sshd_config";
-    let content = tokio::fs::read_to_string(config_path).await
-        .map_err(|e| format!("Failed to read sshd_config: {e}"))?;
+    modify_sshd_config_at(std::path::Path::new("/etc/ssh/sshd_config"), key, value).await
+}
+
+async fn modify_sshd_config_at(main_path: &std::path::Path, key: &str, value: &str) -> Result<(), String> {
+    let lines = linearized_sshd_lines(main_path).await;
+    if lines.is_empty() && tokio::fs::metadata(main_path).await.is_err() {
+        return Err(format!("Failed to read {}: not found", main_path.display()));
+    }
+
+    // The file that governs `key` today: the first one, in sshd's own
+    // Include-resolution order, with an active directive for it — falling
+    // back to the first with a commented one if none is active anywhere.
+    let mut target: Option<std::path::PathBuf> = None;
+    for (path, line) in &lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with(key) {
+            target = Some(path.clone());
+            break;
+        }
+        if target.is_none()
+            && (trimmed.starts_with(&format!("#{key}")) || trimmed.starts_with(&format!("# {key}")))
+        {
+            target = Some(path.clone());
+        }
+    }
+    let target_path = target.unwrap_or_else(|| main_path.to_path_buf());
+
+    let content = tokio::fs::read_to_string(&target_path).await
+        .map_err(|e| format!("Failed to read {}: {e}", target_path.display()))?;
 
     let mut found = false;
     let mut new_lines: Vec<String> = Vec::new();
@@ -542,13 +775,16 @@ async fn modify_sshd_config(key: &str, value: &str) -> Result<(), String> {
     let new_content = new_lines.join("\n") + "\n";
 
     // Atomic write
-    let tmp_path = format!("{config_path}.tmp");
+    let tmp_path = target_path.with_file_name(format!(
+        "{}.tmp",
+        target_path.file_name().and_then(|f| f.to_str()).unwrap_or("sshd_config")
+    ));
     tokio::fs::write(&tmp_path, &new_content).await
-        .map_err(|e| format!("Failed to write sshd_config: {e}"))?;
-    tokio::fs::rename(&tmp_path, config_path).await
-        .map_err(|e| format!("Failed to rename sshd_config: {e}"))?;
+        .map_err(|e| format!("Failed to write {}: {e}", target_path.display()))?;
+    tokio::fs::rename(&tmp_path, &target_path).await
+        .map_err(|e| format!("Failed to rename {}: {e}", target_path.display()))?;
 
-    tracing::info!("SSH config updated: {key} {value}");
+    tracing::info!("SSH config updated: {key} {value} (in {})", target_path.display());
     Ok(())
 }
 
@@ -652,10 +888,17 @@ pub async fn fail2ban_banned_ips(jail: &str) -> Result<Vec<String>, String> {
 
 /// Parse recent SSH login attempts from /var/log/auth.log.
 pub async fn get_login_audit() -> Result<Vec<LoginEntry>, String> {
-    let content = tokio::fs::read_to_string("/var/log/auth.log")
-        .await
-        .or_else(|_| std::fs::read_to_string("/var/log/auth.log"))
-        .unwrap_or_default();
+    // RHEL-family boxes (a first-class `setup.sh` target) log the same
+    // sshd events to `/var/log/secure`, not `/var/log/auth.log` — reading
+    // only the latter and swallowing the read error into an empty Vec
+    // (the old behavior) made a RHEL host indistinguishable from a
+    // genuinely quiet one: both reported HTTP 200 with zero entries. A
+    // missing file is now a real error, so the backend's fleet wrapper
+    // (routes/security.rs, which already distinguishes `reached: false`
+    // from `reached: true, entries: 0`) reports it correctly.
+    let path = crate::services::logs::resolve_auth_log_path();
+    let content = tokio::fs::read_to_string(path).await
+        .map_err(|e| format!("Failed to read {path}: {e}"))?;
 
     let mut entries = Vec::new();
 
@@ -831,5 +1074,158 @@ pub async fn apply_fix(fix_type: &str, target: &str) -> Result<String, String> {
             Ok(format!("File quarantined: {target} -> {quarantine_path}"))
         }
         _ => Err(format!("Unknown fix type: {fix_type}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("dp-sshtest-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    // ── parse_ssh_config_at / modify_sshd_config_at (s454: Include-blindness) ──
+
+    #[tokio::test]
+    async fn parse_ssh_config_reads_plain_main_file() {
+        let dir = scratch_dir("plain");
+        let main = dir.join("sshd_config");
+        std::fs::write(&main, "Port 2222\nPasswordAuthentication no\nPermitRootLogin no\n").unwrap();
+
+        let (port, pw, root) = parse_ssh_config_at(&main).await;
+        assert_eq!(port, 2222);
+        assert!(!pw);
+        assert!(!root);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Reproduces the exact live-box shape found by s454's fan-out:
+    /// `Include` appears BEFORE the main file's own commented `#Port 22`
+    /// default, and a drop-in sets the real value. OpenSSH's rule is "the
+    /// first obtained value wins" — reading only the main file reported 22
+    /// on a box that was actually listening on 1571.
+    #[tokio::test]
+    async fn parse_ssh_config_include_drop_in_wins_over_later_main_default() {
+        let dir = scratch_dir("include");
+        let dropdir = dir.join("sshd_config.d");
+        std::fs::create_dir_all(&dropdir).unwrap();
+        std::fs::write(dropdir.join("port.conf"), "Port 1571\n").unwrap();
+        let main = dir.join("sshd_config");
+        std::fs::write(&main, format!("Include {}/*.conf\n\n#Port 22\n", dropdir.display())).unwrap();
+
+        let (port, _, _) = parse_ssh_config_at(&main).await;
+        assert_eq!(port, 1571, "the Include'd drop-in must win over the main file's own later, commented default");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn parse_ssh_config_first_included_file_wins_lexically() {
+        let dir = scratch_dir("firstwins");
+        let dropdir = dir.join("sshd_config.d");
+        std::fs::create_dir_all(&dropdir).unwrap();
+        std::fs::write(dropdir.join("10-first.conf"), "Port 3000\n").unwrap();
+        std::fs::write(dropdir.join("20-second.conf"), "Port 4000\n").unwrap();
+        let main = dir.join("sshd_config");
+        std::fs::write(&main, format!("Include {}/*.conf\n", dropdir.display())).unwrap();
+
+        let (port, _, _) = parse_ssh_config_at(&main).await;
+        assert_eq!(port, 3000, "OpenSSH resolves a glob's matches in lexical order; the first obtained value wins");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn parse_ssh_config_missing_main_file_returns_defaults() {
+        let dir = scratch_dir("missing");
+        let main = dir.join("does-not-exist");
+        let (port, pw, root) = parse_ssh_config_at(&main).await;
+        assert_eq!((port, pw, root), (22, true, true));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The write-side counterpart of the Include-blindness bug: editing only
+    /// ever touched the main file, so on this exact box a `Port`/
+    /// `PasswordAuthentication` change via the panel would report success
+    /// while sshd — governed by the drop-in — kept the old value.
+    #[tokio::test]
+    async fn modify_sshd_config_writes_to_the_file_that_actually_governs_the_key() {
+        let dir = scratch_dir("write-governs");
+        let dropdir = dir.join("sshd_config.d");
+        std::fs::create_dir_all(&dropdir).unwrap();
+        let port_conf = dropdir.join("port.conf");
+        std::fs::write(&port_conf, "Port 1571\n").unwrap();
+        let main = dir.join("sshd_config");
+        std::fs::write(&main, format!("Include {}/*.conf\n\n#Port 22\n", dropdir.display())).unwrap();
+
+        modify_sshd_config_at(&main, "Port", "2022").await.unwrap();
+
+        let port_conf_content = std::fs::read_to_string(&port_conf).unwrap();
+        assert!(port_conf_content.contains("Port 2022"), "must edit the governing drop-in, got: {port_conf_content}");
+        let main_content = std::fs::read_to_string(&main).unwrap();
+        assert!(main_content.contains("#Port 22"), "the main file's own commented default must be left untouched — editing THAT would silently do nothing, since the drop-in still wins");
+
+        let (port, _, _) = parse_ssh_config_at(&main).await;
+        assert_eq!(port, 2022, "the reported effective port must reflect the write");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn modify_sshd_config_falls_back_to_main_file_when_nothing_governs_the_key() {
+        let dir = scratch_dir("fallback");
+        let main = dir.join("sshd_config");
+        std::fs::write(&main, "# nothing here\n").unwrap();
+
+        modify_sshd_config_at(&main, "PermitRootLogin", "no").await.unwrap();
+
+        let content = std::fs::read_to_string(&main).unwrap();
+        assert!(content.contains("PermitRootLogin no"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn modify_sshd_config_replaces_active_directive_in_governing_file_not_main() {
+        // No comment anywhere — an ACTIVE directive in the drop-in, nothing
+        // in main at all. Must still resolve to the drop-in, not append to main.
+        let dir = scratch_dir("active-governs");
+        let dropdir = dir.join("sshd_config.d");
+        std::fs::create_dir_all(&dropdir).unwrap();
+        let pw_conf = dropdir.join("50-cloud-init.conf");
+        std::fs::write(&pw_conf, "PasswordAuthentication no\n").unwrap();
+        let main = dir.join("sshd_config");
+        std::fs::write(&main, format!("Include {}/*.conf\n", dropdir.display())).unwrap();
+
+        modify_sshd_config_at(&main, "PasswordAuthentication", "yes").await.unwrap();
+
+        let pw_content = std::fs::read_to_string(&pw_conf).unwrap();
+        assert!(pw_content.contains("PasswordAuthentication yes"));
+        let main_content = std::fs::read_to_string(&main).unwrap();
+        assert!(!main_content.contains("PasswordAuthentication"), "must not append a second, shadowed directive into main");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── firewalld rich-rule helpers ──────────────────────────────────────
+
+    #[test]
+    fn rich_rule_spec_matches_what_parse_rich_rule_display_reads_back() {
+        let spec = crate::services::firewall::rich_rule_spec("8080", "tcp", "deny", None);
+        let (to, action, from) = parse_rich_rule_display(&spec);
+        assert_eq!(to, "8080/tcp");
+        assert_eq!(action, "DENY IN");
+        assert_eq!(from, "Anywhere");
+
+        let spec_src = crate::services::firewall::rich_rule_spec("22", "tcp", "allow", Some("10.0.0.5"));
+        let (to2, action2, from2) = parse_rich_rule_display(&spec_src);
+        assert_eq!(to2, "22/tcp");
+        assert_eq!(action2, "ALLOW IN");
+        assert_eq!(from2, "10.0.0.5");
+    }
+
+    #[test]
+    fn rich_rule_spec_picks_ipv6_family_from_a_colon_address() {
+        let spec = crate::services::firewall::rich_rule_spec("443", "tcp", "deny", Some("fd00::1"));
+        assert!(spec.contains(r#"family="ipv6""#), "got: {spec}");
     }
 }

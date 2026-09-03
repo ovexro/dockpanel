@@ -1,6 +1,21 @@
 use std::path::Path;
 use crate::safe_cmd::safe_command;
 
+/// The file sshd (and other PAM-based auth) actually logs to on this box.
+/// Debian/Ubuntu writes `/var/log/auth.log`; the RHEL family (CentOS/Rocky/
+/// AlmaLinux/Fedora — a first-class `setup.sh` target, see its
+/// `centos|rocky|almalinux|fedora` branches) writes the same events to
+/// `/var/log/secure` instead. Neither call site that read this path used to
+/// check which one actually exists, so a RHEL box silently looked identical
+/// to a quiet Debian box.
+pub fn resolve_auth_log_path() -> &'static str {
+    if Path::new("/var/log/auth.log").exists() {
+        "/var/log/auth.log"
+    } else {
+        "/var/log/secure"
+    }
+}
+
 /// Resolve a log type string to the corresponding file path.
 /// Validates domain names to prevent path traversal.
 pub fn resolve_log_path(log_type: &str) -> Result<String, String> {
@@ -25,7 +40,7 @@ pub fn resolve_log_path(log_type: &str) -> Result<String, String> {
         "nginx_access" => Ok("/var/log/nginx/access.log".into()),
         "nginx_error" => Ok("/var/log/nginx/error.log".into()),
         "syslog" => Ok("/var/log/syslog".into()),
-        "auth" => Ok("/var/log/auth.log".into()),
+        "auth" => Ok(resolve_auth_log_path().into()),
         "php_fpm" => {
             // Find the active PHP-FPM log
             if let Ok(entries) = std::fs::read_dir("/var/log") {

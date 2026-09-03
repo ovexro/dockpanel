@@ -559,7 +559,7 @@ async fn log_sizes() -> Json<serde_json::Value> {
         ("/var/log/nginx/access.log", "Nginx Access"),
         ("/var/log/nginx/error.log", "Nginx Error"),
         ("/var/log/syslog", "Syslog"),
-        ("/var/log/auth.log", "Auth"),
+        (crate::services::logs::resolve_auth_log_path(), "Auth"),
         ("/var/log/mail.log", "Mail"),
     ];
 

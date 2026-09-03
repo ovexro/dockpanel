@@ -308,8 +308,12 @@ pub fn is_safe_hook_command(command: &str) -> bool {
             return false;
         }
     }
-    // Reject known dangerous patterns
-    let lower = command.to_lowercase();
+    // Reject known dangerous patterns. Routed through `normalize_for_blocklist`
+    // like every sibling in this file — otherwise `r'm' -rf /` contains no
+    // "rm -rf /" substring and passes this scan, then `sh -c` (the real
+    // shell `git_build.rs::run_hook` execs it through) strips the quotes and
+    // runs exactly that.
+    let lower = normalize_for_blocklist(command).to_lowercase();
     let dangerous = ["rm -rf /", "mkfs", "dd if=", "> /dev/", "eval ", "exec ",
                       "/etc/shadow", "/etc/passwd", "shutdown", "reboot"];
     for pattern in &dangerous {
@@ -516,5 +520,25 @@ mod tests {
         assert!(is_safe_exec_start("npm start%h", "node").is_err());
         assert!(is_safe_exec_start("node %u", "node").is_err());
         assert!(is_safe_exec_start("node server.js %t", "node").is_err());
+    }
+
+    #[test]
+    fn test_hook_command_quote_split_evasion_rejected() {
+        // Completeness critic's s454 find: `is_safe_hook_command` was the one
+        // function in this file NOT routed through `normalize_for_blocklist`,
+        // so the same quote-splitting evasion the cron/terminal/suspicious
+        // checks already close was still open on the git-deploy hook sink
+        // (`sh -c` in `routes/git_build.rs::run_hook`).
+        assert!(!is_safe_hook_command("rm -rf /"));
+        assert!(!is_safe_hook_command("r'm' -rf /"));
+        assert!(!is_safe_hook_command("r\"m\" -rf /"));
+        assert!(!is_safe_hook_command("cat /etc/pa''sswd"));
+        assert!(!is_safe_hook_command("sh'u'tdown -h now"));
+        // Sanity: the unobfuscated forms were already (and must remain) rejected.
+        assert!(!is_safe_hook_command("cat /etc/passwd"));
+        assert!(!is_safe_hook_command("reboot"));
+        // Legitimate hook commands must still pass.
+        assert!(is_safe_hook_command("npm run build"));
+        assert!(is_safe_hook_command("composer install --no-dev"));
     }
 }

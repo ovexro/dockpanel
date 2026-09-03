@@ -67,6 +67,92 @@ pub async fn reload() {
     }
 }
 
+/// Open `port`/`proto` — like [`allow_tcp`] but not tcp-only, for the
+/// Security page's own "add rule" feature rather than a service installer.
+pub async fn add_port(port: &str, proto: &str) -> bool {
+    match detect().await {
+        Firewall::Firewalld => {
+            let spec = format!("{port}/{proto}");
+            let permanent = run("firewall-cmd", &["--permanent", "--add-port", &spec]).await;
+            let runtime = run("firewall-cmd", &["--add-port", &spec]).await;
+            permanent && runtime
+        }
+        Firewall::Ufw => run("ufw", &["allow", &format!("{port}/{proto}")]).await,
+        Firewall::None => true,
+    }
+}
+
+/// Close a `port`/`proto` previously opened with [`add_port`].
+pub async fn remove_port(port: &str, proto: &str) -> bool {
+    match detect().await {
+        Firewall::Firewalld => {
+            let spec = format!("{port}/{proto}");
+            let permanent = run("firewall-cmd", &["--permanent", "--remove-port", &spec]).await;
+            let runtime = run("firewall-cmd", &["--remove-port", &spec]).await;
+            permanent && runtime
+        }
+        Firewall::Ufw => run("ufw", &["delete", "allow", &format!("{port}/{proto}")]).await,
+        Firewall::None => true,
+    }
+}
+
+/// Remove a firewalld service entry (e.g. `ssh`, `http`) from the default zone.
+pub async fn remove_service(name: &str) -> bool {
+    if detect().await != Firewall::Firewalld {
+        return false;
+    }
+    let permanent = run("firewall-cmd", &["--permanent", "--remove-service", name]).await;
+    let runtime = run("firewall-cmd", &["--remove-service", name]).await;
+    permanent && runtime
+}
+
+/// The canonical `firewall-cmd` rich-rule spec for a port-scoped allow/deny,
+/// optionally source-restricted — firewalld's equivalent of a ufw rule with
+/// a `deny` action or a `from <source>` clause, neither of which a plain
+/// `--add-port` can express. Family is inferred from whether `from` looks
+/// like an IPv6 address (contains `:`) — the same shape `security.rs`'s own
+/// source-address validator already accepts for both address families.
+pub fn rich_rule_spec(port: &str, proto: &str, action: &str, from: Option<&str>) -> String {
+    let verdict = if action.eq_ignore_ascii_case("deny") { "reject" } else { "accept" };
+    match from {
+        Some(src) => {
+            let family = if src.contains(':') { "ipv6" } else { "ipv4" };
+            format!(
+                r#"rule family="{family}" source address="{src}" port port="{port}" protocol="{proto}" {verdict}"#
+            )
+        }
+        None => format!(r#"rule family="ipv4" port port="{port}" protocol="{proto}" {verdict}"#),
+    }
+}
+
+/// Add a rich rule built from [`rich_rule_spec`]. `--permanent` + runtime,
+/// same belt-and-suspenders as every other mutation in this module.
+pub async fn add_rich_rule(port: &str, proto: &str, action: &str, from: Option<&str>) -> bool {
+    add_rich_rule_raw(&rich_rule_spec(port, proto, action, from)).await
+}
+
+pub async fn add_rich_rule_raw(spec: &str) -> bool {
+    if detect().await != Firewall::Firewalld {
+        return false;
+    }
+    let permanent = run("firewall-cmd", &["--permanent", "--add-rich-rule", spec]).await;
+    let runtime = run("firewall-cmd", &["--add-rich-rule", spec]).await;
+    permanent && runtime
+}
+
+/// Remove a rich rule by its exact spec string — pass back the line
+/// `--list-rich-rules` itself reported (not a rebuilt string) when removing
+/// an existing rule, since firewalld's rich-rule parser must resolve the
+/// text to the same internal rule it stored.
+pub async fn remove_rich_rule_raw(spec: &str) -> bool {
+    if detect().await != Firewall::Firewalld {
+        return false;
+    }
+    let permanent = run("firewall-cmd", &["--permanent", "--remove-rich-rule", spec]).await;
+    let runtime = run("firewall-cmd", &["--remove-rich-rule", spec]).await;
+    permanent && runtime
+}
+
 /// Open several ports and report which ones failed, so the caller can say
 /// something true about the outcome.
 pub async fn allow_tcp_ports(ports: &[&str]) -> Vec<String> {

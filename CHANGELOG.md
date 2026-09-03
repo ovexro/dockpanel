@@ -4,6 +4,60 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.208.0]
+
+### Fixed — security surface: SSH `Include` drop-ins ignored (live wrong port reported), firewalld-only boxes 424 on firewall rule changes, RHEL auth-log blindness, and a shell quote-splitting bypass in git-deploy hook validation
+
+From the s454 `dockpanel-fanout` audit of `panel/agent/src/services/security.rs` +
+`panel/agent/src/routes/security.rs` (picked as this session's rotation target per
+[[feedback_dockpanel_audit_scope]]'s pre-selection check, after `compose.rs`,
+`diagnostics.rs`, `database.rs`, `migration.rs`, `command_filter.rs`, `ownership.rs`,
+`wordpress.rs`, `backup_drill.rs`/`backup_verify.rs` and `php.rs` were all disqualified
+by real prior-scrutiny history).
+
+**SSH config reading and writing only ever touched `/etc/ssh/sshd_config`, never
+following an `Include` directive into `/etc/ssh/sshd_config.d/*.conf`.** OpenSSH's own
+rule is "the first obtained value wins", and the stock `Include` line ships *before* the
+main file's own commented defaults — live-verified on this exact box: `GET
+/security/overview` reported `ssh_port: 22` while sshd was actually listening on 1571
+(set by a `port.conf` drop-in), and a `50-cloud-init.conf` drop-in silently overrode
+`PasswordAuthentication` the same way. Worse, a write through the old code path
+(`change_ssh_port`, `disable_ssh_password_auth`, etc.) would report success while sshd —
+governed by the drop-in — kept the old value, which for a port change is a real lockout
+risk. Fixed: `parse_ssh_config`/`modify_sshd_config` now linearize `sshd_config` and its
+`Include`d files into the order sshd itself evaluates them in, read the first match per
+keyword, and write to whichever file actually governs a key rather than always the main
+file.
+
+**`add_firewall_rule`/`remove_firewall_rule`/the "block port" one-click auto-fix shelled
+to `ufw` unconditionally**, even though `get_firewall_status`/`change_ssh_port` had
+already been fixed (s265) to detect firewalld. Live-verified 424/`UFW_MISSING` on this
+exact box (firewalld active, ufw not installed) — the RHEL family is a first-class
+`setup.sh` target, not an edge case. Fixed: both functions now detect the running
+firewall; firewalld gets new parity primitives (`firewall::add_port`/`remove_port`/
+`remove_service`/rich-rule add+remove) and rich rules are now listed alongside services
+and ports in one continuously-numbered view, so "delete rule N" resolves correctly
+however the rule was added.
+
+**`get_login_audit()` hardcoded `/var/log/auth.log` and silently turned a missing file
+into an empty, HTTP-200 result** — indistinguishable from a genuinely quiet host. RHEL
+logs the same sshd events to `/var/log/secure` instead. Two sibling hardcodes found in
+the same sweep and fixed alongside it: `diagnostics.rs`'s brute-force scan (its finding
+silently never fired on RHEL) and `routes/logs.rs`'s log-sizes listing (cosmetic). Fixed
+via a shared `resolve_auth_log_path()`, and a missing/unreadable log is now a real error
+the fleet-aware backend wrapper already knew how to report correctly.
+
+**Completeness critic, off the original menu: `is_safe_hook_command` — the validator
+gating git-deploy `post_deploy_cmd`/`pre_build_cmd` at the `sh -c` sink in
+`git_build.rs::run_hook` — was the one function in `command_filter.rs` never routed
+through `normalize_for_blocklist`.** Executed proof: `is_safe_hook_command("r'm' -rf
+/")` returned `true`, and `sh -c "r'm' -rf /"` runs `rm -rf /` for real — the exact
+quote-splitting evasion this file's three other validators were already fixed against.
+The backend's independent copy, `is_safe_shell_command` (`routes/mod.rs`), had no
+quote/backslash normalization at all and got the same fix. Reachable only by an
+already-admin session (both write paths require `require_admin`); prospective on this
+box today (zero git-deploy configs have a `post_deploy_cmd` set).
+
 ## [2.207.0]
 
 ### Fixed — site backup/restore: 9 more orphan-on-timeout subprocess sites, two defence-in-depth archive-parsing guards, a silent-failure Restic endpoint, and a `.git`-blind chown

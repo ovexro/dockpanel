@@ -549,11 +549,15 @@ async fn check_log_patterns() -> Vec<DiagnosticFinding> {
         }
     }
 
-    // Check auth.log for brute force patterns (last 500 lines)
+    // Check the auth log for brute force patterns (last 500 lines). RHEL
+    // family logs the same sshd events to /var/log/secure, not
+    // /var/log/auth.log — this used to hardcode the Debian path, so this
+    // finding never fired on a RHEL box, whatever the actual login traffic
+    // looked like (same gap class as `security::get_login_audit`, s454).
     if let Ok(Ok(output)) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         safe_command("tail")
-            .args(["-n", "500", "/var/log/auth.log"])
+            .args(["-n", "500", crate::services::logs::resolve_auth_log_path()])
             .output(),
     )
     .await
