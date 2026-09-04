@@ -1594,7 +1594,7 @@ export default function Telemetry() {
               </pre>
             </div>
             <div className="px-4 py-2 border-t border-dark-600 text-xs text-dark-400">
-              This is exactly what would be sent. All PII has been stripped.
+              The events above are exactly what would be sent, PII stripped. The "system" block is local diagnostic context — only version and installation ID actually leave this box.
             </div>
           </div>
         </div>

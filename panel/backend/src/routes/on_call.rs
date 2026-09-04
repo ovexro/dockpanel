@@ -139,14 +139,31 @@ fn validate_input(input: &ScheduleInput) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Reject a member UUID the caller may not page: anyone other than
+/// themselves, or a user they directly manage (`users.reseller_id = caller`)
+/// — the same self-or-managed boundary `escalation_policies.rs`'s
+/// `validate_user_routes` enforces for `user:<uuid>` escalation steps.
+///
+/// ⚠ SECURITY: this used to only check the IDs existed (`SELECT COUNT(*)...
+/// WHERE id = ANY($1)`), with no ownership term. A schedule's members feed
+/// straight into `on_call_schedule:<uuid>` escalation routing, so an admin
+/// could add ANY other user's UUID (trivially discoverable via `GET
+/// /api/users`, which lists every user on the install) as a rotation member
+/// of a schedule they own, and pages routed at that schedule would deliver
+/// to the victim's real email/Slack/Discord/PagerDuty/webhook — the exact
+/// sibling gap `validate_user_routes` closed at s437 for the `user:` route,
+/// missed here because this table's own member list is a different path
+/// into the same sink.
 async fn validate_members_exist(
     pool: &sqlx::PgPool,
     members: &[Uuid],
+    owner_id: Uuid,
 ) -> Result<(), ApiError> {
     let found: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM users WHERE id = ANY($1)",
+        "SELECT COUNT(*) FROM users WHERE id = ANY($1) AND (id = $2 OR reseller_id = $2)",
     )
     .bind(members)
+    .bind(owner_id)
     .fetch_one(pool)
     .await
     .map_err(|e| internal_error("validate members", e))?;
@@ -225,7 +242,7 @@ pub async fn create_schedule(
     Json(input): Json<ScheduleInput>,
 ) -> Result<Json<OnCallScheduleDto>, ApiError> {
     validate_input(&input)?;
-    validate_members_exist(&state.db, &input.members).await?;
+    validate_members_exist(&state.db, &input.members, claims.sub).await?;
 
     let anchor = input.anchor_at.unwrap_or_else(Utc::now);
     let row: (Uuid, String, Vec<Uuid>, i32, DateTime<Utc>, DateTime<Utc>, DateTime<Utc>) =
@@ -257,7 +274,7 @@ pub async fn update_schedule(
     Json(input): Json<ScheduleInput>,
 ) -> Result<Json<OnCallScheduleDto>, ApiError> {
     validate_input(&input)?;
-    validate_members_exist(&state.db, &input.members).await?;
+    validate_members_exist(&state.db, &input.members, claims.sub).await?;
 
     let row: Option<(Uuid, String, Vec<Uuid>, i32, DateTime<Utc>, DateTime<Utc>, DateTime<Utc>)> =
         if let Some(anchor) = input.anchor_at {

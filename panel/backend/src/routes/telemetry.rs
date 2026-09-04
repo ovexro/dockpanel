@@ -357,7 +357,7 @@ pub async fn preview(
         "dockpanel_version": env!("CARGO_PKG_VERSION"),
         "events": batch,
         "event_count": batch.len(),
-        "note": "This is exactly what would be sent to the configured endpoint. All PII has been stripped.",
+        "note": "The events below are exactly what would be sent, PII stripped. The \"system\" block above is local diagnostic context for your review — the actual outbound payload's system info is only { dockpanel_version, installation_id }, never host details.",
     })))
 }
 

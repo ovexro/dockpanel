@@ -193,6 +193,28 @@ pub async fn remove_database(container_id: &str) -> Result<(), String> {
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
 
+    // Refuse to act on a container this module didn't create. The backend only ever
+    // sources `container_id` from its own DB row (written once, from this module's own
+    // create response), so this is defense-in-depth, not a live-reachable gap — but every
+    // OTHER destructive-by-id surface (docker_apps.rs's require_managed(), v2.15.0) already
+    // carries this same `dockpanel.managed=true` boundary, and this module never did. A
+    // stray unmanaged container sharing this exact id would otherwise be force-removed
+    // with its volumes.
+    let info = docker
+        .inspect_container(container_id, None)
+        .await
+        .map_err(|e| format!("Failed to inspect container: {e}"))?;
+    let managed = info
+        .config
+        .as_ref()
+        .and_then(|c| c.labels.as_ref())
+        .and_then(|l| l.get("dockpanel.managed"))
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    if !managed {
+        return Err("not a dockpanel-managed container".to_string());
+    }
+
     // Stop first
     docker
         .stop_container(container_id, Some(StopContainerOptions { t: 10 }))

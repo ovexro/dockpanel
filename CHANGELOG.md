@@ -4,6 +4,45 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.218.0]
+
+### Fixed — `telemetry.rs`+`telemetry_collector.rs` audit: a false transparency claim, an on-call paging gap, and a defense-in-depth container guard
+
+Continuing the `panel/backend/src/{routes,services}` rotation onto its own standing next candidate
+(`routes/telemetry.rs` + `services/telemetry_collector.rs`, a genuine routes+service pair with zero
+non-cosmetic commits and zero prior memory citations). A `dockpanel-fanout` finder/skeptic/critics pass
+found and fixed three issues, two on the two-file menu and one off-menu:
+
+- **`GET /api/telemetry/preview` asserted "this is exactly what would be sent" over a `system` block
+  built from the agent's full host-fingerprint endpoint** (hostname, OS, kernel, memory, disk, cpu,
+  uptime, service list) — but the function that actually POSTs to the configured endpoint,
+  `send_pending_events`, never receives an `AgentClient` at all, and sends only
+  `{dockpanel_version, installation_id}`. The false claim existed in two independent places: the
+  backend JSON `note` field and a separately hardcoded footer in the frontend's Preview modal
+  (`Telemetry.tsx`). Direction of the error is over-claiming what leaves the box, not a leak — but it
+  contradicted the tool's own stated honesty commitment on a privacy-sensitive, opt-in feature, live
+  regardless of the `telemetry_enabled` toggle (`preview` has no gate on it). Fixed by narrowing the
+  claim in both places rather than widening the real payload, which would have been the arming move.
+- **(off-menu, completeness critic) `on_call.rs`'s `validate_members_exist` only checked submitted
+  member UUIDs existed, with no ownership check** — the exact sibling gap
+  `escalation_policies.rs`'s `validate_user_routes` closed for `user:<uuid>` escalation steps at s437,
+  missed here because a schedule's member list is a different path into the same paging sink. An
+  admin could add any other user's UUID (discoverable via `GET /api/users`) as a rotation member of a
+  schedule they own, and pages routed at that schedule would deliver to the victim's real
+  email/Slack/Discord/PagerDuty/webhook with no consent. Fixed: the member check now requires
+  self-or-managed (`id = $2 OR reseller_id = $2`), mirroring `validate_user_routes`.
+- **(setup critic, defense-in-depth) the agent's `remove_database` force-removed a container (with
+  volumes) by id with no check that it actually carries `dockpanel.managed=true`** — unlike its
+  sibling `require_managed()`/`is_managed_labels()` in `docker_apps.rs` (v2.15.0), which this module
+  never had. Every current caller of `DELETE /databases/{cid}` sources `container_id` from the panel's
+  own DB row (written once, from this module's own create response, never from user input), so this is
+  hardening rather than a live-reachable gap. Fixed: `remove_database` now inspects the container and
+  refuses to act on one missing the managed label.
+
+New pin suite `tests/telemetry-oncall-db-audit-pin-e2e.sh`, 13 assertions, mutation-tested via `git
+stash` of the 4 touched source files — all 10 fix-assertions confirmed red pre-fix, all 3 controls
+green throughout.
+
 ## [2.217.0]
 
 ### Fixed — `panel/backend/src/{routes,services}`'s first dedicated audit of `dns.rs`, `security.rs`, and the panel self-update orchestrator
