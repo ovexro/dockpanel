@@ -12,6 +12,19 @@ use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::services::{activity, security_hardening};
 use crate::AppState;
 
+/// Escape a value for interpolation into `compliance_report`'s HTML. Findings
+/// come from filesystem paths under scanned websites (security_scanner.rs's
+/// malware/secrets scans) — an attacker who compromises any one hosted site
+/// can name a file so its path becomes a stored-XSS payload the admin's
+/// browser executes the next time they open the report.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 /// GET /api/security/overview — Security overview.
 pub async fn overview(
     State(_state): State<AppState>,
@@ -697,11 +710,14 @@ pub async fn compliance_report(
             _ => "#3b82f6",
         };
         format!(
-            "<tr><td style=\"padding:8px;border-bottom:1px solid #333;\"><span style=\"color:{color};font-weight:bold;\">{severity}</span></td>\
-             <td style=\"padding:8px;border-bottom:1px solid #333;\">{title}</td>\
-             <td style=\"padding:8px;border-bottom:1px solid #333;\">{description}</td>\
+            "<tr><td style=\"padding:8px;border-bottom:1px solid #333;\"><span style=\"color:{color};font-weight:bold;\">{}</span></td>\
+             <td style=\"padding:8px;border-bottom:1px solid #333;\">{}</td>\
+             <td style=\"padding:8px;border-bottom:1px solid #333;\">{}</td>\
              <td style=\"padding:8px;border-bottom:1px solid #333;\">{}</td></tr>",
-            remediation.as_deref().unwrap_or(""),
+            html_escape(severity),
+            html_escape(title),
+            html_escape(description),
+            remediation.as_deref().map(html_escape).unwrap_or_default(),
         )
     }).collect();
 

@@ -362,11 +362,29 @@ pub async fn start_panel_update(
     }
 
     // Concurrent-apply guard (in-process + DB).
+    //
+    // TOCTOU fix (v2.216.0 audit): the guard used to be read-check-then-later-write,
+    // with `create_snapshot`'s multi-minute pipeline (binary copy, pg_dump, tar,
+    // sha256) running entirely inside the gap — two requests arriving within that
+    // window (a double-click, a client retry, two admin sessions) both passed the
+    // check and both spawned their own `create_snapshot` + detached `update.sh`.
+    // Reserve InFlight atomically under ONE write-lock acquisition, before any
+    // async work starts, so a second caller sees it immediately. The reservation
+    // uses a nil snapshot_id until the real snapshot exists; on snapshot failure
+    // the reservation is released back to Idle so a legitimate retry isn't locked
+    // out by this call's own failed attempt.
+    let reserved_at = Utc::now();
     {
-        let s = handle.read().await;
+        let mut s = handle.write().await;
         if matches!(*s, UpdateState::InFlight { .. }) {
             return Err(OrchestratorError::AlreadyInFlight);
         }
+        *s = UpdateState::InFlight {
+            target_version: target_version.clone(),
+            snapshot_id: Uuid::nil(),
+            started_at: reserved_at,
+            last_log_line: None,
+        };
     }
     let cutoff = Utc::now() - chrono::Duration::minutes(IN_FLIGHT_WINDOW_MIN);
     // Same exclusion as `current_state`: a manual snapshot is not an update, so
@@ -379,20 +397,29 @@ pub async fn start_panel_update(
     .fetch_one(&pool)
     .await?;
     if in_flight_count.0 > 0 {
+        *handle.write().await = UpdateState::Idle;
         return Err(OrchestratorError::AlreadyInFlight);
     }
 
-    // Create the pre-update snapshot. If this fails, no state changes.
-    let meta = panel_snapshot::create_snapshot(
+    // Create the pre-update snapshot. If this fails, release the reservation —
+    // no update actually started, so nothing should stay locked.
+    let meta = match panel_snapshot::create_snapshot(
         &pool,
         SnapshotTrigger::PreUpdate {
             target_version: target_version.clone(),
         },
         operator.clone(),
     )
-    .await?;
+    .await
+    {
+        Ok(m) => m,
+        Err(e) => {
+            *handle.write().await = UpdateState::Idle;
+            return Err(e.into());
+        }
+    };
 
-    let started_at = Utc::now();
+    let started_at = reserved_at;
     let in_flight = UpdateState::InFlight {
         target_version: target_version.clone(),
         snapshot_id: meta.id,
@@ -636,13 +663,41 @@ fn parse_target_from_trigger(trigger: &str) -> Option<String> {
 /// Both halves are now closed: the work is detached (so nothing cancels it) and
 /// the database stage is atomic and verified (so it cannot half-apply).
 pub async fn rollback_to_snapshot(
+    handle: UpdateStateHandle,
     pool: PgPool,
     snapshot_id: Uuid,
 ) -> Result<(), OrchestratorError> {
+    // Concurrent-apply guard (v2.216.0 audit): rollback used to carry NO check
+    // against an update already in flight, so `/api/update/rollback` could race
+    // update.sh's binary swap against restore-snapshot.sh's binary swap on the
+    // same files. Same reservation pattern as start_panel_update — held for the
+    // duration of the restore, since a rollback in progress must equally block a
+    // fresh apply.
+    {
+        let mut s = handle.write().await;
+        if matches!(*s, UpdateState::InFlight { .. }) {
+            return Err(OrchestratorError::AlreadyInFlight);
+        }
+        *s = UpdateState::InFlight {
+            target_version: format!("rollback:{snapshot_id}"),
+            snapshot_id,
+            started_at: Utc::now(),
+            last_log_line: None,
+        };
+    }
     // Everything cheap is validated synchronously so the operator gets a real
     // 4xx now rather than a 202 and a result file to go hunting for. The row,
     // the file on disk and its sha256 are all checked inside spawn_restore.
-    panel_snapshot::spawn_restore(&pool, snapshot_id).await?;
+    let result = panel_snapshot::spawn_restore(&pool, snapshot_id).await;
+    if result.is_err() {
+        // Validation failed before any file operation started (NotFound/FileMissing/
+        // hash mismatch) — release the reservation. A restore that got past
+        // validation and is genuinely running detached is expected to end the
+        // process (binary swap) or resolve via finalize_pending_on_startup; this
+        // early-failure branch is the only one still in-process to release from.
+        *handle.write().await = UpdateState::Idle;
+    }
+    result?;
     Ok(())
 }
 
@@ -749,9 +804,18 @@ pub struct FleetProgressRow {
 /// Build the ordered plan: oldest version first, ties broken by
 /// `last_seen_at desc`. Skips servers staler than 5 minutes (the
 /// reachability gate). Skips servers already at target_version.
+///
+/// `is_admin` widens `user_id = $1` to the whole fleet, mirroring
+/// `routes/servers.rs::list`'s and `routes/dashboard.rs`'s own established
+/// convention that `servers.user_id` names whoever registered the row, not a
+/// tenant boundary — an admin (the only caller `apply_fleet` accepts) sees the
+/// whole fleet. Without this (v2.216.0 audit finding), a fleet-wide update run
+/// silently skipped every server a DIFFERENT admin had registered, with
+/// nothing in the response indicating the plan was incomplete.
 pub async fn build_fleet_plan(
     pool: &PgPool,
     user_id: Uuid,
+    is_admin: bool,
     target_version: &str,
 ) -> Result<Vec<FleetPlanRow>, sqlx::Error> {
     let target_clean = target_version.trim_start_matches('v').to_string();
@@ -761,12 +825,13 @@ pub async fn build_fleet_plan(
     // parsed numeric components.
     let rows: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
         "SELECT id, name, agent_version FROM servers \
-         WHERE user_id = $1 \
+         WHERE ($2 OR user_id = $1) \
            AND last_seen_at > NOW() - INTERVAL '5 minutes' \
            AND is_local = false \
          ORDER BY last_seen_at DESC",
     )
     .bind(user_id)
+    .bind(is_admin)
     .fetch_all(pool)
     .await?;
 

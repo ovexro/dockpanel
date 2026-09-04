@@ -89,10 +89,15 @@ pub async fn list(
 ) -> Result<Json<Vec<Database>>, ApiError> {
     let (limit, offset) = paginate(params.limit, params.offset);
 
+    // Same admin-widening create() already grants (helpers::SITE_CALLER_PREDICATE) —
+    // without it, a database an admin creates on a tenant's site via the local-box
+    // arm becomes invisible to its own creator (v2.216.0 audit finding).
     let dbs: Vec<Database> = sqlx::query_as(
         "SELECT d.id, d.site_id, d.name, d.engine, d.db_user, d.container_id, d.port, d.created_at \
          FROM databases d JOIN sites s ON d.site_id = s.id \
-         WHERE s.user_id = $1 AND s.server_id = $2 ORDER BY d.created_at DESC LIMIT $3 OFFSET $4",
+         WHERE (s.user_id = $1 OR EXISTS (SELECT 1 FROM users u, servers sv WHERE u.id = $1 \
+         AND u.role = 'admin' AND sv.id = s.server_id AND (sv.is_local OR sv.user_id = u.id))) \
+         AND s.server_id = $2 ORDER BY d.created_at DESC LIMIT $3 OFFSET $4",
     )
     .bind(claims.sub)
     .bind(server_id)
@@ -302,10 +307,12 @@ pub async fn credentials(
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Admin-widened to match create()/list() — see the v2.216.0 audit note on list().
     let row: Option<(String, String, String, Option<i32>, Option<String>)> = sqlx::query_as(
         "SELECT d.name, d.engine, d.db_password_enc, d.port, d.container_id \
          FROM databases d JOIN sites s ON d.site_id = s.id \
-         WHERE d.id = $1 AND s.user_id = $2",
+         WHERE d.id = $1 AND (s.user_id = $2 OR EXISTS (SELECT 1 FROM users u, servers sv \
+         WHERE u.id = $2 AND u.role = 'admin' AND sv.id = s.server_id AND (sv.is_local OR sv.user_id = u.id)))",
     )
     .bind(id)
     .bind(claims.sub)
@@ -356,10 +363,12 @@ pub async fn remove(
     // machine either destroys a same-named `dockpanel-db-{name}` container that
     // belongs to somebody else's tenant, or fails to find one while the real
     // container is orphaned on its own host with its row already gone.
+    // Admin-widened to match create()/list() — see the v2.216.0 audit note on list().
     let db: Option<(Uuid, String, Option<String>, Option<Uuid>, String)> = sqlx::query_as(
         "SELECT d.id, d.name, d.container_id, s.server_id, s.domain FROM databases d \
          JOIN sites s ON d.site_id = s.id \
-         WHERE d.id = $1 AND s.user_id = $2",
+         WHERE d.id = $1 AND (s.user_id = $2 OR EXISTS (SELECT 1 FROM users u, servers sv \
+         WHERE u.id = $2 AND u.role = 'admin' AND sv.id = s.server_id AND (sv.is_local OR sv.user_id = u.id)))",
     )
     .bind(id)
     .bind(claims.sub)
@@ -493,10 +502,15 @@ async fn get_db_info(
     id: Uuid,
     user_id: Uuid,
 ) -> Result<(String, String, String, i32, Option<Uuid>), ApiError> {
+    // Admin-widened to match create()/list() — see the v2.216.0 audit note on list().
+    // This is the shared chokepoint for tables/table_schema/query/table_indexes/
+    // foreign_keys/schema_overview/update_pitr_config/pitr_restore/reset_password/
+    // dumps/import — one fix here covers all 11 callers.
     let row: Option<(String, String, String, Option<i32>, Option<String>, Option<Uuid>)> = sqlx::query_as(
         "SELECT d.name, d.engine, d.db_password_enc, d.port, d.container_id, s.server_id \
          FROM databases d JOIN sites s ON d.site_id = s.id \
-         WHERE d.id = $1 AND s.user_id = $2",
+         WHERE d.id = $1 AND (s.user_id = $2 OR EXISTS (SELECT 1 FROM users u, servers sv \
+         WHERE u.id = $2 AND u.role = 'admin' AND sv.id = s.server_id AND (sv.is_local OR sv.user_id = u.id)))",
     )
     .bind(id)
     .bind(user_id)
@@ -946,8 +960,12 @@ pub async fn pitr_config(
     AuthUser(claims): AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Verify ownership
-    let _db: (String,) = sqlx::query_as("SELECT name FROM databases WHERE id = $1 AND site_id IN (SELECT id FROM sites WHERE user_id = $2)")
+    // Verify ownership — admin-widened to match create()/list() (v2.216.0 audit note).
+    let _db: (String,) = sqlx::query_as(
+        "SELECT name FROM databases WHERE id = $1 AND site_id IN (SELECT s.id FROM sites s \
+         WHERE s.user_id = $2 OR EXISTS (SELECT 1 FROM users u, servers sv WHERE u.id = $2 \
+         AND u.role = 'admin' AND sv.id = s.server_id AND (sv.is_local OR sv.user_id = u.id)))"
+    )
         .bind(id).bind(claims.sub)
         .fetch_optional(&state.db).await
         .map_err(|e| internal_error("pitr config", e))?

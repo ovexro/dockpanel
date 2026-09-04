@@ -704,6 +704,14 @@ pub async fn update_record(
 
     match zone.provider.as_str() {
         "cloudflare" => {
+            // CF record IDs are 32-char lowercase hex, same as cf_zone_id (line ~290).
+            // record_id is interpolated unescaped into the outbound URL below — without
+            // this check a "../../../zones/OTHER/dns_records/RECID"-shaped id (percent-
+            // encoded to survive the reverse proxy) reroutes the request, carrying this
+            // zone's own decrypted token, to an arbitrary Cloudflare API path.
+            if record_id.len() != 32 || !record_id.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(err(StatusCode::BAD_REQUEST, "Invalid record ID"));
+            }
             let token = zone.cf_api_token.as_deref().unwrap_or("");
             let (client, headers) = cf_client(token, zone.cf_api_email.as_deref())?;
 
@@ -925,6 +933,11 @@ pub async fn delete_record(
 
     match zone.provider.as_str() {
         "cloudflare" => {
+            // Same discipline as update_record — CF record IDs are 32-char lowercase
+            // hex; record_id is unescaped in the outbound URL below.
+            if record_id.len() != 32 || !record_id.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(err(StatusCode::BAD_REQUEST, "Invalid record ID"));
+            }
             let token = zone.cf_api_token.as_deref().unwrap_or("");
             let (client, headers) = cf_client(token, zone.cf_api_email.as_deref())?;
 

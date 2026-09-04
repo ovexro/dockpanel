@@ -4,6 +4,58 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.217.0]
+
+### Fixed — `panel/backend/src/{routes,services}`'s first dedicated audit of `dns.rs`, `security.rs`, and the panel self-update orchestrator
+
+`panel/backend/src/{routes,services}` (90 files, ~78K LOC) is the original, most-worked pool in this
+project, but its own exhaustion status had never been directly re-verified the way the agent crate
+(v2.215.0) and `panel/cli/src` (v2.216.0) both have been. A LOC-rank + two-direction pre-selection check
+(git-log + memory-mention grep, filtering out a cosmetic mass-commit that touches nearly every backend
+file) surfaced five files with genuinely zero prior dedicated scrutiny. A full `dockpanel-fanout`
+finder/skeptic/critics run found 4 real, independently-verified defects across those files, plus one
+off-menu completeness-critic find in `databases.rs`.
+
+**`dns.rs`'s `update_record`/`delete_record` interpolated an unvalidated Cloudflare record id straight
+into the outbound API URL.** A `"../../../zones/OTHER/dns_records/RECID"`-shaped id (percent-encoded to
+survive the reverse proxy) reroutes the request — carrying the zone's own decrypted Cloudflare token —
+to an arbitrary Cloudflare API path (another zone's records, `/zones`, `/accounts/*`, `/user/tokens/verify`).
+Fixed: `record_id` is now validated as Cloudflare's real 32-char lowercase-hex format before use, on the
+Cloudflare code path only (PowerDNS's record id is a different, safely-parsed hex-encoded composite, left
+unchanged).
+
+**`security.rs`'s `compliance_report` built its HTML report by raw string-interpolating scan-derived
+findings with no escaping**, served as `text/html` and opened directly by the frontend's own "Download
+Report" link. Malware/secrets scans record real filesystem paths verbatim; a compromised hosted site can
+name a file so its path becomes a stored-XSS payload the admin's browser executes on next view. Fixed:
+severity/title/description/remediation are HTML-escaped before interpolation.
+
+**(Off-menu, completeness critic) `databases.rs`'s `create()` authorized against the fleet-wide
+site-caller predicate, but `list`/`credentials`/`remove`/`get_db_info`/`pitr_config` all required strict
+self-ownership** — so a database an admin creates on a tenant's site they don't personally own (the
+local-box admin arm) becomes permanently invisible to its own creator on every other endpoint. Fixed: the
+read/manage handlers now use the same admin-widening predicate `create()` already does.
+
+**`panel_update.rs`'s `build_fleet_plan` had no admin-widening**, unlike its sibling call sites
+(`servers.rs::list`, `dashboard.rs`) — a fleet-wide update run silently skipped every server a *different*
+admin had registered, reporting success with nothing indicating the plan was incomplete. Fixed: mirrors
+the established `($2 OR user_id = $1)` convention.
+
+**`update.rs`'s `apply_fleet(include_panel: true)` bypassed the panel's own downgrade guard** —
+`reject_apply_target`'s direction/advertised-match check that `apply_update` enforces was never called on
+this path, so it could reinstall any syntactically-valid version, not merely a stale-advertised one.
+Fixed: `apply_fleet` now runs the same check before including the panel in a fleet run.
+
+**`panel_update.rs`'s concurrent-apply guard was check-then-later-write, with the multi-minute
+`create_snapshot` pipeline running entirely inside the race window** — two requests within that window
+both passed the guard and both spawned their own snapshot + detached `update.sh`. Fixed: the guard now
+reserves `InFlight` atomically under one write-lock hold, before any async work starts; a failed snapshot
+releases the reservation. `rollback_to_snapshot` gets the same guard — it previously had none at all, so a
+rollback could race an in-progress apply's binary swap.
+
+New pin suite `tests/backend-hot-file-audit-pin-e2e.sh` (25 assertions), mutation-tested via `git stash`
+of the 5 touched source files: all 21 fix-assertions red pre-fix, all 4 controls green throughout.
+
 ## [2.216.0]
 
 ### Fixed — `panel/cli/src/commands/{db,backup,iac}.rs` full audit pass, and an off-menu agent orphan-process gap

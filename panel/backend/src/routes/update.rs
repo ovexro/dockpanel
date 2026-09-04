@@ -220,7 +220,7 @@ pub async fn rollback(
     AdminUser(_claims): AdminUser,
     Json(body): Json<RollbackInput>,
 ) -> Result<(StatusCode, Json<RollbackResponse>), ApiError> {
-    panel_update::rollback_to_snapshot(state.db.clone(), body.snapshot_id)
+    panel_update::rollback_to_snapshot(state.panel_update_state.clone(), state.db.clone(), body.snapshot_id)
         .await
         .map_err(|e| match e {
             panel_update::OrchestratorError::Snapshot(
@@ -374,7 +374,31 @@ pub async fn apply_fleet(
         ));
     }
 
-    let plan = panel_update::build_fleet_plan(&state.db, claims.sub, &body.target_version)
+    // v2.216.0 audit fix: `include_panel` used to reach `start_panel_update` with
+    // only the shape check above — none of `apply_update`'s direction/advertised-
+    // match guard (`reject_apply_target`), so this path could downgrade the panel
+    // to any syntactically-valid version, not merely a stale-advertised one. The
+    // panel side still snapshots first (rollback-recoverable), but the request
+    // should fail closed here rather than silently regress the running panel.
+    if body.include_panel {
+        let advertised: Option<(String,)> = sqlx::query_as(
+            "SELECT value FROM settings WHERE key = 'update_available_version'",
+        )
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("fleet apply (panel direction check)", e))?;
+        let advertised_version = advertised.map(|r| r.0).unwrap_or_default();
+        let target_clean = body.target_version.trim_start_matches('v');
+        if let Some(reason) = reject_apply_target(
+            target_clean,
+            &advertised_version,
+            env!("CARGO_PKG_VERSION"),
+        ) {
+            return Err(err(StatusCode::BAD_REQUEST, &reason));
+        }
+    }
+
+    let plan = panel_update::build_fleet_plan(&state.db, claims.sub, claims.role == "admin", &body.target_version)
         .await
         .map_err(|e| internal_error("fleet plan", e))?;
     if plan.is_empty() {
