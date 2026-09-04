@@ -99,6 +99,19 @@ pub fn configure(
         _ => "off", // "tls" means implicit TLS, not STARTTLS
     };
 
+    // `from_full_name` is the only thing that makes msmtp put a display
+    // name on the `From:` header it auto-adds to outgoing mail (msmtp's
+    // `from` command is envelope-from only — a bare address, never a
+    // display name). Omitted entirely when blank rather than emitted as
+    // `from_full_name ` with nothing after it, since msmtp's own argument
+    // grammar reads "the rest of the line" for this directive and an
+    // absent line is the least surprising way to mean "no display name."
+    let from_name_line = if from_name.is_empty() {
+        String::new()
+    } else {
+        format!("from_full_name  {from_name}\n")
+    };
+
     let config = format!(
         r#"# DockPanel SMTP configuration — managed automatically
 defaults
@@ -112,7 +125,7 @@ account        default
 host           {host}
 port           {port}
 from           {from}
-user           {username}
+{from_name_line}user           {username}
 password       {password}
 "#
     );
@@ -191,7 +204,16 @@ password       {password}
     // from msmtp-as-www-data and break relaying to fix a disclosure. Repairing a
     // loud problem must not manufacture a silent one, so that case keeps the old
     // mode and says why.
-    std::fs::write("/var/log/msmtp.log", "").ok();
+    // Only CREATE it here — never truncate an existing one. `configure()`
+    // runs on every SMTP settings save (the frontend always re-PUTs all 7
+    // `smtp_*` keys, even on an unrelated field edit, and the backend then
+    // pushes this to every online fleet member), so an unconditional
+    // `fs::write(path, "")` was wiping the real mail relay history on every
+    // save — including the save an operator makes WHILE debugging a mail
+    // problem using this exact log.
+    if !std::path::Path::new("/var/log/msmtp.log").exists() {
+        std::fs::write("/var/log/msmtp.log", "").ok();
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

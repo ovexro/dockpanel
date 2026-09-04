@@ -386,32 +386,25 @@ async fn install_version(
 
     tracing::info!("Installing PHP {version} (core + available extensions)");
 
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
-        safe_command_unsandboxed("bash", &[])
-            .args(["-c", &install_cmd])
-            .output(),
-    )
-    .await;
+    // `output_with_timeout` (not a caller-side `tokio::time::timeout` around
+    // plain `.output()`) is load-bearing here: on expiry it also stops the
+    // transient systemd unit the privileged apt transaction actually runs
+    // in, which a caller-side timeout alone cannot reach (see safe_cmd.rs's
+    // own doc comment) — the exact orphaned-transaction class v2.213.0
+    // fixed for every pkg.rs call site, extended here.
+    let output = safe_command_unsandboxed("bash", &[])
+        .args(["-c", &install_cmd])
+        .output_with_timeout(std::time::Duration::from_secs(300))
+        .await;
 
     let output = match output {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => {
+        Ok(o) => o,
+        Err(e) => {
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(InstallResponse {
                     success: false,
-                    message: format!("Install command failed: {e}"),
-                    version: version.to_string(),
-                }),
-            ));
-        }
-        Err(_) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(InstallResponse {
-                    success: false,
-                    message: "Installation timed out (5 min limit)".into(),
+                    message: e,
                     version: version.to_string(),
                 }),
             ));
@@ -584,32 +577,22 @@ async fn uninstall_version(
     } else {
         format!("apt-get purge -y php{version}-* 2>&1")
     };
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
-        safe_command_unsandboxed("bash", &[])
-            .args(["-c", &purge_cmd])
-            .output(),
-    )
-    .await;
+    // See install_version above: output_with_timeout also stops the
+    // transient unit the purge actually runs in, which a caller-side
+    // timeout cannot reach.
+    let output = safe_command_unsandboxed("bash", &[])
+        .args(["-c", &purge_cmd])
+        .output_with_timeout(std::time::Duration::from_secs(300))
+        .await;
 
     let output = match output {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => {
+        Ok(o) => o,
+        Err(e) => {
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(InstallResponse {
                     success: false,
-                    message: format!("Purge command failed: {e}"),
-                    version: version.to_string(),
-                }),
-            ));
-        }
-        Err(_) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(InstallResponse {
-                    success: false,
-                    message: "Uninstall timed out (5 min limit)".into(),
+                    message: e,
                     version: version.to_string(),
                 }),
             ));
@@ -632,13 +615,10 @@ async fn uninstall_version(
     // 3. Autoremove. apt leaves orphans behind after a purge; dnf's `remove`
     // already takes unused dependencies with it, so there is nothing to call.
     if crate::services::pkg::manager().await != crate::services::pkg::PkgMgr::Rpm {
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(300),
-            safe_command_unsandboxed("bash", &[])
-                .args(["-c", "apt-get autoremove -y 2>&1"])
-                .output(),
-        )
-        .await;
+        let _ = safe_command_unsandboxed("bash", &[])
+            .args(["-c", "apt-get autoremove -y 2>&1"])
+            .output_with_timeout(std::time::Duration::from_secs(300))
+            .await;
     }
 
     tracing::info!("PHP {version} uninstalled");

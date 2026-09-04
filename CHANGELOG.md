@@ -4,6 +4,48 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.214.0]
+
+### Fixed — System Updates was apt-only and silently reported "0 updates" on RHEL, `from_name` never reached real mail, and a `msmtp.log`-wiping save
+
+Fresh audit rotation, LOC-ranked, against `services/smtp.rs` + `routes/smtp.rs` and `routes/updates.rs`
+— both genuinely thin/never-audited, confirmed via the two-direction pre-selection check before
+picking.
+
+**The whole System Updates feature (list/count/apply) was 100% hardcoded to `apt`/`apt-get`, with
+zero use of this project's own `pkg.rs` dual-family abstraction.** On an RHEL-family agent — a
+platform this project explicitly supports and tests elsewhere — `list_updates`/`update_count` got
+`ErrorKind::NotFound` from the missing `apt` binary and silently reported "0 updates," reading as
+fully patched. Fixed: `dnf`/`yum check-update` support, with its non-boolean exit status (0 = no
+updates, 100 = updates listed, anything else = a real error) handled explicitly rather than
+collapsed into a plain success/failure; a 3-token line parser that requires the `name.arch` dot
+(a mutation test this session caught a false positive without it); an `rpm -qa` lookup for the
+current-version column; and a `needs-restarting -r` fallback for `reboot_required` (RHEL has no
+`/var/run/reboot-required`). `apply_updates` now selects `apt-get`/`dnf`/`yum` via `pkg::installer()`
+instead of a hardcoded binary.
+
+**`smtp.rs::configure()`'s `from_name` was validated for injection and pushed fleet-wide by the
+backend, but never written into the msmtp config or the PHP `sendmail_path` ini** — the "From Name"
+field the UI promises applies "to all sites on this server" had no effect on any real application
+mail, only the one-off admin Test Email. Fixed: msmtp's `from_full_name` directive (verified against
+`man msmtp` — the `from` command is envelope-address-only; `from_full_name` is the separate directive
+that names the display name msmtp adds to an auto-generated `From:` header).
+
+**Every SMTP settings save unconditionally truncated `/var/log/msmtp.log`.** The frontend always
+re-PUTs all 7 `smtp_*` keys on Save — even an unrelated field edit — which the backend then pushes to
+every online fleet member, wiping the real mail relay log on every save, including the save an
+operator makes while debugging a mail problem using that exact log. Fixed: only create the file when
+it does not already exist.
+
+**Off-menu, completeness-critic-found: `routes/php.rs` carried the same orphaned-transient-unit bug
+v2.213.0 (the immediately prior release) had just fixed in `pkg.rs`.** Wrapping
+`safe_command_unsandboxed(...).output()` in a caller-side `tokio::time::timeout` only kills the
+local `systemd-run` waiter on expiry — the privileged `apt`/`dnf` transaction keeps running,
+orphaned, in its own transient unit. Three live sites (`install_version`, `uninstall_version`'s purge,
+its `apt autoremove` follow-up), all sharing `pkg.rs`'s own 300s `INSTALL_TIMEOUT` value. Fixed:
+converted to `UnsandboxedCommand::output_with_timeout()`, which also stops the named transient unit
+on timeout.
+
 ## [2.213.0]
 
 ### Fixed — 4 more `kill_on_drop` gaps in `pkg.rs`, a systemd-run timeout that never actually stopped the privileged work (carried 9 sessions), and a duplicate site-clone implementation
