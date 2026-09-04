@@ -4,6 +4,56 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.213.0]
+
+### Fixed — 4 more `kill_on_drop` gaps in `pkg.rs`, a systemd-run timeout that never actually stopped the privileged work (carried 9 sessions), and a duplicate site-clone implementation
+
+This session bundled a set of small carries deliberately deferred across three prior sessions in
+favor of fresh audit rotation — including `pkg.rs`'s own `systemd-run` timeout fix, the single
+longest-carried item in this project's tech-debt ledger.
+
+**`pkg.rs` had 4 sites wrapping the sandboxed `safe_command(...)` builder in a `tokio::time::timeout`
+with no `kill_on_drop(true)`** — the established timeout-orphan class this project has now fixed 9
+times elsewhere, never swept in these specific call sites (`installed_php_version`, `php_streams`,
+`run_ok`, `which`). Fixed: `kill_on_drop(true)` added to each.
+
+**The harder, 9-session-carried fix: `safe_command_unsandboxed()`'s `systemd-run --wait` timeout
+only ever killed the LOCAL waiting client — the remote transient unit it started kept running,
+fully decoupled, until it finished on its own** (live-proven in a prior session: killing the local
+`systemd-run` PID left the transient unit `active (running)` indefinitely). Fixed: a new
+`UnsandboxedCommand::output_with_timeout()` in `safe_cmd.rs` assigns the transient unit a
+caller-known name via `--unit=NAME` (composes fine with `--collect`, which only means "discard
+state on exit" and says nothing about naming), and on timeout fires a best-effort, detached
+`systemctl stop --no-block <unit>` before returning an operator-actionable error naming the unit.
+All 6 of `pkg.rs`'s `safe_command_unsandboxed(...)` call sites now route through it. The
+live-log-streaming path (`spawn_streaming()`) has different completion semantics and was
+deliberately left untouched.
+
+**`routes/nginx.rs::clone_site` reimplemented, inline, the exact same rsync+chown-split logic as
+`services/staging.rs::clone_files`** — a second, independent implementation of the same
+"clone a site's files" feature, carried as known duplication since s456. Fixed: `clone_site` now
+delegates the copy+chown work to `clone_files`, keeping only its own size computation and response
+shape as route-specific code. External behavior (status codes, JSON shape) is unchanged.
+
+**`install-agent.sh`'s firewall-port-opening step checked `command -v ufw` before checking
+firewalld's actual active state** — the inverse of the check order `setup.sh`'s own
+`detect_firewall()` already uses, and the same split-brain class (s265) this project has fixed
+everywhere else: a box with `ufw` merely installed but `firewalld` actually enforcing would
+silently configure the firewall nobody is using. Fixed: check `firewall-cmd --state` first.
+
+**Also reviewed and resized, not fixed this session** (both required a decision this project's own
+gates call for before rushing a fix or a code change):
+- The `dockpanel-db-{name}` per-site container-naming gap was re-investigated and found much larger
+  than previously recorded — the deterministic name is independently reconstructed at 14+ call
+  sites across both the backend and agent crates, not a single-file fix. Resized in the tech-debt
+  ledger; needs its own dedicated session.
+- The CLI's inability to restore a DB-carrying backup was investigated to a complete, actionable
+  design (a `dp_`-prefixed API-key extension to the backend's existing `AuthUser`, reusing an
+  already-built-but-unwired `api_keys` scaffold) but deliberately not implemented — it adds a new
+  credential surface and was scoped for a future session rather than rushed.
+- The topological per-tenant DB-networks deferral (s243, rejected on operational-cost grounds) was
+  re-verified still fully unbuilt and the tradeoff unchanged — re-affirmed, not revisited.
+
 ## [2.212.0]
 
 ### Fixed — CMS one-click installers had no timeout on any spawn, two frameworks silently mangled certain passwords, and neither downloaded artifact was integrity-checked

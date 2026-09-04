@@ -1847,51 +1847,29 @@ async fn clone_site(Json(body): Json<CloneRequest>) -> Result<Json<serde_json::V
         return Err(api_err(StatusCode::BAD_REQUEST, "Invalid domain format"));
     }
 
-    let source_dir = format!("/var/www/{}", body.source_domain);
     let target_dir = format!("/var/www/{}", body.target_domain);
 
-    if !std::path::Path::new(&source_dir).exists() {
-        return Err(api_err(StatusCode::NOT_FOUND, "Source site directory not found"));
-    }
-
-    // Create target directory
-    tokio::fs::create_dir_all(&target_dir).await
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to create directory: {e}")))?;
-
-    // Copy files using rsync (preserves permissions, faster than cp -r)
-    let output = tokio::time::timeout(
+    // The actual copy — source-existence check, target dir creation, `rsync -a
+    // --delete`, and the www-data/`.git` ownership fixup — lives in
+    // `services::staging::clone_files`, which also backs `POST /staging/clone`.
+    // This used to be a second, inline copy of that same logic; the 300s cap
+    // stays here as the request-level SLA guard it's always been. `is_valid_domain`
+    // above is strictly narrower than `clone_files`'s own internal domain check
+    // (it requires dotted, length-capped labels), so anything that reaches this
+    // point already satisfies `clone_files`'s validation too.
+    tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        safe_command("rsync")
-            .args(["-a", "--delete", &format!("{source_dir}/"), &format!("{target_dir}/")])
-            .output()
+        services::staging::clone_files(&body.source_domain, &body.target_domain),
     ).await
         .map_err(|_| api_err(StatusCode::GATEWAY_TIMEOUT, "Clone timed out (300s)"))?
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("rsync failed: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Clone failed: {stderr}")));
-    }
-
-    // Fix ownership — everything except `.git`, which stays root's. Same shape
-    // as `services/staging.rs::clone_files` (a second implementation of the
-    // same clone-a-site feature); see `deploy.rs::hand_tree_to_web_user`.
-    if let Ok(mut entries) = tokio::fs::read_dir(&target_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            if entry.file_name() == std::ffi::OsStr::new(".git") {
-                continue;
-            }
-            let _ = safe_command("chown")
-                .args(["-R", "www-data:www-data", &entry.path().to_string_lossy()])
-                .output()
-                .await;
-        }
-    }
-    let git_dir = format!("{target_dir}/.git");
-    if std::path::Path::new(&git_dir).exists() {
-        let _ = safe_command("chown").args(["-R", "root:root", &git_dir]).output().await;
-        let _ = safe_command("chmod").args(["-R", "go-rwx", &git_dir]).output().await;
-    }
+        .map_err(|e| {
+            let status = if e.contains("directory not found") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            api_err(status, &e)
+        })?;
 
     // Get size
     let du_output = safe_command("du").args(["-sb", &target_dir]).output().await;

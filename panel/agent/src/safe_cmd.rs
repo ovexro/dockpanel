@@ -184,6 +184,68 @@ impl UnsandboxedCommand {
         Ok(cap.finish(raw))
     }
 
+    /// Run to completion within `timeout`, and make sure the PRIVILEGED WORK
+    /// ITSELF stops when the timeout fires — not merely the local process
+    /// that was waiting on it.
+    ///
+    /// # Why [`Self::output`] plus a caller-side `tokio::time::timeout` is not enough
+    ///
+    /// `kill_on_drop(true)` on the local `systemd-run` client (see
+    /// [`Self::output`]) only kills the WAITER. The privileged command itself
+    /// runs inside a *separate* systemd transient unit, started by PID1 in
+    /// its own cgroup and fully decoupled from this process's lifecycle —
+    /// that decoupling is the entire reason `--wait` has to exist at all (it
+    /// is `systemd-run` polling the unit on our behalf, not a parent/child
+    /// relationship the kernel would tear down together). So when a caller
+    /// wraps [`Self::output`] in `tokio::time::timeout(...)` and it fires,
+    /// dropping that future kills the local `systemd-run` client and
+    /// **nothing else**: a hung `apt-get`/`dnf` transaction inside the
+    /// transient unit keeps running, orphaned, with no process left anywhere
+    /// that could ever notice or reap it. Live-proven in a prior session:
+    /// killing the local `systemd-run` PID left the transient unit
+    /// `active (running)` in `systemctl status`, indefinitely.
+    ///
+    /// Stopping the right thing on expiry requires knowing the unit's own
+    /// name, so this method assigns it a caller-known one up front via
+    /// `--unit=NAME` — which composes fine alongside `--collect` (that flag
+    /// only means "discard the unit's state once it exits, whatever the
+    /// outcome"; it says nothing about how the unit is named) — instead of
+    /// leaving naming to `--collect`'s own auto-generated scheme, which no
+    /// caller could predict or act on. On timeout, it then asks systemd to
+    /// stop that exact unit directly.
+    ///
+    /// Cleanup is deliberately best-effort and fire-and-forget
+    /// (`systemctl stop --no-block`, result discarded, run as a detached
+    /// task rather than awaited): this function's contract to its caller is
+    /// already broken the moment the timeout fires, and a cleanup step that
+    /// itself blocks or fails must never delay or mask the timeout error the
+    /// caller is already waiting on.
+    pub async fn output_with_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<std::process::Output, String> {
+        let (binary, unit) = insert_unit_arg(&mut self.argv);
+
+        match tokio::time::timeout(timeout, self.output()).await {
+            Ok(Ok(out)) => Ok(out),
+            Ok(Err(e)) => Err(format!("{binary} could not be run: {e}")),
+            Err(_) => {
+                let stop_unit = unit.clone();
+                tokio::spawn(async move {
+                    let _ = safe_command("systemctl")
+                        .args(["stop", "--no-block", &stop_unit])
+                        .output()
+                        .await;
+                });
+                Err(format!(
+                    "{binary} timed out after {}s (unit {unit}) and was asked to stop in the \
+                     background",
+                    timeout.as_secs()
+                ))
+            }
+        }
+    }
+
     /// Spawn and stream the inner command's output line by line as it is
     /// produced, instead of buffering it all.
     ///
@@ -375,6 +437,43 @@ fn unsandboxed_prefix(binary: &str, extra_env: &[(&str, &str)]) -> Vec<std::ffi:
     push("--".into());
     push(binary.to_string());
     argv
+}
+
+/// Give the transient unit a caller-known name and return `(inner binary,
+/// unit name)`, so [`UnsandboxedCommand::output_with_timeout`] knows what to
+/// tell systemd to stop if the timeout fires.
+///
+/// Pulled out as its own pure function — rather than living inline in
+/// `output_with_timeout` — so the insertion point and the name generator's
+/// collision safety can be unit-tested directly against a plain `argv`
+/// vector, without spawning a real `systemd-run` child (which the test
+/// environment may not even have installed).
+///
+/// `unsandboxed_prefix` pushes exactly one `--` — immediately before the
+/// inner binary — and does so before any caller `.arg()`/`.args()` call can
+/// add more argv entries, so the FIRST `--` in `argv` is always that
+/// separator, regardless of how many `--setenv=` entries `extra_env`
+/// produced ahead of it. Scanning for it, rather than assuming a fixed
+/// index, is what keeps this correct as `extra_env` varies the offset.
+/// `--unit=NAME` is inserted immediately BEFORE it so systemd-run reads it as
+/// one of its own options rather than passing it through to the inner
+/// binary.
+fn insert_unit_arg(argv: &mut Vec<std::ffi::OsString>) -> (String, String) {
+    let sep = argv
+        .iter()
+        .position(|a| a == "--")
+        .expect("unsandboxed_prefix always pushes a `--` separator");
+    let binary = argv
+        .get(sep + 1)
+        .map(|b| b.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // 32 lowercase hex chars, no hyphens — a shape `--unit=` and later
+    // `systemctl stop` both accept without quoting concerns. Matches the
+    // `.simple()` convention `routes/ssl_registry.rs` already uses for the
+    // same "unique, filesystem/argv-safe token" need.
+    let unit = format!("dockpanel-op-{}", uuid::Uuid::new_v4().simple());
+    argv.insert(sep, std::ffi::OsString::from(format!("--unit={unit}")));
+    (binary, unit)
 }
 
 /// A pair of files PID1 writes the transient unit's stdout/stderr into.
@@ -594,6 +693,72 @@ mod tests {
         assert!(argv.contains(&"--setenv=PGPASSWORD=s3cret".to_string()));
         let sep = argv.iter().position(|a| a == "--").expect("separator");
         assert_eq!(&argv[sep + 1..], ["apt-get", "install", "-y", "redis-server"]);
+    }
+
+    /// `insert_unit_arg` must land `--unit=` immediately before the `--`
+    /// separator no matter how many `--setenv=` entries `extra_env` pushed
+    /// ahead of it — a fixed-index insert would have worked for the
+    /// zero-`extra_env` case in testing and then silently corrupted the
+    /// argv (splitting `--unit=` into the inner binary's own arguments) the
+    /// first time a caller passed one.
+    #[test]
+    fn unit_arg_lands_immediately_before_the_separator_regardless_of_extra_env_count() {
+        for extra_env in [
+            vec![],
+            vec![("PGPASSWORD", "s3cret")],
+            vec![("PGPASSWORD", "s3cret"), ("MYSQL_PWD", "x")],
+        ] {
+            let mut cmd = safe_command_unsandboxed("dnf", &extra_env);
+            cmd.args(["install", "-y", "redis"]);
+            let (binary, unit) = insert_unit_arg(&mut cmd.argv);
+            assert_eq!(binary, "dnf");
+
+            let argv = argv_of(&cmd);
+            let unit_pos = argv
+                .iter()
+                .position(|a| *a == format!("--unit={unit}"))
+                .expect("--unit= present in argv");
+            let sep_pos = argv.iter().position(|a| a == "--").expect("separator present");
+            assert_eq!(
+                unit_pos + 1,
+                sep_pos,
+                "--unit= must sit immediately before -- (extra_env len {})",
+                extra_env.len()
+            );
+            // The inner binary's own argv, past the separator, must be
+            // completely untouched by the insertion.
+            assert_eq!(&argv[sep_pos + 1..], ["dnf", "install", "-y", "redis"]);
+        }
+    }
+
+    /// Two operations racing each other must never be assigned the same
+    /// transient unit name — a collision would let one caller's
+    /// timeout-triggered `systemctl stop` kill the OTHER caller's still
+    /// legitimate, still-running transaction.
+    #[test]
+    fn unit_names_do_not_collide() {
+        let mut a = safe_command_unsandboxed("dnf", &[]);
+        let mut b = safe_command_unsandboxed("dnf", &[]);
+        let (_, unit_a) = insert_unit_arg(&mut a.argv);
+        let (_, unit_b) = insert_unit_arg(&mut b.argv);
+        assert_ne!(unit_a, unit_b);
+    }
+
+    /// The generated name must actually be a valid, unquoted systemd unit
+    /// identifier — no hyphens beyond the fixed prefix, no characters that
+    /// would need escaping in `--unit=` or a later `systemctl stop` argv.
+    #[test]
+    fn unit_name_is_a_plain_hex_token() {
+        let mut cmd = safe_command_unsandboxed("dnf", &[]);
+        let (_, unit) = insert_unit_arg(&mut cmd.argv);
+        let suffix = unit
+            .strip_prefix("dockpanel-op-")
+            .expect("unit name keeps the dockpanel-op- prefix");
+        assert_eq!(suffix.len(), 32, "uuid simple form is 32 hex characters");
+        assert!(
+            suffix.chars().all(|c| c.is_ascii_hexdigit()),
+            "unit suffix must be plain hex: {suffix}"
+        );
     }
 
     /// PID1 runs as `init_t` and may not write `tmp_t`, so a capture directory

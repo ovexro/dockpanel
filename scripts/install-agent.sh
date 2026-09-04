@@ -319,12 +319,17 @@ for d in $AGENT_RWP; do
     [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || true
 done
 
-# Allow agent port through firewall
-if command -v ufw &> /dev/null; then
-    ufw allow ${AGENT_PORT}/tcp > /dev/null 2>&1 || true
-elif command -v firewall-cmd &> /dev/null; then
+# Allow agent port through firewall. Check what is ACTUALLY ENFORCING first
+# (firewall-cmd --state, not just "is the binary installed") — the same
+# split setup.sh's detect_firewall() already guards against (s265): a box can
+# have ufw installed but not running while firewalld is the one actually
+# enforcing, and checking `command -v ufw` first would silently configure the
+# firewall nobody is using.
+if command -v firewall-cmd &> /dev/null && firewall-cmd --state &> /dev/null; then
     firewall-cmd --permanent --add-port=${AGENT_PORT}/tcp > /dev/null 2>&1 || true
     firewall-cmd --reload > /dev/null 2>&1 || true
+elif command -v ufw &> /dev/null; then
+    ufw allow ${AGENT_PORT}/tcp > /dev/null 2>&1 || true
 fi
 
 # Start agent. "The command ran" is not the success condition — "the unit is

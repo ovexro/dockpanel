@@ -124,7 +124,20 @@ assert_split_chown "$STAGING" "fn sync_files" "sync_files"
 
 echo
 echo "── 3. G4: routes/nginx.rs::clone_site — .git-aware chown ──"
-assert_split_chown "$NGINX_ROUTE" "fn clone_site" "clone_site"
+# s459: clone_site no longer reimplements this inline — it now delegates the
+# whole copy+chown step to staging.rs::clone_files (consolidating the
+# duplicate implementation this file's own header already flagged as "a
+# second, independent implementation of the same clone-a-site feature", see
+# pkg-rs-and-clone-dedup-hardening-pin-e2e.sh for the dedup's own pins). The
+# .git-aware split-chown invariant itself is still fully covered — by G2
+# above, against the function that now actually performs the work. What's
+# left to pin here is that clone_site still gets there via real delegation,
+# not a silent regression to some other, unaudited shape.
+if bodyhas "$NGINX_ROUTE" "fn clone_site" "services::staging::clone_files("; then
+  ok "clone_site: delegates to staging::clone_files (the .git-aware chown itself is pinned via G2 above, against the function that now performs it)"
+else
+  bad "clone_site: no longer delegates to staging::clone_files — either the .git-aware fix was removed or it moved to an unaudited third shape; re-verify by hand"
+fi
 
 echo
 echo "── 4. G5: migration.rs::import_site_files — .git-aware chown, applied uniformly ──"

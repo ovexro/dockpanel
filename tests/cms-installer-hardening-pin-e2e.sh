@@ -196,13 +196,21 @@ if bodyhasre "$SAFE_CMD" "^    pub fn spawn_streaming\(&mut self\)" 'cmd\.kill_o
 else
   bad "UnsandboxedCommand::spawn_streaming() is missing kill_on_drop(true)"
 fi
-# pkg.rs itself is untouched (the fix is centralized) — confirm it still has
-# ZERO kill_on_drop of its own, proving the fix genuinely lives in the
-# shared helper and not duplicated/reverted at the call site.
-if hasre "$PKG" 'kill_on_drop'; then
-  bad "pkg.rs now has its own kill_on_drop call — the centralized safe_cmd.rs fix may have been bypassed by a direct per-call one (not wrong, but re-check this pin's premise)"
+# s459 update: pkg.rs legitimately gained 4 kill_on_drop(true) sites this
+# session (see pkg-rs-and-clone-dedup-hardening-pin-e2e.sh) — but all 4 are
+# chained onto the SANDBOXED safe_command() builder, for an unrelated bug
+# class (a plain-timeout-without-kill_on_drop gap this pin never covered).
+# What THIS control actually guards is narrower and still holds: no
+# safe_command_unsandboxed(...) call site chains kill_on_drop directly
+# (which would mean the centralized safe_cmd.rs fix for the systemd-run-
+# backed path was bypassed — impossible by construction today, since
+# UnsandboxedCommand exposes no such method, but worth pinning as
+# documentation of the invariant regardless).
+KOD_ON_UNSANDBOXED=$(code "$PKG" | grep -E 'safe_command_unsandboxed' -A2 | grep -c 'kill_on_drop')
+if [ "$KOD_ON_UNSANDBOXED" -eq 0 ]; then
+  ok "no safe_command_unsandboxed(...) call site in pkg.rs chains kill_on_drop directly (control: the systemd-run fix is still centralized in safe_cmd.rs, not duplicated here)"
 else
-  ok "pkg.rs has no kill_on_drop of its own (control: the fix is genuinely centralized in safe_cmd.rs, not duplicated here)"
+  bad "a safe_command_unsandboxed(...) call site in pkg.rs appears to chain kill_on_drop directly — the centralized safe_cmd.rs fix may have been bypassed"
 fi
 if bodyhasre "$PKG" "^pub async fn enable_php_stream" 'safe_command_unsandboxed'; then
   ok "enable_php_stream still spawns via safe_command_unsandboxed (control: it's the same call path the safe_cmd.rs fix protects)"

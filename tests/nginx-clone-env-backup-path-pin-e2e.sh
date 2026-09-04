@@ -87,11 +87,15 @@ else
     bad "A1 clone_site is missing domain validation on one or both fields — rsync --delete runs on an unvalidated path"
   fi
   CHK_AT=$(grep -boE 'is_valid_domain\(&body\.(source|target)_domain\)' <<< "$CLONE" | head -1 | cut -d: -f1)
-  RSYNC_AT=$(grep -bo 'safe_command("rsync")' <<< "$CLONE" | head -1 | cut -d: -f1)
+  # s459: clone_site no longer runs rsync inline — it delegates the whole
+  # copy (rsync included) to staging::clone_files, so the thing validation
+  # must precede is now that delegated call, not a `safe_command("rsync")`
+  # literal that no longer exists in this function's body at all.
+  RSYNC_AT=$(grep -bo 'services::staging::clone_files(' <<< "$CLONE" | head -1 | cut -d: -f1)
   if [ -n "$CHK_AT" ] && [ -n "$RSYNC_AT" ] && [ "$CHK_AT" -lt "$RSYNC_AT" ]; then
-    ok "A2 the validation precedes the rsync call"
+    ok "A2 the validation precedes the delegated clone_files call"
   else
-    bad "A2 the validation does not precede the rsync call (check@${CHK_AT:-none} rsync@${RSYNC_AT:-none})"
+    bad "A2 the validation does not precede the delegated clone_files call (check@${CHK_AT:-none} delegate@${RSYNC_AT:-none})"
   fi
 fi
 

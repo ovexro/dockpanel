@@ -198,15 +198,11 @@ pub async fn enable_php_stream(version: &str) -> Result<(), String> {
     if inst.is_apt() {
         return Ok(());
     }
-    let out = tokio::time::timeout(
-        INSTALL_TIMEOUT,
-        safe_command_unsandboxed(inst.bin(), &[])
-            .args(["-y", "module", "enable", &format!("php:{version}")])
-            .output(),
-    )
-    .await
-    .map_err(|_| "Enabling the PHP module stream timed out".to_string())?
-    .map_err(|e| format!("Enabling the PHP module stream failed: {e}"))?;
+    let out = safe_command_unsandboxed(inst.bin(), &[])
+        .args(["-y", "module", "enable", &format!("php:{version}")])
+        .output_with_timeout(INSTALL_TIMEOUT)
+        .await
+        .map_err(|e| format!("Enabling the PHP module stream failed: {e}"))?;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -231,7 +227,10 @@ pub async fn installed_php_version() -> Option<String> {
     }
     let out = tokio::time::timeout(
         Duration::from_secs(60),
-        safe_command("rpm").args(["-q", "--qf", "%{VERSION}", "php-fpm"]).output(),
+        safe_command("rpm")
+            .args(["-q", "--qf", "%{VERSION}", "php-fpm"])
+            .kill_on_drop(true)
+            .output(),
     )
     .await
     .ok()?
@@ -283,7 +282,10 @@ pub async fn php_streams() -> Vec<String> {
     }
     let out = tokio::time::timeout(
         Duration::from_secs(120),
-        safe_command(inst.bin()).args(["-q", "module", "list", "php"]).output(),
+        safe_command(inst.bin())
+            .args(["-q", "module", "list", "php"])
+            .kill_on_drop(true)
+            .output(),
     )
     .await
     .ok()
@@ -515,13 +517,10 @@ async fn transact(action: Action, packages: &[&str]) -> Result<(), String> {
     // Unsandboxed: a package transaction writes across the whole filesystem,
     // which ProtectSystem=strict exists to prevent. This is the same escape
     // hatch every installer already used for exactly this reason.
-    let out = tokio::time::timeout(
-        INSTALL_TIMEOUT,
-        safe_command_unsandboxed(inst.bin(), &[]).args(&argv).output(),
-    )
-    .await
-    .map_err(|_| format!("{} timed out after {}s", inst.bin(), INSTALL_TIMEOUT.as_secs()))?
-    .map_err(|e| format!("{} could not be run: {e}", inst.bin()))?;
+    let out = safe_command_unsandboxed(inst.bin(), &[])
+        .args(&argv)
+        .output_with_timeout(INSTALL_TIMEOUT)
+        .await?;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -536,13 +535,10 @@ async fn transact(action: Action, packages: &[&str]) -> Result<(), String> {
     // apt leaves orphans behind after a purge; dnf's `remove` already takes
     // unused dependencies with it, so autoremove has no counterpart to call.
     if matches!(action, Action::Remove) && inst.is_apt() {
-        let _ = tokio::time::timeout(
-            INSTALL_TIMEOUT,
-            safe_command_unsandboxed("apt-get", &[])
-                .args(["autoremove", "-y"])
-                .output(),
-        )
-        .await;
+        let _ = safe_command_unsandboxed("apt-get", &[])
+            .args(["autoremove", "-y"])
+            .output_with_timeout(INSTALL_TIMEOUT)
+            .await;
     }
 
     Ok(())
@@ -552,11 +548,10 @@ async fn transact(action: Action, packages: &[&str]) -> Result<(), String> {
 /// visible; dnf reads repo metadata on demand and needs nothing.
 pub async fn refresh_index() {
     if let Some(Installer::AptGet) = installer().await {
-        let _ = tokio::time::timeout(
-            INSTALL_TIMEOUT,
-            safe_command_unsandboxed("apt-get", &[]).arg("update").output(),
-        )
-        .await;
+        let _ = safe_command_unsandboxed("apt-get", &[])
+            .arg("update")
+            .output_with_timeout(INSTALL_TIMEOUT)
+            .await;
     }
 }
 
@@ -586,15 +581,11 @@ pub async fn refresh_index() {
 async fn escape_hatch_works() -> bool {
     static OK: OnceCell<bool> = OnceCell::const_new();
     *OK.get_or_init(|| async {
-        tokio::time::timeout(
-            Duration::from_secs(30),
-            safe_command_unsandboxed("true", &[]).output(),
-        )
-        .await
-        .ok()
-        .and_then(|r| r.ok())
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        safe_command_unsandboxed("true", &[])
+            .output_with_timeout(Duration::from_secs(30))
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     })
     .await
 }
@@ -813,13 +804,11 @@ pub async fn add_repo(repo: Repo) -> Result<(), String> {
     // of the wrapper: without it a failed `curl` pipes nothing into `bash -`,
     // which exits 0, and the install proceeds against a repo that was never
     // added (Lesson #73B, learned in setup.sh and re-learnable here).
-    let out = tokio::time::timeout(
-        INSTALL_TIMEOUT,
-        safe_command_unsandboxed("bash", &[]).args(["-c", &script]).output(),
-    )
-    .await
-    .map_err(|_| "Repository setup timed out".to_string())?
-    .map_err(|e| format!("Repository setup could not be run: {e}"))?;
+    let out = safe_command_unsandboxed("bash", &[])
+        .args(["-c", &script])
+        .output_with_timeout(INSTALL_TIMEOUT)
+        .await
+        .map_err(|e| format!("Repository setup could not be run: {e}"))?;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -918,7 +907,7 @@ pub async fn os_release_value(key: &str) -> Option<String> {
 async fn run_ok(bin: &str, args: &[&str], accept: impl Fn(&str) -> bool) -> bool {
     tokio::time::timeout(
         Duration::from_secs(120),
-        safe_command(bin).args(args).output(),
+        safe_command(bin).args(args).kill_on_drop(true).output(),
     )
     .await
     .ok()
@@ -930,7 +919,7 @@ async fn run_ok(bin: &str, args: &[&str], accept: impl Fn(&str) -> bool) -> bool
 async fn which(cmd: &str) -> bool {
     tokio::time::timeout(
         Duration::from_secs(30),
-        safe_command("which").arg(cmd).output(),
+        safe_command("which").arg(cmd).kill_on_drop(true).output(),
     )
     .await
     .ok()
