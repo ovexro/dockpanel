@@ -246,12 +246,17 @@ pub async fn cmd_vol_backup_list(token: &str, container: &str, output: &str) -> 
     Ok(())
 }
 
-pub async fn cmd_backup_verify(token: &str, backup_type: &str, name: &str, filename: &str) -> Result<(), String> {
+pub async fn cmd_backup_verify(
+    token: &str, backup_type: &str, name: &str, filename: &str, db_type: &str,
+) -> Result<(), String> {
     println!("Verifying {backup_type} backup: {filename}...");
 
     let body = match backup_type {
         "site" => serde_json::json!({ "domain": name, "filename": filename }),
-        "database" => serde_json::json!({ "db_type": "postgres", "db_name": name, "filename": filename }),
+        // `db_type` was hardcoded to "postgres" here regardless of the database's
+        // real engine — a mysql/mariadb backup would always get a Postgres restore
+        // attempted against it and report FAILED, even when the backup was fine.
+        "database" => serde_json::json!({ "db_type": db_type, "db_name": name, "filename": filename }),
         "volume" => serde_json::json!({ "container_name": name, "filename": filename }),
         _ => return Err(format!("Invalid backup type: {backup_type}. Use site, database, or volume.")),
     };
@@ -282,10 +287,29 @@ pub async fn cmd_backup_verify(token: &str, backup_type: &str, name: &str, filen
     Ok(())
 }
 
+// `/var/backups/dockpanel`'s top level is not exclusively site-backup domain
+// directories — the agent also writes `databases/`, `volumes/`, `wp-snapshots/`,
+// `snapshots/`, `.staging/` and `.snapshot-staging/` there, and ops tooling
+// outside this codebase drops the panel's own DB dumps in a `db/` subdirectory
+// and as loose top-level files. Walking every top-level dir as if it were a site
+// domain folded all of that into "site backups" — reproducibly ~9x the real file
+// count and ~50000x the real size on this box. Anything starting with `.`, plus
+// every other subsystem's own root, is excluded from the site-backup count.
+const RESERVED_TOP_LEVEL_DIRS: &[&str] = &["databases", "volumes", "wp-snapshots", "snapshots", "db"];
+
+fn is_site_backup_dir(name: &str) -> bool {
+    !name.starts_with('.') && !RESERVED_TOP_LEVEL_DIRS.contains(&name)
+}
+
 pub async fn cmd_backup_health(token: &str) -> Result<(), String> {
     // This calls the API, not the agent. For CLI simplicity, show local backup counts.
     let site_dirs = std::fs::read_dir("/var/backups/dockpanel")
-        .map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+        .map(|d| {
+            d.filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .filter(|e| is_site_backup_dir(&e.file_name().to_string_lossy()))
+                .count()
+        })
         .unwrap_or(0);
     let db_dirs = std::fs::read_dir("/var/backups/dockpanel/databases")
         .map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
@@ -294,20 +318,26 @@ pub async fn cmd_backup_health(token: &str) -> Result<(), String> {
         .map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
         .unwrap_or(0);
 
-    // Count total files
-    let count_files = |dir: &str| -> (usize, u64) {
+    // Count total files. `only_site_dirs`, when set, skips every subdirectory that
+    // belongs to another subsystem's own root rather than a site backup — without
+    // it, `databases`/`volumes` scans would double-count their own children too.
+    let count_files = |dir: &str, only_site_dirs: bool| -> (usize, u64) {
         let mut count = 0usize;
         let mut size = 0u64;
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
-                if entry.path().is_dir() {
-                    if let Ok(sub) = std::fs::read_dir(entry.path()) {
-                        for f in sub.flatten() {
-                            if let Ok(m) = f.metadata() {
-                                if m.is_file() {
-                                    count += 1;
-                                    size += m.len();
-                                }
+                if !entry.path().is_dir() {
+                    continue;
+                }
+                if only_site_dirs && !is_site_backup_dir(&entry.file_name().to_string_lossy()) {
+                    continue;
+                }
+                if let Ok(sub) = std::fs::read_dir(entry.path()) {
+                    for f in sub.flatten() {
+                        if let Ok(m) = f.metadata() {
+                            if m.is_file() {
+                                count += 1;
+                                size += m.len();
                             }
                         }
                     }
@@ -317,9 +347,9 @@ pub async fn cmd_backup_health(token: &str) -> Result<(), String> {
         (count, size)
     };
 
-    let (site_count, site_size) = count_files("/var/backups/dockpanel");
-    let (db_count, db_size) = count_files("/var/backups/dockpanel/databases");
-    let (vol_count, vol_size) = count_files("/var/backups/dockpanel/volumes");
+    let (site_count, site_size) = count_files("/var/backups/dockpanel", true);
+    let (db_count, db_size) = count_files("/var/backups/dockpanel/databases", false);
+    let (vol_count, vol_size) = count_files("/var/backups/dockpanel/volumes", false);
 
     let total_size = site_size + db_size + vol_size;
     let total_count = site_count + db_count + vol_count;

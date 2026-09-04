@@ -117,6 +117,10 @@ pub async fn cmd_apply(token: &str, file: &str, dry_run: bool, email: Option<&st
                                         println!("\x1b[33mskipped\x1b[0m ({e})");
                                     }
                                 }
+                            } else {
+                                println!(
+                                    "  \x1b[33m!\x1b[0m {domain} requests ssl but no --email was given — skipping SSL provisioning (re-run with --email to provision it)"
+                                );
                             }
                         }
                     }
@@ -160,28 +164,39 @@ pub async fn cmd_apply(token: &str, file: &str, dry_run: bool, email: Option<&st
             if dry_run {
                 plan_create.push(desc);
             } else {
-                let password: String = (0..16)
-                    .map(|_| {
-                        let idx = (rand_byte() % 62) as usize;
-                        b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[idx] as char
-                    })
-                    .collect();
-
-                print!("  Creating database {name}... ");
-                let body = json!({
-                    "name": name,
-                    "engine": engine,
-                    "password": password,
-                    "port": port,
-                });
-                match client::agent_post("/databases", &body, token).await {
-                    Ok(_) => {
-                        println!("\x1b[32m✓\x1b[0m (password: {password})");
-                        applied += 1;
+                const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+                let mut password = String::with_capacity(16);
+                let mut entropy_error = None;
+                for _ in 0..16 {
+                    match rand_byte() {
+                        Ok(b) => password.push(CHARSET[(b % 62) as usize] as char),
+                        Err(e) => {
+                            entropy_error = Some(e);
+                            break;
+                        }
                     }
-                    Err(e) => {
-                        println!("\x1b[31m✗\x1b[0m ({e})");
-                        errors += 1;
+                }
+
+                if let Some(e) = entropy_error {
+                    println!("\x1b[31m✗\x1b[0m Creating database {name}... failed to generate a random password: {e}");
+                    errors += 1;
+                } else {
+                    print!("  Creating database {name}... ");
+                    let body = json!({
+                        "name": name,
+                        "engine": engine,
+                        "password": password,
+                        "port": port,
+                    });
+                    match client::agent_post("/databases", &body, token).await {
+                        Ok(_) => {
+                            println!("\x1b[32m✓\x1b[0m (password: {password})");
+                            applied += 1;
+                        }
+                        Err(e) => {
+                            println!("\x1b[31m✗\x1b[0m ({e})");
+                            errors += 1;
+                        }
                     }
                 }
             }
@@ -249,7 +264,17 @@ pub async fn cmd_apply(token: &str, file: &str, dry_run: bool, email: Option<&st
     }
 
     // ── Cron Jobs ───────────────────────────────────────────────────
+    // Unlike sites/databases/apps/php, crons DO reconcile on a real apply —
+    // /crons/sync replaces every entry whose id it's given. So the dry-run plan
+    // is wrong if it always calls every cron "to create": diff against what
+    // /iac/export already reported as current, the same source every other
+    // resource type in this function uses.
     let desired_crons = desired["crons"].as_array();
+    let current_crons: std::collections::HashMap<&str, &serde_json::Value> = current["crons"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|c| c["id"].as_str().map(|id| (id, c))).collect())
+        .unwrap_or_default();
+
     if let Some(crons) = desired_crons {
         if !crons.is_empty() {
             if dry_run {
@@ -257,7 +282,20 @@ pub async fn cmd_apply(token: &str, file: &str, dry_run: bool, email: Option<&st
                     let id = cron["id"].as_str().unwrap_or("-");
                     let schedule = cron["schedule"].as_str().unwrap_or("");
                     let command = cron["command"].as_str().unwrap_or("");
-                    plan_create.push(format!("cron: {id} ({schedule} {command})"));
+                    match current_crons.get(id) {
+                        Some(existing)
+                            if existing["schedule"].as_str() == Some(schedule)
+                                && existing["command"].as_str() == Some(command) =>
+                        {
+                            plan_skip.push(format!("cron: {id} (already exists, unchanged)"));
+                        }
+                        Some(_) => {
+                            plan_create.push(format!("cron: {id} (updated — {schedule} {command})"));
+                        }
+                        None => {
+                            plan_create.push(format!("cron: {id} ({schedule} {command})"));
+                        }
+                    }
                 }
             } else {
                 print!("  Syncing {} cron job(s)... ", crons.len());
@@ -327,6 +365,22 @@ pub async fn cmd_apply(token: &str, file: &str, dry_run: bool, email: Option<&st
                     }
                 }
             }
+        }
+    }
+
+    // ── Firewall ────────────────────────────────────────────────────
+    // Exported for reference (export/import round-trips it) but never reconciled
+    // here — apply has no create/update/delete logic for firewall rules at all.
+    // Silently dropping it left a user who edits firewall rules in the exported
+    // file and re-applies with no signal that nothing happened.
+    if let Some(fw) = desired.get("firewall") {
+        let rule_count = fw["rules"].as_array().map(|r| r.len()).unwrap_or(0);
+        if rule_count > 0 {
+            println!(
+                "\x1b[33m!\x1b[0m This file has a firewall section ({rule_count} rule(s)) — \
+                 `apply` does not create, update, or remove firewall rules. Manage them with \
+                 `dockpanel security firewall` instead."
+            );
         }
     }
 

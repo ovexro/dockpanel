@@ -333,6 +333,9 @@ enum BackupCmd {
         name: String,
         /// Backup filename
         filename: String,
+        /// Database type, only used when --type database: mysql, mariadb, or postgres
+        #[arg(long, default_value = "postgres")]
+        db_type: String,
     },
     /// Show backup health overview
     Health,
@@ -475,8 +478,8 @@ async fn main() {
             BackupCmd::VolList { container } => {
                 commands::backup::cmd_vol_backup_list(&token, &container, &output).await
             }
-            BackupCmd::Verify { r#type, name, filename } => {
-                commands::backup::cmd_backup_verify(&token, &r#type, &name, &filename).await
+            BackupCmd::Verify { r#type, name, filename, db_type } => {
+                commands::backup::cmd_backup_verify(&token, &r#type, &name, &filename, &db_type).await
             }
             BackupCmd::Health => {
                 commands::backup::cmd_backup_health(&token).await

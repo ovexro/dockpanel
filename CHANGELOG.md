@@ -4,6 +4,66 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.216.0]
+
+### Fixed — `panel/cli/src/commands/{db,backup,iac}.rs` full audit pass, and an off-menu agent orphan-process gap
+
+Direct continuation of v2.215.0: `db.rs`, `backup.rs`, and `iac.rs` were the 3 files that session's
+finder excluded from `panel/cli/src`'s fanout, reasoning "already partially checked at v2.197.0" — true
+only for one narrow bug class (plaintext DB passwords in argv). A full `dockpanel-fanout` finder/skeptic/
+critics run this session found 7 real, independently-verified defects across those 3 files plus one
+off-menu completeness-critic find in the agent crate.
+
+**`dockpanel backup verify --type database` always attempted a Postgres restore, regardless of the
+database's real engine.** `db_type` was hardcoded to `"postgres"` with no `--db-type` flag to override
+it, so a mysql/mariadb backup could never be successfully verified through the CLI — it would always
+misdispatch to the Postgres restore path and report the backup FAILED, even when it was fine. Fixed:
+`dockpanel backup verify` now takes `--db-type` (default `postgres`, for backward compatibility).
+
+**`dockpanel backup health` miscounted "site backups" by folding in every other backup subsystem's own
+root.** The top-level walk under `/var/backups/dockpanel` treated `databases/`, `volumes/`,
+`wp-snapshots/`, `snapshots/`, `.staging/`, `.snapshot-staging/`, and an unrelated ops `db/` dump
+directory as if each were a site's own backup folder — live-reproduced on this box as ~9x the real file
+count and ~50000x the real size. Fixed: the walk now excludes every known non-site subsystem root and
+any dotfile/dotdir.
+
+**`dockpanel apply` silently dropped an exported file's firewall rules.** `cmd_export`'s own output
+includes a `firewall` section, but `cmd_apply` never read it at all — no create, no warning, nothing. An
+operator editing firewall rules in the file and re-applying got total silent no-op. Fixed: `apply` now
+warns when the file names firewall rules, naming `dockpanel security firewall` as the actual way to
+manage them (full reconciliation is out of scope here — this is honesty, not a new feature).
+
+**`dockpanel apply` silently no-op'd `ssl: true` when no `--email` was given** — the site-creation line
+still printed a bare success tick as if SSL had been handled. Fixed: prints a warning naming what to
+re-run with.
+
+**`dockpanel apply --dry-run` always reported every cron job as "to create,"** even when byte-identical
+to what's already scheduled — the one resource type that DOES reconcile on a real apply (`/crons/sync`
+replaces every id it's given), so the dry-run plan was actively wrong, not just incomplete. Fixed: the
+dry-run plan now diffs against `/iac/export`'s own current-state cron list, same source every other
+resource type in the function already uses.
+
+**`db.rs`'s `rand_byte()` silently returned `0` if `/dev/urandom` was ever unreadable**, with no error
+surfaced — every one of the 16 bytes in an auto-generated database password would then come back `0`,
+producing the fully predictable `"aaaaaaaaaaaaaaaa"` printed to the operator as if it were a real
+generated secret. Fixed: `rand_byte()` now returns a `Result` and `iac.rs`'s password generator reports
+the failure instead of silently proceeding.
+
+**Off-menu (completeness critic): `panel/agent/src/services/remote_backup.rs`'s `run_sftp()` had no
+`kill_on_drop(true)`.** Its sibling `s3_curl()`, ~280 lines earlier in the same file, already carries
+this exact fix (v2.204.0) — a timed-out (dropped) future otherwise leaves `sftp`/`sshpass` running
+detached against the remote host. `run_sftp` backs every SFTP-destination backup upload (600s timeout)
+and the "Test Connection" button (20s) — was simply never in that commit's scope. Same fix as the 20+
+other call sites this pattern has been closed at across the crate since v2.203.0.
+
+Also corrected `docs/cli-reference.md`'s `apply` example, which showed a fabricated `[~] Update site:
+... (proxy_port 3000 → 3001)` line — a diff/reconcile capability that has never existed in the code
+(found independently by the skeptic, not the finder) — with real output and a note on what `apply`
+actually does and does not reconcile.
+
+New pin suite `tests/cli-io-crate-audit-pin-e2e.sh`, 19 assertions, mutation-tested via `git stash`:
+18/18 red pre-fix (1 unaffected positive control stayed green).
+
 ## [2.215.0]
 
 ### Fixed — `panel/cli` read four JSON field names the agent never emits, silently printing wrong or blank output

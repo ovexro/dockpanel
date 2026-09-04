@@ -680,14 +680,26 @@ dockpanel apply config.yml --email admin@example.com
 | `--dry-run` | No | Show changes without applying |
 | `--email` | No | Email for Let's Encrypt SSL provisioning |
 
+`apply` only creates resources that are missing — for sites, databases, apps and
+PHP versions it never diffs or updates something that already exists, even if the
+file describes it differently now (e.g. a changed `proxy_port` or `php_version`
+on an existing site is silently ignored). Cron jobs are the one exception: a
+matching `id` already in the crontab is compared and re-synced if its schedule or
+command changed. Firewall rules in an exported file are shown for reference only —
+`apply` never creates, updates, or removes them; manage those with
+`dockpanel security firewall`.
+
 Dry run output:
 
 ```
-DRY RUN — no changes will be made
-  [+] Create site: staging.example.com (static, SSL)
-  [~] Update site: api.example.com (proxy_port 3000 → 3001)
-  [=] No change: example.com
-  [+] Create database: staging_db (postgres, port 5434)
+Plan:
+  + site: staging.example.com (static)
+  = site: api.example.com (already exists)
+  + database: staging_db (postgres, port 5434)
+  + cron: nightly-backup (0 2 * * * /opt/scripts/backup.sh)
+  = cron: log-rotate (already exists, unchanged)
+
+3 to create, 2 existing
 ```
 
 ---

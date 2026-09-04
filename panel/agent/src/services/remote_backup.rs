@@ -369,6 +369,13 @@ async fn run_sftp(
     if let Some(ref pw) = pw_env {
         cmd.env("SSHPASS", pw);
     }
+    // safe_command sets no kill_on_drop, so a timed-out (dropped) future would
+    // otherwise leave sftp/sshpass running in the background against the remote
+    // host — the sibling s3_curl() above already carries this fix (v2.204.0);
+    // this call site was out of that commit's scope and has carried the gap
+    // since. Same fix as database.rs:317, migration.rs:91, database_backup.rs:424,
+    // security_scanner.rs:633 and 20+ other call sites in this crate.
+    cmd.kill_on_drop(true);
 
     // `sftp -b -` reads its command script from stdin, which keeps the script out
     // of the filesystem entirely — no temp file to create under `ProtectSystem=

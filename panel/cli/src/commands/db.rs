@@ -1,13 +1,17 @@
 use crate::client;
 use serde_json::json;
 
-pub(crate) fn rand_byte() -> u8 {
+/// Read one byte from `/dev/urandom`. Errors rather than silently returning 0 —
+/// a swallowed failure here used to make every generated password come back as
+/// the fully predictable `"aaaaaaaaaaaaaaaa"` with no signal to the operator.
+pub(crate) fn rand_byte() -> Result<u8, String> {
     use std::io::Read;
     let mut buf = [0u8; 1];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        f.read_exact(&mut buf).ok();
-    }
-    buf[0]
+    let mut f = std::fs::File::open("/dev/urandom")
+        .map_err(|e| format!("Cannot open /dev/urandom for password generation: {e}"))?;
+    f.read_exact(&mut buf)
+        .map_err(|e| format!("Cannot read /dev/urandom for password generation: {e}"))?;
+    Ok(buf[0])
 }
 
 pub async fn cmd_db_list(token: &str, output: &str, filter: Option<&str>) -> Result<(), String> {
