@@ -4,6 +4,43 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.215.0]
+
+### Fixed — `panel/cli` read four JSON field names the agent never emits, silently printing wrong or blank output
+
+Fresh audit rotation. The `panel/agent/src/{routes,services}` pool (79 files) is now exhausted of
+substantive never-primaried candidates — every remaining file carries real prior scrutiny, confirmed
+via a fresh two-direction pre-selection check this session. Pivoted to `panel/cli/src`, the gate's own
+named-but-never-fully-checked candidate pool: a `dockpanel-fanout` against the command files that had
+never had a dedicated finder/skeptic pass (`main.rs`, `apps.rs`, `status.rs`, `sites.rs`, `security.rs`,
+`client.rs`, `ssl.rs`, `php.rs`, `logs.rs`).
+
+**`dockpanel security`, `security firewall`, and `security scan` all read field names the agent's
+structs never had.** Every read resolved to `unwrap_or(default)`, so the bug was silent — no error, no
+panic, just "unknown"/"disabled"/blank output on a box where firewalld and fail2ban were genuinely
+active. `firewall_status`/`fail2ban_status` (strings) should have been `firewall_active`/
+`fail2ban_running` (bools); `ssl_coverage`/`scan_date` were read from fields `SecurityOverview` never
+had at all; the firewall list read `enabled` (real field: `active`) and `port`/`proto` on each rule
+(`FirewallRule` has only `number, to, action, from` — action is literally `"ALLOW IN"`/`"DENY IN"`,
+never bare `"allow"`); the scan command read a `risk_level` that doesn't exist on `ScanResult` and each
+finding's `message` (`Finding` has `title`/`description`, no `message`). Fixed: every read renamed to
+the agent's actual field names (cross-checked directly against the struct definitions), `risk_level`
+now derived client-side from the findings actually returned (using the real `critical`/`warning`/`info`
+severity vocabulary, not the fictional `low`/`medium`/`high` the old color-matching assumed), and the
+two dead SSL/scan-date lines replaced with `ssh_root_login`/`ssh_password_auth` — real fields the
+struct already carries for exactly this purpose. Read-only display paths only; the mutating
+`firewall add`/`remove` commands were already correct and untouched.
+
+**Off-menu, completeness-critic-found: `dockpanel backup list <domain>` always printed CREATED as
+`-`.** `commands/backup.rs`'s `cmd_backup_list` read `b["created"]`; the agent's `BackupInfo` struct has
+`created_at`, never `created` — and the same file's two sibling functions (`cmd_db_backup_list`,
+`cmd_vol_backup_list`) already read `created_at` correctly, so this was the one call site that never
+matched. `--output json` was unaffected (raw passthrough).
+
+New pin suite `tests/cli-field-mismatch-pin-e2e.sh`, 21 assertions (including 2 positive controls on
+the already-correct sibling functions), mutation-tested via `git stash`: 18/18 arms correctly red
+against pre-fix code, 3 controls stayed green.
+
 ## [2.214.0]
 
 ### Fixed — System Updates was apt-only and silently reported "0 updates" on RHEL, `from_name` never reached real mail, and a `msmtp.log`-wiping save

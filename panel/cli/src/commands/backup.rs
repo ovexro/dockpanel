@@ -53,7 +53,7 @@ pub async fn cmd_backup_list(token: &str, domain: &str, output: &str) -> Result<
         let filename = b["filename"].as_str().unwrap_or("-");
         let size = b["size_bytes"].as_u64().unwrap_or(0);
         let size_mb = size as f64 / 1_048_576.0;
-        let created = b["created"].as_str().unwrap_or("-");
+        let created = b["created_at"].as_str().unwrap_or("-");
 
         println!(
             "{:<40} {:<12} {:<20}",

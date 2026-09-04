@@ -11,21 +11,21 @@ pub async fn cmd_security_overview(token: &str, output: &str) -> Result<(), Stri
 
     println!("\x1b[1mSecurity Overview\x1b[0m");
 
-    let fw = overview["firewall_status"].as_str().unwrap_or("unknown");
-    let fw_color = if fw == "active" { "\x1b[32m" } else { "\x1b[31m" };
-    println!("  Firewall:    {fw_color}{fw}\x1b[0m");
+    let fw_active = overview["firewall_active"].as_bool().unwrap_or(false);
+    let fw_color = if fw_active { "\x1b[32m" } else { "\x1b[31m" };
+    println!("  Firewall:    {fw_color}{}\x1b[0m", if fw_active { "active" } else { "inactive" });
 
-    let f2b = overview["fail2ban_status"].as_str().unwrap_or("unknown");
-    let f2b_color = if f2b == "active" { "\x1b[32m" } else { "\x1b[31m" };
-    println!("  Fail2ban:    {f2b_color}{f2b}\x1b[0m");
+    let f2b_running = overview["fail2ban_running"].as_bool().unwrap_or(false);
+    let f2b_color = if f2b_running { "\x1b[32m" } else { "\x1b[31m" };
+    println!("  Fail2ban:    {f2b_color}{}\x1b[0m", if f2b_running { "active" } else { "inactive" });
 
-    if let Some(ssl) = overview["ssl_coverage"].as_str() {
-        println!("  SSL:         {ssl}");
-    }
+    let root_login = overview["ssh_root_login"].as_bool().unwrap_or(false);
+    let root_color = if root_login { "\x1b[31m" } else { "\x1b[32m" };
+    println!("  SSH root:    {root_color}{}\x1b[0m", if root_login { "enabled" } else { "disabled" });
 
-    if let Some(scan) = overview["scan_date"].as_str() {
-        println!("  Last scan:   {scan}");
-    }
+    let pw_auth = overview["ssh_password_auth"].as_bool().unwrap_or(false);
+    let pw_color = if pw_auth { "\x1b[33m" } else { "\x1b[32m" };
+    println!("  SSH password:{pw_color}{}\x1b[0m", if pw_auth { " enabled" } else { " disabled" });
 
     Ok(())
 }
@@ -40,34 +40,49 @@ pub async fn cmd_security_scan(token: &str, output: &str) -> Result<(), String> 
         return Ok(());
     }
 
-    let risk = result["risk_level"].as_str().unwrap_or("unknown");
+    let empty = Vec::new();
+    let findings = result["findings"].as_array().unwrap_or(&empty);
+
+    // The agent's ScanResult carries only per-finding severities, no
+    // precomputed overall risk_level — derive it from the highest severity
+    // among the findings actually returned. security_scanner.rs's only
+    // severity values are "critical"/"warning"/"info" (checked in source).
+    let risk_rank = |s: &str| match s {
+        "critical" => 3,
+        "warning" => 2,
+        "info" => 1,
+        _ => 0,
+    };
+    let risk = findings
+        .iter()
+        .filter_map(|f| f["severity"].as_str())
+        .max_by_key(|s| risk_rank(s))
+        .unwrap_or("info");
     let risk_color = match risk {
-        "low" => "\x1b[32m",
-        "medium" => "\x1b[33m",
-        "high" | "critical" => "\x1b[31m",
+        "critical" => "\x1b[31m",
+        "warning" => "\x1b[33m",
+        "info" => "\x1b[32m",
         _ => "\x1b[90m",
     };
 
     println!("\x1b[1mScan Results\x1b[0m");
     println!("  Risk level:  {risk_color}{risk}\x1b[0m");
 
-    if let Some(findings) = result["findings"].as_array() {
-        if findings.is_empty() {
-            println!("  \x1b[32mNo issues found.\x1b[0m");
-        } else {
-            println!();
-            for finding in findings {
-                let severity = finding["severity"].as_str().unwrap_or("info");
-                let message = finding["message"].as_str().unwrap_or("-");
-                let sev_color = match severity {
-                    "critical" | "high" => "\x1b[31m",
-                    "medium" => "\x1b[33m",
-                    _ => "\x1b[90m",
-                };
-                println!("  {sev_color}[{severity}]\x1b[0m {message}");
-            }
-            println!("\n{} finding(s)", findings.len());
+    if findings.is_empty() {
+        println!("  \x1b[32mNo issues found.\x1b[0m");
+    } else {
+        println!();
+        for finding in findings {
+            let severity = finding["severity"].as_str().unwrap_or("info");
+            let title = finding["title"].as_str().unwrap_or("-");
+            let sev_color = match severity {
+                "critical" => "\x1b[31m",
+                "warning" => "\x1b[33m",
+                _ => "\x1b[90m",
+            };
+            println!("  {sev_color}[{severity}]\x1b[0m {title}");
         }
+        println!("\n{} finding(s)", findings.len());
     }
 
     Ok(())
@@ -81,10 +96,10 @@ pub async fn cmd_firewall_list(token: &str, output: &str) -> Result<(), String> 
         return Ok(());
     }
 
-    let enabled = fw["enabled"].as_bool().unwrap_or(false);
+    let active = fw["active"].as_bool().unwrap_or(false);
     println!(
         "\x1b[1mFirewall:\x1b[0m {}",
-        if enabled {
+        if active {
             "\x1b[32menabled\x1b[0m"
         } else {
             "\x1b[31mdisabled\x1b[0m"
@@ -96,26 +111,25 @@ pub async fn cmd_firewall_list(token: &str, output: &str) -> Result<(), String> 
             println!("  No rules configured.");
         } else {
             println!(
-                "\n\x1b[1m{:<6} {:<8} {:<8} {:<10} {:<20}\x1b[0m",
-                "#", "PORT", "PROTO", "ACTION", "FROM"
+                "\n\x1b[1m{:<6} {:<12} {:<10} {:<20}\x1b[0m",
+                "#", "TO", "ACTION", "FROM"
             );
-            for (i, rule) in rules.iter().enumerate() {
-                let port = rule["port"].as_u64().map(|p| p.to_string()).unwrap_or("-".to_string());
-                let proto = rule["proto"].as_str().unwrap_or("-");
+            for rule in rules {
+                let number = rule["number"].as_u64().map(|n| n.to_string()).unwrap_or("-".to_string());
+                let to = rule["to"].as_str().unwrap_or("-");
                 let action = rule["action"].as_str().unwrap_or("-");
                 let from = rule["from"].as_str().unwrap_or("anywhere");
 
-                let color = if action == "allow" {
+                let color = if action.to_lowercase().contains("allow") {
                     "\x1b[32m"
                 } else {
                     "\x1b[31m"
                 };
 
                 println!(
-                    "{:<6} {:<8} {:<8} {color}{:<10}\x1b[0m {:<20}",
-                    i + 1,
-                    port,
-                    proto,
+                    "{:<6} {:<12} {color}{:<10}\x1b[0m {:<20}",
+                    number,
+                    to,
                     action,
                     from
                 );

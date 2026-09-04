@@ -482,15 +482,11 @@ dockpanel security
 ```
 
 ```
-SECURITY OVERVIEW
-─────────────────────────────────
-Score:           82/100
-Firewall:        active (UFW)
-Fail2Ban:        active (3 jails)
-SSH Root Login:  disabled
-SSH Password:    disabled
-2FA:             enabled
-Last Scan:       2026-03-19 02:00
+Security Overview
+  Firewall:    active
+  Fail2ban:    active
+  SSH root:    disabled
+  SSH password: disabled
 ```
 
 #### `dockpanel security scan`
@@ -503,18 +499,19 @@ dockpanel security scan
 
 ```
 Running security scan...
+Scan Results
+  Risk level:  warning
 
-FINDINGS
-  [HIGH]   Port 3306 exposed to all IPs
-  [MEDIUM] SSH password authentication still enabled
-  [LOW]    Unattended upgrades not configured
-  [PASS]   Firewall active
-  [PASS]   Fail2Ban running
-  [PASS]   SSH root login disabled
-  [PASS]   SSL certificates valid
+  [warning] Unexpected open port: 3306
+  [warning] SSH password authentication still enabled
+  [info]    Unattended upgrades not configured
 
-Score: 78/100 (3 findings)
+3 finding(s)
 ```
+
+Risk level and each finding's severity are one of `critical`/`warning`/`info`,
+derived from the findings the scan actually returns — there is no
+separate numeric score.
 
 #### `dockpanel security firewall`
 
@@ -525,11 +522,11 @@ dockpanel security firewall
 ```
 
 ```
-#    ACTION    FROM           PORT      PROTO
-1    allow     Anywhere       22/tcp    tcp
-2    allow     Anywhere       80/tcp    tcp
-3    allow     Anywhere       443/tcp   tcp
-4    allow     Anywhere       8443/tcp  tcp
+#      TO           ACTION     FROM
+1      22/tcp       ALLOW IN   Anywhere
+2      80/tcp       ALLOW IN   Anywhere
+3      443/tcp      ALLOW IN   Anywhere
+4      8443/tcp     ALLOW IN   Anywhere
 ```
 
 #### `dockpanel security firewall add`
