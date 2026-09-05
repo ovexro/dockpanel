@@ -4,6 +4,7 @@ use axum::{
 };
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::error::{err, err_coded, ApiError, CODE_SESSION_INVALID};
@@ -55,6 +56,16 @@ impl FromRequestParts<AppState> for AuthUser {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
             .map(|t| t.to_string());
+
+        // A `dp_`-prefixed bearer token is a long-lived API key (routes/api_keys.rs),
+        // not a session JWT — authenticate it against `api_keys` directly. Trying to
+        // `decode::<Claims>` it below would always fail, so without this branch every
+        // API key request would 401 as "Invalid or expired token" for the wrong
+        // reason and this scaffold would stay unwired, exactly as FEATURES.md's
+        // "Withdrawn Claims" section already documents it.
+        if let Some(key) = bearer_token.as_deref().filter(|t| t.starts_with("dp_")) {
+            return authenticate_api_key(state, key).await.map(AuthUser);
+        }
 
         let token = bearer_token.clone().or_else(|| {
                 // Fall back to cookie
@@ -125,6 +136,87 @@ impl FromRequestParts<AppState> for AuthUser {
 
         Ok(AuthUser(claims))
     }
+}
+
+/// Authenticate a `dp_`-prefixed API key (routes/api_keys.rs) and build the same
+/// `Claims` shape a JWT would, so it works for free on every `AuthUser`-gated
+/// handler. Unlike a JWT, a key has no `jti` of its own and is never on the
+/// per-token blacklist — it is revoked by deleting the `api_keys` row (or, for
+/// the global "revoke all sessions" / Panic Button controls below, by having
+/// been minted before that revocation fired: see the `created_at` check).
+///
+/// Failures here deliberately do NOT use `session_invalid()` — that marker
+/// means "the caller has no usable *session*" and its own doc comment says the
+/// same of the agent-token refusals below: a key is not a browser session that
+/// can be lost, so a bad key gets a plain 401 like `authenticate_agent` does,
+/// not the marker that tells a frontend to redirect to `/login`.
+async fn authenticate_api_key(state: &AppState, key: &str) -> Result<Claims, ApiError> {
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    let key_hash = hex::encode(hasher.finalize());
+
+    let row: Option<(Uuid, Uuid, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT id, user_id, created_at FROM api_keys WHERE key_hash = $1",
+    )
+    .bind(&key_hash)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| crate::error::internal_error("api_key lookup", e))?;
+
+    let (key_id, user_id, created_at) =
+        row.ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Invalid or expired token"))?;
+
+    // Parity with the JWT path's own revocation check (above) — "Revoke all
+    // sessions" and the Panic Button both promise a total logout, and a key
+    // minted before that moment fired is exactly the credential class an
+    // incident responder reaching for either control means to kill. A key
+    // rotated (or newly minted) AFTER the revocation naturally has a fresh
+    // `created_at` and keeps working, same as a JWT from a fresh login would.
+    {
+        let revoked_at = state.sessions_revoked_at.read().await;
+        if revoked_at.is_some_and(|ts| created_at.timestamp() < ts) {
+            return Err(err(StatusCode::UNAUTHORIZED, "Key revoked. Mint a new one."));
+        }
+    }
+
+    let user: Option<(String, String)> =
+        sqlx::query_as("SELECT email, role FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| crate::error::internal_error("api_key user lookup", e))?;
+
+    let (email, role) =
+        user.ok_or_else(|| err(StatusCode::UNAUTHORIZED, "Invalid or expired token"))?;
+
+    // Parity with the JWT path's own post-decode check (this file, below) — an
+    // account suspended after a key was minted must not keep authenticating.
+    if role == "suspended" {
+        return Err(err(StatusCode::FORBIDDEN, "Account suspended"));
+    }
+
+    // Best-effort bookkeeping — a failed UPDATE must not fail the request that
+    // is itself proof the key still works.
+    let _ = sqlx::query("UPDATE api_keys SET last_used_at = NOW() WHERE id = $1")
+        .bind(key_id)
+        .execute(&state.db)
+        .await;
+
+    let now = chrono::Utc::now().timestamp() as usize;
+    Ok(Claims {
+        sub: user_id,
+        email,
+        role,
+        // An API key has no session lifetime of its own — it lives until its
+        // `api_keys` row is deleted (or the revocation check above fires).
+        // `exp` still has to be a value in the future because nothing
+        // downstream re-checks how this Claims was built; it is never
+        // re-validated against a signature, so this is not a forgeable
+        // expiry, just a field every consumer of `Claims` expects.
+        exp: now + 315_360_000, // ~10 years
+        iat: now,
+        jti: None,
+    })
 }
 
 /// Admin-only JWT extractor — extracts Claims then verifies role == "admin".

@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.220.0.** The version stamp, the template count and every
+> **Reflects v2.221.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -402,7 +402,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. One-hundred-twenty-nine suites, **4307 assertions**, all green at the current commit:
+survivable. One-hundred-thirty suites, **4326 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -413,7 +413,7 @@ survivable. One-hundred-twenty-nine suites, **4307 assertions**, all green at th
 | `mail-auth-autosleep-pin-e2e.sh` | 28 |
 | `site-backup-databases-pin-e2e.sh` | 52 |
 | `git-deploy-sandbox-pin-e2e.sh` | 42 |
-| `ssl-correctness-pin-e2e.sh` | 96 |
+| `ssl-correctness-pin-e2e.sh` | 97 |
 | `dns01-renewal-pin-e2e.sh` | 63 |
 | `acme-account-identity-pin-e2e.sh` | 20 |
 | `nginx-listen-pin-e2e.sh` | 17 |
@@ -465,7 +465,7 @@ survivable. One-hundred-twenty-nine suites, **4307 assertions**, all green at th
 | `twofa-recovery-pin-e2e.sh` | 37 |
 | `passkey-enrolment-proof-pin-e2e.sh` | 27 |
 | `passkey-ceremony-pin-e2e.sh` | 34 |
-| `auth-401-meaning-pin-e2e.sh` | 20 |
+| `auth-401-meaning-pin-e2e.sh` | 21 |
 | `upgrade-reach-pin-e2e.sh` | 15 |
 | `access-recovery-pin-e2e.sh` | 67 |
 | `whmcs-config-writable-pin-e2e.sh` | 8 |
@@ -535,6 +535,7 @@ survivable. One-hundred-twenty-nine suites, **4307 assertions**, all green at th
 | `telemetry-oncall-db-audit-pin-e2e.sh` | 13 |
 | `drill-ws-backup-scope-pin-e2e.sh` | 29 |
 | `shutdown-drain-race-pin-e2e.sh` | 22 |
+| `api-key-auth-pin-e2e.sh` | 17 |
 
 **On a schedule, from outside** (`live-surfaces.yml`, daily). Every layer above
 runs because something changed, which is exactly why none of them could catch the

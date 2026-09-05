@@ -1,3 +1,4 @@
+mod backend_client;
 mod client;
 mod commands;
 

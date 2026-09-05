@@ -4,6 +4,80 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.221.0]
+
+### Added — the CLI can now restore a backup's DATABASE, not just its files
+
+`dockpanel backup restore` talked only to the local agent, which has no access to
+the panel's database credentials — an archive containing a database dump could
+never be fully restored from the CLI, only from the panel UI. Closed by wiring up
+`routes/api_keys.rs`'s previously-unwired `dp_`-prefixed API key scaffold
+(self-documented in FEATURES.md's "Withdrawn Claims" section as authenticating
+nothing) into `AuthUser`, so a key mints and authenticates exactly like a session
+JWT on every `AuthUser`-gated handler:
+
+- `panel/backend/src/auth.rs`: a `dp_`-prefixed bearer token is now hashed and
+  looked up in `api_keys` before any JWT decode is attempted, building the same
+  `Claims` shape a login would.
+- New `panel/cli/src/backend_client.rs`: a second CLI client (alongside
+  `client.rs`, which talks to the local agent) that talks to the panel API over
+  HTTP — base URL resolved from `/etc/dockpanel/api.env`'s own `LISTEN_ADDR`, the
+  key read from `/etc/dockpanel/backend.token` (root-only, mirrors
+  `agent.token`'s pattern). `cmd_backup_restore` now prefers this path when a key
+  is configured, resolving domain → site id and filename → backup id through the
+  panel's own listing endpoints, then following the same async restore + SSE
+  progress stream the panel UI's own Restore button uses.
+- Falls back to the pre-existing agent-only (files-only) restore path, unchanged,
+  when no key is configured — every install predating this release keeps working
+  exactly as before.
+
+**Caught before shipping by a 3-lens adversarial skeptic review** (correctness,
+completeness, blast-radius) against the initial cut, all four fixed:
+
+- API keys silently survived **"Revoke all sessions" and the Panic Button** —
+  both explicitly promise a total logout, but the key path never consulted
+  `sessions_revoked_at`. Fixed by comparing the key's own `created_at` against
+  the last revocation timestamp (a key has no `iat` of its own to re-derive); a
+  key rotated or minted after the revocation keeps working, same as a fresh
+  login would.
+- The CLI's SSE-stream reader latched "restore failed" off ANY intermediate
+  step carrying `status: "error"` — but the restore handler deliberately emits a
+  non-fatal advisory in that shape for a files-only archive restored onto a
+  database-attached site, and still finishes successfully. Fixed to decide
+  pass/fail from the terminal `complete` step's own status only, matching the
+  panel UI's own rule.
+- The CLI's domain→site-id lookup (`GET /api/sites`) is owner-scoped only, while
+  the restore endpoints it feeds also admit an administrator of the site's
+  machine — an admin's key could restore a site it administers but doesn't own
+  once it had the id, yet the CLI's own lookup would 404 first. Fixed with a
+  `GET /api/admin/sites` fallback.
+- `authenticate_api_key()`'s failures used the `session_invalid()` marker, whose
+  own doc comment reserves it for browser sessions that can be "lost" — a key is
+  the same session-less credential class as an agent token. Switched to a plain
+  401, matching `authenticate_agent()`.
+
+Also added, found during the same review: a `UNIQUE` index on `api_keys.key_hash`
+(the migration that created the table indexed `key_prefix`, never queried by, but
+not the column the actual lookup filters on — every key-authenticated request was
+sequential-scanning the whole table), and a byte-buffered SSE frame reader (the
+prior per-chunk `String::from_utf8_lossy` could corrupt a multi-byte character
+split across a chunk boundary).
+
+**Live-fire proof, not just source pins**: a throwaway Vultr VPS ran the real
+published v2.220.0 install, then had these locally-built binaries swapped in.
+Drove, through the CLI's own command, all of: a real database restored to a
+planted marker row (files AND database, end to end); an old key immediately
+refused after "Revoke all sessions", a freshly-minted one working right after;
+the exact files-only-metadata-but-real-DB-dump scenario that reproduced the
+"Restore failed" false negative pre-fix, now reporting success; and an admin's
+key restoring a site owned by a different user via the `/api/admin/sites`
+fallback. Box destroyed, account swept (0 instances / 0 snapshots / 0 reserved
+IPs / 0 block storage), no DNS touched (`.example` domains, IP-only install).
+
+New pin suite `tests/api-key-auth-pin-e2e.sh`, 17 assertions, mutation-tested via
+`git stash` (whole-feature-absent baseline) and targeted single-bug reintroductions
+against the otherwise-fixed code for the three highest-severity findings.
+
 ## [2.220.0]
 
 ### Fixed — the graceful-shutdown watchdog's root cause: no long-lived connection ever watched the shutdown signal

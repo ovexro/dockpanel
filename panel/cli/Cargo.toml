@@ -1,6 +1,6 @@
 [package]
 name = "dockpanel"
-version = "2.220.0"
+version = "2.221.0"
 license = "AGPL-3.0-only"
 edition = "2024"
 description = "CLI for DockPanel — self-hosted server management"
@@ -22,3 +22,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
 rpassword = "7"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

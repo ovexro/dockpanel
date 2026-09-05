@@ -68,6 +68,16 @@ pub async fn cmd_backup_list(token: &str, domain: &str, output: &str) -> Result<
 }
 
 pub async fn cmd_backup_restore(token: &str, domain: &str, filename: &str) -> Result<(), String> {
+    // Prefer the panel API when a key is configured (Settings → API Keys, saved
+    // to /etc/dockpanel/backend.token): it holds the site's database
+    // credentials and can restore a backup's database dumps as well as its
+    // files, which the agent alone structurally cannot. Falls back to the
+    // agent-direct path below (files only) when no key is configured — same
+    // behavior as every CLI install before this, unchanged.
+    if let Ok(backend_token) = crate::backend_client::load_token() {
+        return cmd_backup_restore_via_backend(&backend_token, domain, filename).await;
+    }
+
     println!("Restoring {domain} from {filename}...");
 
     // An archive that carries database dumps cannot be fully restored from
@@ -84,7 +94,8 @@ pub async fn cmd_backup_restore(token: &str, domain: &str, filename: &str) -> Re
             format!(
                 "{e}\n\nThis backup contains database dumps, and the CLI cannot restore them — it \
                  talks to the agent directly and has no access to the site's database credentials. \
-                 Restore this backup from the panel instead."
+                 Mint an API key from the panel (Settings → API Keys), save it to \
+                 /etc/dockpanel/backend.token, and retry — or restore this backup from the panel instead."
             )
         } else {
             e
@@ -104,6 +115,76 @@ pub async fn cmd_backup_restore(token: &str, domain: &str, filename: &str) -> Re
         return Err(format!("Failed to restore backup: {msg}"));
     }
 
+    Ok(())
+}
+
+/// The database-capable restore path: resolve domain → site id and filename →
+/// backup id through the panel API (the CLI only ever knew the agent's own
+/// domain-keyed addressing before this), kick off the same async restore the
+/// panel UI's own Restore button starts, then follow its progress stream to
+/// completion. `ServerScope` (which every panel route resolving `/api/sites`
+/// goes through) only re-derives a caller identity from the token when an
+/// `X-Server-Id` header is present — this never sends one, so it always
+/// resolves to the LOCAL server regardless of whether the caller authenticated
+/// with a JWT or a `dp_` key. That is exactly the single-box case this
+/// restore path is scoped to; a fleet CLI wanting a specific remote server
+/// would need that header wired through, not built here.
+async fn cmd_backup_restore_via_backend(token: &str, domain: &str, filename: &str) -> Result<(), String> {
+    let sites = crate::backend_client::get("/api/sites", token).await?;
+    let sites = sites.as_array().ok_or("Expected an array from /api/sites")?;
+    let owned_site_id = sites
+        .iter()
+        .find(|s| s["domain"].as_str() == Some(domain))
+        .and_then(|s| s["id"].as_str());
+
+    // GET /api/sites is scoped to sites this account literally OWNS — but the
+    // restore endpoint below (via SITE_CALLER_PREDICATE) also admits an admin
+    // of the machine a site runs on, same as the panel UI itself. Without this
+    // fallback, an admin's key could restore a site it administers but
+    // doesn't own once it knew the id, yet never reach that id at all because
+    // this lookup 404s first. GET /api/admin/sites is the panel's own broader
+    // listing for exactly this gap; a non-admin key gets a 403 here, which is
+    // swallowed (not surfaced) so the ORIGINAL "no site found" error below
+    // still fires for the common case instead of a confusing permission error.
+    let site_id = match owned_site_id {
+        Some(id) => id.to_string(),
+        None => crate::backend_client::get("/api/admin/sites", token)
+            .await
+            .ok()
+            .and_then(|v| v.as_array().cloned())
+            .and_then(|admin_sites| {
+                admin_sites
+                    .iter()
+                    .find(|s| s["domain"].as_str() == Some(domain))
+                    .and_then(|s| s["id"].as_str())
+                    .map(str::to_string)
+            })
+            .ok_or_else(|| format!("No site found for domain '{domain}' via the panel API"))?,
+    };
+
+    let backups = crate::backend_client::get(&format!("/api/sites/{site_id}/backups"), token).await?;
+    let backups = backups.as_array().ok_or("Expected an array from the backups list")?;
+    let backup_id = backups
+        .iter()
+        .find(|b| b["filename"].as_str() == Some(filename))
+        .and_then(|b| b["id"].as_str())
+        .ok_or_else(|| format!("No backup named '{filename}' found for {domain} via the panel API"))?
+        .to_string();
+
+    println!("Restoring {domain} from {filename} (via the panel API — files and databases)...");
+
+    let started = crate::backend_client::post_empty(
+        &format!("/api/sites/{site_id}/backups/{backup_id}/restore"),
+        token,
+    )
+    .await?;
+    let restore_id = started["restore_id"]
+        .as_str()
+        .ok_or("Panel API did not return a restore_id")?;
+
+    crate::backend_client::follow_progress(restore_id, token).await?;
+
+    println!("\x1b[32m✓\x1b[0m Backup restored");
     Ok(())
 }
 

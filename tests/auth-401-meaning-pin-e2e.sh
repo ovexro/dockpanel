@@ -158,15 +158,18 @@ else
   bad "A3 a session-death refusal is no longer marked — a dead session will not send the user to /login:$(printf "$MISSING")"
 fi
 
-# CONTAINMENT. After the fix the ONLY literal UNAUTHORIZED left in auth.rs are
-# the helper's own and the two agent-token refusals, which are deliberately
-# unmarked: an agent is not a browser and has no session to lose. A new one
-# appearing here SHOULD fail this arm and be classified by hand.
+# CONTAINMENT. After the fix, and after s467's authenticate_api_key(), the only
+# literal UNAUTHORIZEDs left in auth.rs are the helper's own, the two
+# agent-token refusals, and the three api_keys refusals — all five deliberately
+# unmarked: a `dp_` key is the same session-less credential class as an agent
+# token, presented fresh on every request, not a browser session that can be
+# "lost". A new one appearing here SHOULD fail this arm and be classified by
+# hand, same as it did for these three.
 N_UNAUTH=$(cnt "$AUTH_C" 'StatusCode::UNAUTHORIZED')
-if [ "$N_UNAUTH" -eq 3 ]; then
-  ok "A4 auth.rs spells UNAUTHORIZED exactly 3 times (the helper + the 2 agent-token refusals)"
+if [ "$N_UNAUTH" -eq 6 ]; then
+  ok "A4 auth.rs spells UNAUTHORIZED exactly 6 times (the helper + 2 agent-token + 3 api_keys refusals)"
 else
-  bad "A4 auth.rs spells UNAUTHORIZED $N_UNAUTH times, expected 3 — a new 401 here is either unmarked session death or a marked credential refusal; classify it"
+  bad "A4 auth.rs spells UNAUTHORIZED $N_UNAUTH times, expected 6 — a new 401 here is either unmarked session death or a marked credential refusal; classify it"
 fi
 
 if hasf "$AUTH_C" 'err(StatusCode::UNAUTHORIZED, "Missing authorization")' \
@@ -174,6 +177,29 @@ if hasf "$AUTH_C" 'err(StatusCode::UNAUTHORIZED, "Missing authorization")' \
   ok "A5 (context) the two agent-token refusals stay UNMARKED — an agent cannot make the client log a human out"
 else
   bad "A5 the agent-token refusals changed shape — if they now carry the marker, a stale agent token logs every operator out"
+fi
+
+# MEMBERSHIP for the three api_keys refusals, same discipline as SENTENCES
+# above for the marked ones — a threshold here could absorb one being deleted
+# while a different one was added by mistake.
+API_KEY_UNAUTH=(
+  'err(StatusCode::UNAUTHORIZED, "Invalid or expired token")'
+  'err(StatusCode::UNAUTHORIZED, "Key revoked. Mint a new one.")'
+)
+MISSING=""
+for s in "${API_KEY_UNAUTH[@]}"; do
+  hasf "$AUTH_C" "$s" || MISSING="$MISSING\n      $s"
+done
+# "Invalid or expired token" is deliberately spelled twice (key-not-found,
+# owning-user-not-found) — both unmarked, both the same sentence a JWT decode
+# failure ALSO uses (marked, via session_invalid, elsewhere in this file). Two
+# different marking states behind one sentence is intentional, not a
+# collision: the frontend only branches on the marker, never on the text.
+N_INVALID_OR_EXPIRED=$(cnt "$AUTH_C" 'err(StatusCode::UNAUTHORIZED, "Invalid or expired token")')
+if [ -z "$MISSING" ] && [ "$N_INVALID_OR_EXPIRED" -eq 2 ]; then
+  ok "A5b the three api_keys refusals (2x invalid/expired + 1x revoked) are present and UNMARKED"
+else
+  bad "A5b an api_keys refusal is missing, miscounted, or was marked:$(printf "$MISSING")"
 fi
 
 # The invariant's teeth: a handler must never mint this. If a route module can
