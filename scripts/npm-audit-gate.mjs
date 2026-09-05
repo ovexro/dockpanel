@@ -12,8 +12,16 @@
 // written reason. An allowlist entry that no longer matches anything is reported
 // too — an entry nothing can hit is how an allowlist quietly turns into a blanket.
 //
-// Usage:  node scripts/npm-audit-gate.mjs [--input audit.json] [--level high]
+// Usage:  node scripts/npm-audit-gate.mjs [--input audit.json] [--level moderate]
 //         (run from the directory holding the package.json to audit)
+//
+// s467: the default was `high` from the day this gate was written, which meant
+// a MODERATE-severity advisory never even reached the waived/blocking split
+// below — not waived, just silently below threshold. GitHub's Dependabot has no
+// such floor, so it flagged two `qs` advisories (website/server, both moderate)
+// that this gate had never been able to see, on any manifest, since it existed.
+// Lowered to `moderate` to match what Dependabot actually reports; `low`/`info`
+// stay excluded as genuinely not worth a blocked push over.
 //
 // Exit codes, kept distinct because the pre-push hook treats them differently:
 //   0  clean, or everything at/above the level is waived
@@ -52,7 +60,7 @@ const argOf = (flag) => {
   const i = args.indexOf(flag);
   return i === -1 ? null : args[i + 1];
 };
-const level = argOf('--level') ?? 'high';
+const level = argOf('--level') ?? 'moderate';
 const inputFile = argOf('--input');
 
 let raw;

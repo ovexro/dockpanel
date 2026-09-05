@@ -225,10 +225,14 @@ check "un-reviewed HIGH advisory fails the build"     "$(run_gate)" "1"
 mkreport "GHSA-0000-0000-0002" "critical" "some-lib"
 check "un-reviewed CRITICAL advisory fails the build" "$(run_gate)" "1"
 
-# Below the threshold is not a silent pass by accident — it is the same
-# --audit-level=high contract the job had before.
+# s467 CORR: the default floor dropped from `high` to `moderate` after it hid
+# two real `qs` advisories from every manifest since the gate was written (see
+# npm-audit-gate.mjs's own s467 comment) — so a moderate advisory now DOES fail
+# at the default, and `low` is the new "does not fail" floor.
 mkreport "GHSA-0000-0000-0003" "moderate" "some-lib"
-check "moderate advisory does not fail at --level high" "$(run_gate)" "0"
+check "moderate advisory fails at the default level" "$(run_gate)" "1"
+mkreport "GHSA-0000-0000-0004" "low" "some-lib"
+check "low advisory does not fail at the default level" "$(run_gate)" "0"
 
 echo '{"vulnerabilities":{},"metadata":{"vulnerabilities":{"total":0}}}' > "$TMP/report.json"
 check "a clean report passes" "$(run_gate)" "0"

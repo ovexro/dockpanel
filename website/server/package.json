@@ -28,6 +28,7 @@
   },
   "overrides": {
     "path-to-regexp": "^8.4.0",
-    "body-parser": "^2.3.0"
+    "body-parser": "^2.3.0",
+    "qs": "^6.16.0"
   }
 }
