@@ -533,6 +533,12 @@ pub async fn deploy_or_update(
     cpu_percent: Option<u64>,
     tls: TlsIntent<'_>,
 ) -> Result<GitDeployResult, String> {
+    // Held for the whole deploy/update, including the internal blue-green
+    // swap this function may perform — `blue_green_update` is called FROM
+    // here and must never acquire this same key itself (see site_lock's
+    // module doc; `tokio::sync::Mutex` is not reentrant).
+    let _guard = crate::site_lock::lock_site(&format!("git-deploy:{name}")).await;
+
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
 
@@ -898,6 +904,10 @@ pub async fn cleanup_container(
     known_domain: Option<&str>,
     known_port: Option<u16>,
 ) -> Result<(), String> {
+    // Same key namespace as `deploy_or_update` — see that function and
+    // site_lock's module doc.
+    let _guard = crate::site_lock::lock_site(&format!("git-deploy:{name}")).await;
+
     let docker =
         Docker::connect_with_local_defaults().map_err(|e| format!("Docker connect failed: {e}"))?;
 

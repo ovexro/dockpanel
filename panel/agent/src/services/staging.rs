@@ -17,6 +17,11 @@ fn validate_domain(domain: &str) -> Result<(), String> {
 pub async fn clone_files(source_domain: &str, target_domain: &str) -> Result<String, String> {
     validate_domain(source_domain)?;
     validate_domain(target_domain)?;
+
+    // Held through the rsync+chown below, both sites at once, in a fixed
+    // order — see site_lock's module doc.
+    let _guard = crate::site_lock::lock_sites(source_domain, target_domain).await;
+
     let source = format!("{WEB_ROOT}/{source_domain}/");
     let target = format!("{WEB_ROOT}/{target_domain}/");
 
@@ -72,6 +77,10 @@ pub async fn clone_files(source_domain: &str, target_domain: &str) -> Result<Str
 pub async fn sync_files(source_domain: &str, target_domain: &str) -> Result<String, String> {
     validate_domain(source_domain)?;
     validate_domain(target_domain)?;
+
+    // Held through the rsync+chown below — same reasoning as `clone_files`.
+    let _guard = crate::site_lock::lock_sites(source_domain, target_domain).await;
+
     let source = format!("{WEB_ROOT}/{source_domain}/");
     let target = format!("{WEB_ROOT}/{target_domain}/");
 
@@ -143,6 +152,10 @@ pub async fn site_disk_usage(domain: &str) -> Result<u64, String> {
 /// Delete a site's web directory.
 pub async fn delete_site_files(domain: &str) -> Result<(), String> {
     validate_domain(domain)?;
+
+    // Held through the delete below — see site_lock's module doc.
+    let _guard = crate::site_lock::lock_site(domain).await;
+
     let path = format!("{WEB_ROOT}/{domain}");
     if Path::new(&path).exists() {
         tokio::fs::remove_dir_all(&path)

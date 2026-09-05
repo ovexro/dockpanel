@@ -2676,7 +2676,14 @@ pub async fn wake_container(
         .await
         .map_err(|e| agent_error("Wake container", e))?;
 
-    // Update sleep state
+    // Update sleep state. The Docker start above already succeeded, so a DB
+    // hiccup here must not fail this request — but a swallowed error used to
+    // leave `is_sleeping` permanently desynced from reality: a container that
+    // is actually running would stay marked asleep and be permanently
+    // excluded from the auto-sleep sweeper's own reconciliation (it only acts
+    // on rows it believes are awake). Log it so the desync is at least
+    // observable, matching the pattern this project already uses for a
+    // non-fatal persistence failure (see `wp_hardening`'s upsert).
     sqlx::query(
         "UPDATE container_sleep_config SET is_sleeping = false, last_woken_at = NOW(), \
          last_activity_at = NOW(), updated_at = NOW() WHERE container_id = $1"
@@ -2684,6 +2691,7 @@ pub async fn wake_container(
     .bind(&container_id)
     .execute(&state.db)
     .await
+    .map_err(|e| tracing::warn!("Failed to persist wake state for container {container_id}: {e} — is_sleeping may now disagree with reality"))
     .ok();
 
     if let Some(name) = resolve_container_name(&agent, &container_id).await {
@@ -2714,6 +2722,11 @@ pub async fn sleep_container(
         .await
         .map_err(|e| agent_error("Sleep container", e))?;
 
+    // Same reasoning as `wake_container` above: the Docker stop already
+    // succeeded, so a DB hiccup here must not fail the request, but a
+    // swallowed error used to leave `is_sleeping` desynced — a container
+    // that is actually stopped could read as awake, hiding it from any
+    // sleeping-containers view. Log it, matching `wake_container`.
     sqlx::query(
         "UPDATE container_sleep_config SET is_sleeping = true, last_slept_at = NOW(), \
          total_sleeps = total_sleeps + 1, updated_at = NOW() WHERE container_id = $1"
@@ -2721,6 +2734,7 @@ pub async fn sleep_container(
     .bind(&container_id)
     .execute(&state.db)
     .await
+    .map_err(|e| tracing::warn!("Failed to persist sleep state for container {container_id}: {e} — is_sleeping may now disagree with reality"))
     .ok();
 
     if let Some(name) = resolve_container_name(&agent, &container_id).await {

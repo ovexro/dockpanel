@@ -3,6 +3,7 @@ import { Navigate } from "react-router-dom";
 import { useState, useEffect, useCallback } from "react";
 import { api, ApiError } from "../api";
 import { Link } from "react-router-dom";
+import { timeAgo } from "../utils/format";
 
 interface WPSite {
   site_id: string;
@@ -22,21 +23,68 @@ interface SecurityItem {
   severity?: string;
 }
 
+interface KnownVuln {
+  title: string;
+  severity: string;
+  fixed_in?: string | null;
+  vuln_type: string;
+}
+
+interface PluginVulnResult {
+  slug: string;
+  name: string;
+  installed_version: string;
+  latest_version?: string | null;
+  outdated: boolean;
+  vulnerabilities: KnownVuln[];
+}
+
+// The wire shape is nested (per-plugin, each carrying its own vuln list) —
+// this is the flattened row this page actually renders, one per vuln, so a
+// list entry can name both the plugin and the CVE-style title without the
+// render loop reaching back into two levels of the source data.
 interface VulnItem {
   severity: string;
-  title?: string;
-  name?: string;
+  title: string;
+  plugin: string;
 }
 
 interface VulnScanResult {
+  domain: string;
+  plugin_vulns: PluginVulnResult[];
   total_vulns: number;
   critical_count: number;
   high_count: number;
-  vulnerabilities: VulnItem[];
+  scanned_at: string;
+}
+
+// The agent's SiteScanResult.plugin_vulns[].vulnerabilities[] is the only
+// place a vuln's title/severity actually lives on the wire — a top-level
+// `vulnerabilities` field on VulnScanResult has never existed, which used to
+// leave this list permanently empty for every scan (the field name a prior
+// version of this page read, `.vulnerabilities`, doesn't exist at this level).
+function flattenVulns(result: VulnScanResult): VulnItem[] {
+  return (result.plugin_vulns ?? []).flatMap((p) =>
+    (p.vulnerabilities ?? []).map((v) => ({
+      severity: v.severity,
+      title: v.title,
+      plugin: p.name || p.slug,
+    }))
+  );
 }
 
 interface SecurityCheckResponse {
   checks?: SecurityItem[];
+}
+
+// One persisted row from GET /wordpress/{id}/hardening-history — the read
+// half of a write that has run on every security-check since 2026-03-19
+// with nothing ever reading it back (s468 completeness-critic finding).
+interface HardeningHistoryRow {
+  check_name: string;
+  status: string;
+  details?: string | null;
+  checked_at: string;
 }
 
 // One row of the per-site verdict POST /wordpress/bulk-update returns inside its 200.
@@ -66,6 +114,7 @@ export default function WordPressToolkit() {
   const [scanning, setScanning] = useState<string | null>(null);
   const [scanResults, setScanResults] = useState<Record<string, VulnScanResult>>({});
   const [securityChecks, setSecurityChecks] = useState<Record<string, SecurityItem[]>>({});
+  const [hardeningHistory, setHardeningHistory] = useState<Record<string, HardeningHistoryRow[]>>({});
   const [checkingAll, setCheckingAll] = useState(false);
   const [hardening, setHardening] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -86,6 +135,34 @@ export default function WordPressToolkit() {
   useEffect(() => {
     fetchSites();
   }, [fetchSites]);
+
+  // A pure DB read (no agent round-trip), so it's cheap to fetch for every
+  // site up front rather than gating it behind the security tab or a manual
+  // check — an operator who never clicks "Check" should still be able to see
+  // whether this site has ever been checked, and when.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        sites.map(async (site) => {
+          try {
+            const rows = await api.get<HardeningHistoryRow[]>(
+              `/sites/${site.site_id}/wordpress/hardening-history`
+            );
+            return [site.site_id, rows] as const;
+          } catch {
+            return [site.site_id, []] as const;
+          }
+        })
+      );
+      if (!cancelled) {
+        setHardeningHistory(Object.fromEntries(entries));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sites]);
 
   // Bulk update
   const handleBulkUpdate = async (target: string) => {
@@ -152,6 +229,18 @@ export default function WordPressToolkit() {
       const result = await api.get<SecurityCheckResponse>(`/sites/${siteId}/wordpress/security-check`);
       const checks: SecurityItem[] = Array.isArray(result?.checks) ? result.checks : [];
       setSecurityChecks((prev) => ({ ...prev, [siteId]: checks }));
+      // `security-check` just upserted wp_hardening rows for this site —
+      // refetch its history so "last checked" reflects the run that just
+      // happened, rather than waiting on the sites-array effect (which won't
+      // re-fire; the array reference is unchanged by a check).
+      try {
+        const history = await api.get<HardeningHistoryRow[]>(
+          `/sites/${siteId}/wordpress/hardening-history`
+        );
+        setHardeningHistory((prev) => ({ ...prev, [siteId]: history }));
+      } catch {
+        // Non-fatal — the live check result above already rendered.
+      }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Security check failed");
     }
@@ -496,7 +585,17 @@ export default function WordPressToolkit() {
                 {/* Scan results inline */}
                 {scanResults[site.site_id] && (
                   <div className="mt-3 pt-3 border-t border-dark-600">
-                    <div className="text-xs font-mono text-dark-300 mb-2">Last Scan Results</div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-xs font-mono text-dark-300">Last Scan Results</div>
+                      {scanResults[site.site_id].scanned_at && (
+                        <span
+                          className="text-xs font-mono text-dark-400"
+                          title={new Date(scanResults[site.site_id].scanned_at).toLocaleString()}
+                        >
+                          Scanned {timeAgo(scanResults[site.site_id].scanned_at)} — checked against 14 known plugin vulnerabilities, not a live feed
+                        </span>
+                      )}
+                    </div>
                     <div className="grid grid-cols-3 gap-2 text-xs font-mono">
                       <div>
                         <span className="text-dark-400">Total: </span>
@@ -515,10 +614,11 @@ export default function WordPressToolkit() {
                         </span>
                       </div>
                     </div>
-                    {Array.isArray(scanResults[site.site_id].vulnerabilities) &&
-                      scanResults[site.site_id].vulnerabilities.length > 0 && (
+                    {(() => {
+                      const vulns = flattenVulns(scanResults[site.site_id]);
+                      return vulns.length > 0 ? (
                         <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
-                          {scanResults[site.site_id].vulnerabilities.map((v, i) => (
+                          {vulns.map((v, i) => (
                             <div
                               key={i}
                               className="flex items-center gap-2 text-xs px-2 py-1 bg-dark-700 rounded"
@@ -532,12 +632,13 @@ export default function WordPressToolkit() {
                                     : "bg-dark-400"
                                 }`}
                               />
-                              <span className="text-dark-100 truncate">{v.title || v.name || "Unknown"}</span>
+                              <span className="text-dark-100 truncate">{v.title || v.plugin}</span>
                               <span className="text-dark-400 ml-auto shrink-0">{v.severity}</span>
                             </div>
                           ))}
                         </div>
-                      )}
+                      ) : null;
+                    })()}
                   </div>
                 )}
               </div>
@@ -590,6 +691,15 @@ export default function WordPressToolkit() {
               // advertised as auto-fixable, and no operator can press.
               const fixableIds =
                 checks?.filter((c) => c.status !== "pass" && c.auto_fixable).map((c) => c.name) || [];
+              // The most recent persisted check across every row, independent
+              // of whether `checks` (this tab's live in-memory result) is
+              // populated — so a site nobody has re-checked THIS session still
+              // shows when it was last checked, not a blank.
+              const history = hardeningHistory[site.site_id] || [];
+              const lastChecked = history.reduce<string | null>(
+                (latest, row) => (!latest || row.checked_at > latest ? row.checked_at : latest),
+                null
+              );
 
               return (
                 <div
@@ -615,6 +725,12 @@ export default function WordPressToolkit() {
                             : `${openChecks.length} Issue${openChecks.length !== 1 ? "s" : ""}`}
                         </span>
                       )}
+                      <span
+                        className="text-xs text-dark-400 font-mono"
+                        title={lastChecked ? new Date(lastChecked).toLocaleString() : undefined}
+                      >
+                        {lastChecked ? `Checked ${timeAgo(lastChecked)}` : "Never checked"}
+                      </span>
                     </div>
                     <div className="flex items-center gap-2">
                       {fixableIds.length > 0 && (

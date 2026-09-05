@@ -68,6 +68,11 @@ async fn restore(
         return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
     }
 
+    // Held through the extraction+chown below — see site_lock's module doc
+    // for why a restore and e.g. a concurrent hardening apply must not
+    // interleave on the same site's files.
+    let _guard = crate::site_lock::lock_site(&domain).await;
+
     let databases = body.map(|Json(b)| b.databases).unwrap_or_default();
 
     let report = backups::restore_backup(&domain, &filename, &databases)
@@ -361,6 +366,9 @@ async fn restic_restore(
     if snapshot_id.len() < 6 || !snapshot_id.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid snapshot ID"));
     }
+
+    // Held through the restic restore below — same reasoning as `restore` above.
+    let _guard = crate::site_lock::lock_site(&domain).await;
 
     ensure_restic().await?;
 

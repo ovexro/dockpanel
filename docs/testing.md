@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.221.0.** The version stamp, the template count and every
+> **Reflects v2.222.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -372,7 +372,7 @@ found things from coming back.
 
 **On every commit** (`ci.yml`, `codeql.yml`):
 
-- **701 unit tests** across the crates — 437 in the backend, 264 in the agent.
+- **810 unit tests** across the crates — 474 in the backend, 336 in the agent.
   (The CLI crate carries none of its own today.) Re-derive rather than trust
   this line: `for c in agent backend cli; do (cd panel/$c && cargo test
   --release); done` and sum the `test result:` lines. Nothing recomputes this
@@ -381,12 +381,14 @@ found things from coming back.
   of number that goes quietly stale, and it had: this line still read 294 when
   the count was measured for v2.48.0.
 
-  **And it went stale again.** It read `493 — 334 backend, 159 agent` until
-  v2.113.0, against a real 537. The paragraph above correctly names the reason —
-  nothing recomputes it — so the warning was not the missing part. Treat every
-  figure on this page that no suite re-derives as suspect by default, and note
-  that three unit tests are `#[ignore]`d and therefore excluded from the count
-  above: they need a Docker daemon and are described under the drills.
+  **And it went stale again, twice.** It read `493 — 334 backend, 159 agent`
+  until v2.113.0, against a real 537, and then `701 — 437 backend, 264 agent`
+  until v2.222.0, against a real 810. The paragraph above correctly names the
+  reason — nothing recomputes it — so the warning was not the missing part.
+  Treat every figure on this page that no suite re-derives as suspect by
+  default, and note that five unit tests are `#[ignore]`d and therefore
+  excluded from the count above: they need a Docker daemon and are described
+  under the drills.
 - **`cargo audit` on all three crates, enforcing.** A real advisory fails the
   build. One accepted, upstream-blocked item is ignored narrowly, in a
   committed config, with the reason written down.

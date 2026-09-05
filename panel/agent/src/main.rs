@@ -4,6 +4,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 mod routes;
 pub mod safe_cmd;
 mod services;
+pub mod site_lock;
 mod tls;
 
 use axum::{middleware, Router};

@@ -4,6 +4,51 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.222.0]
+
+### Fixed — WordPress Toolkit second-pass audit: version-comparison correctness, a dead vuln-detail list, and zero site-level concurrency control
+
+A second-pass fan-out audit on `wp_vulnerability.rs` (already fully audited once,
+v2.206.0) found and fixed:
+
+- **`version_lt` silently dropped unparseable version segments** rather than
+  failing the comparison, which shifted every later segment left by one
+  position — a positional corruption that could report a vulnerable plugin as
+  clean, or a patched one as vulnerable, whenever its version string carried a
+  qualifier suffix (`-beta`, `-rc1`). Now fails closed: any segment that isn't
+  a plain integer makes the comparison report "vulnerable" rather than guess.
+  Mutation-tested — the new pin suite goes red against the old logic.
+- **The WordPress vuln-detail list has never rendered, for any scan, ever.**
+  The frontend read a `.vulnerabilities` field that has never existed on the
+  wire (the real field is nested per-plugin, `plugin_vulns[].vulnerabilities`)
+  — found independently by this session's own skeptic pass, which caught the
+  finder's characterization of "current behavior" as wrong. Fixed by reading
+  the real shape and flattening it for display; also now shows when a scan
+  ran and that it checks against 14 known plugin vulnerabilities, not a live
+  feed — both were computed and sent by the backend already, just never read.
+- **No site-level concurrency control existed anywhere in the agent crate.**
+  WordPress hardening (`apply_hardening`) and the update-with-rollback flow
+  could interleave on the same site: a hardening fix applied while an update
+  was mid-flight could be silently discarded if the update's post-check
+  failed and rolled back to a pre-hardening snapshot. The same gap existed
+  for backup restore, staging file sync/clone/delete, and git deploy — none
+  of them coordinated with each other or themselves. New `site_lock` module
+  (a per-domain async lock registry) is now held by all 9 site-mutating entry
+  points for the duration of their work.
+- **`wp_hardening` was a write-only table** — every security check has
+  persisted a row since the table was created (2026-03-19), and nothing ever
+  read it back, so "last checked" information existed in Postgres but was
+  unreachable from the UI. New `GET /wordpress/{id}/hardening-history`
+  endpoint and a "Checked Xh ago" / "Never checked" caption on each site's
+  security card.
+- **Off-menu (completeness/setup critics): Docker Apps wake/sleep silently
+  swallowed a DB write failure**, which could permanently desync
+  `is_sleeping` from the container's real state (a running container stuck
+  "asleep" and excluded from the auto-sleep sweeper forever, or the reverse).
+  The underlying Docker action already succeeded by the time this runs, so
+  the request still can't fail on it — but the failure is now logged instead
+  of silently discarded.
+
 ## [2.221.0]
 
 ### Added — the CLI can now restore a backup's DATABASE, not just its files

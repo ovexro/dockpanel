@@ -59,7 +59,7 @@ The frontend dev server proxies `/api` to `127.0.0.1:3080` (see `panel/frontend/
 panel/
 ├── agent/       # Rust — host-level operations (Docker, Nginx, SSL, terminal)
 │   ├── src/routes/     # HTTP endpoint handlers (39 files)
-│   └── src/services/   # Business logic (38 files)
+│   └── src/services/   # Business logic (40 files)
 ├── backend/     # Rust — API server, auth, DB, multi-server dispatch
 │   ├── src/routes/     # REST endpoints (62 files)
 │   ├── src/services/   # Background tasks (36 files)

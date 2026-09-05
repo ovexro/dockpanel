@@ -632,6 +632,14 @@ pub async fn health_check(domain: &str) -> bool {
 
 /// Update WordPress with snapshot + rollback on failure.
 pub async fn update_with_rollback(domain: &str) -> Result<serde_json::Value, String> {
+    // Held for the whole snapshot→update→rollback sequence: the snapshot at
+    // step 2 is a point-in-time copy of the docroot, and a rollback at step 6
+    // restores it unconditionally. Anything else that writes into this
+    // site's files while that window is open (hardening, a backup restore, a
+    // staging sync) would otherwise be silently discarded by the rollback, or
+    // itself discard the update — see site_lock's module doc.
+    let _guard = crate::site_lock::lock_site(domain).await;
+
     let mut log: Vec<String> = Vec::new();
 
     // 1. Health check before update

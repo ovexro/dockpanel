@@ -1402,6 +1402,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/wordpress/bulk-update", post(wordpress::bulk_update))
         .route("/api/sites/{id}/wordpress/vuln-scan", post(wordpress::vuln_scan))
         .route("/api/sites/{id}/wordpress/security-check", get(wordpress::security_check))
+        .route("/api/sites/{id}/wordpress/hardening-history", get(wordpress::hardening_history))
         .route("/api/sites/{id}/wordpress/harden", post(wordpress::wp_harden))
         // WordPress Management
         .route("/api/sites/{id}/wordpress", get(wordpress::info))

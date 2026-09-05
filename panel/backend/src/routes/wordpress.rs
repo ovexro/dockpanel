@@ -451,6 +451,49 @@ pub async fn security_check(
     Ok(Json(result))
 }
 
+/// GET /api/sites/{id}/wordpress/hardening-history — Last persisted result
+/// per check, from `wp_hardening`.
+///
+/// `security_check` above has written this table on every run since the
+/// migration that created it (2026-03-19) — but nothing ever read it back.
+/// The symptom the write path's own code comment describes ("refresh the
+/// page, restart the backend, or come back next week and there is no record
+/// of what a site's hardening status was or when it was last checked") was
+/// still literally true of the running product because only the storage
+/// half of that fix ever shipped. This is the read half.
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct HardeningHistoryRow {
+    check_name: String,
+    status: String,
+    details: Option<String>,
+    checked_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub async fn hardening_history(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<HardeningHistoryRow>>, ApiError> {
+    let site: crate::models::Site = sqlx::query_as(&format!("SELECT s.* FROM sites s WHERE {}", crate::helpers::SITE_CALLER_PREDICATE))
+        .bind(id)
+        .bind(claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("hardening history", e))?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
+
+    let rows: Vec<HardeningHistoryRow> = sqlx::query_as(
+        "SELECT check_name, status, details, checked_at FROM wp_hardening \
+         WHERE site_id = $1 ORDER BY check_name",
+    )
+    .bind(site.id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| internal_error("hardening history", e))?;
+
+    Ok(Json(rows))
+}
+
 /// POST /api/sites/{id}/wordpress/harden — Apply security fixes.
 pub async fn wp_harden(
     State(state): State<AppState>,
