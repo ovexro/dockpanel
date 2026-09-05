@@ -4,6 +4,51 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.219.0]
+
+### Fixed — batched small-file tail audit: drill timeout, ws revocation, and three unscoped backup-management routes
+
+`dockpanel-fanout` run as 3 structured topics (scheduling-runbooks, observability, fleet-lifecycle)
+across the last 14 never-audited files in the `panel/backend/src/{routes,services}` rotation. Found
+and fixed 5 issues, 4 on-menu and 1 off-menu:
+
+- **A scheduled or on-demand backup drill's agent call was capped at 60s total round trip, but the
+  restore it triggers is budgeted 220s (mariadb) to 360s (volume)** — any drill against a non-trivial
+  backup was killed by the client and recorded `status = 'failed'`, a false DR-failure signal on a
+  healthy backup. Fixed both `drill_scheduler.rs` (scheduled) and `backup_orchestrator.rs`'s
+  `trigger_drill` (on-demand) via a new `DRILL_TIMEOUT_SECS` (420s), the same `post_long` pattern
+  `DB_RESTORE_TIMEOUT_SECS` already established for real restores in this file.
+- **`drill_scheduler.rs`'s `tick()` stamped `last_drill_at` unconditionally BEFORE dispatch**, so a
+  policy whose server had been unreachable for weeks (or that kept losing the concurrency guard to a
+  sibling policy) read as "freshly drilled" on every cron tick — the one case a DR-verification
+  timestamp most needs to flag was the case it hid. Fixed: the stamp now only advances once a drill
+  actually enqueues.
+- **The live-metrics websocket (`ws_metrics.rs`) validated the JWT — expiry, blacklist, global session
+  revocation, admin role — only at handshake**, never again for the life of the connection. Logout, the
+  panic button, and `POST /auth/revoke-all` all closed the door to new connections but left an
+  already-open socket streaming the full process/network/GPU/system feed for as long as the TCP
+  connection stayed alive, unbounded even by the token's own nominal expiry — directly undermining the
+  panic button's own stated purpose. Fixed: every 5s tick now re-validates and closes the socket the
+  instant any handshake condition would now reject it.
+- **`chain_report_json`/`chain_report_pdf` and `list_all_backups` accepted a caller-supplied backup id
+  / listed the whole fleet with no ownership scoping** — any admin could pull another admin's full
+  chain-of-trust report (site domain, db/container:volume names, filenames, hash chain, every
+  verification and drill) as JSON or PDF, with `list_all_backups` as the exact discovery channel for
+  the ids needed. Identical bug class already fixed once in this file for `list_volume_backups`
+  (v2.184.0) — missed for these two. Fixed: every query now scopes by `is_local OR user_id = caller`,
+  mirroring the v2.184.0 remedy.
+- **(off-menu, completeness critic) `backup_destinations.rs`'s `list`/`update`/`remove`/
+  `test_connection` all queried or mutated a destination by bare id, gated only by admin role** —
+  asymmetric with `create` in the same file, which already scopes `server_id` by ownership. A second
+  admin could overwrite another admin's S3/SFTP destination credentials; the next scheduled backup for
+  any policy pointing at it would silently upload the target server's data into the second admin's own
+  bucket. Fixed: all four now scope by the same `is_local OR user_id = caller` predicate `create`
+  already established.
+
+New pin suite `tests/drill-ws-backup-scope-pin-e2e.sh` (29 assertions), mutation-tested via `git
+stash` of the 5 touched files (23/23 fix-assertions correctly red pre-fix, 6/6 controls green
+throughout).
+
 ## [2.218.0]
 
 ### Fixed — `telemetry.rs`+`telemetry_collector.rs` audit: a false transparency claim, an on-call paging gap, and a defense-in-depth container guard

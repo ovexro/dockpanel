@@ -87,12 +87,20 @@ pub struct UpdateDestinationRequest {
 /// GET /api/backup-destinations — List all backup destinations (admin).
 pub async fn list(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
 ) -> Result<Json<Vec<BackupDestination>>, ApiError> {
 
+    // Scoped the same way `create` below already scopes a destination's `server_id`
+    // (`is_local OR user_id = caller`) — before this fix it was a bare, unscoped
+    // `SELECT *`, handing every admin account the name/type/server of every OTHER
+    // admin's destinations, the discovery channel for the (also fixed this session)
+    // unscoped `update`/`remove`/`test_connection` below.
     let dests: Vec<BackupDestination> = sqlx::query_as(
-        "SELECT * FROM backup_destinations ORDER BY created_at DESC LIMIT 200",
+        "SELECT bd.* FROM backup_destinations bd LEFT JOIN servers s ON bd.server_id = s.id \
+         WHERE (bd.server_id IS NULL OR s.is_local OR s.user_id = $1) \
+         ORDER BY bd.created_at DESC LIMIT 200",
     )
+    .bind(claims.sub)
     .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("list backup_destinations", e))?;
@@ -190,11 +198,31 @@ pub async fn create(
 /// PUT /api/backup-destinations/{id} — Update a destination.
 pub async fn update(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateDestinationRequest>,
 ) -> Result<Json<BackupDestination>, ApiError> {
 
+    // Ownership check — unlike `create` above, this used to accept a bare `id` with no
+    // scope at all, so a second admin could overwrite ANOTHER admin's destination
+    // (bucket, secret_key, password) with their own credentials. The next scheduled
+    // backup for any policy pointing at it would then silently upload the target
+    // server's data into the second admin's own bucket — an exfiltration primitive,
+    // not just a read leak, with no activity-log entry on this route to notice it by.
+    // Same predicate `create` uses for `server_id`: this machine, or a server the
+    // caller registered.
+    let owned: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT bd.id FROM backup_destinations bd LEFT JOIN servers s ON bd.server_id = s.id \
+         WHERE bd.id = $1 AND (bd.server_id IS NULL OR s.is_local OR s.user_id = $2)",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("update backup_destinations", e))?;
+    if owned.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Destination not found"));
+    }
 
     // ENCRYPT FIRST, THEN carry the masked values across.
     //
@@ -274,10 +302,24 @@ pub async fn update(
 /// DELETE /api/backup-destinations/{id} — Delete a destination.
 pub async fn remove(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
 
+    // Ownership check — same gap and same fix as `update` above: this machine, or a
+    // server the caller registered.
+    let owned: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT bd.id FROM backup_destinations bd LEFT JOIN servers s ON bd.server_id = s.id \
+         WHERE bd.id = $1 AND (bd.server_id IS NULL OR s.is_local OR s.user_id = $2)",
+    )
+    .bind(id)
+    .bind(claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| internal_error("remove backup_destinations", e))?;
+    if owned.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Destination not found"));
+    }
 
     // Check for dependent backup schedules
     let dependent_count: (i64,) = sqlx::query_as(
@@ -333,19 +375,26 @@ pub async fn remove(
 /// the wrong scope; it had no scope at all.
 pub async fn test_connection(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-
 
     // Columns rather than `SELECT *` into `BackupDestination`: the struct is the
     // API's response shape and has no `server_id`, and the payload builder takes
     // `dtype` + `config` precisely so a caller holding loose columns need not
     // rebuild a row to use it.
+    //
+    // Ownership-scoped, same predicate `create`/`update`/`remove` use — this used to be
+    // a bare `WHERE id = $1`, which handed a caller the DECRYPTED credential (S3 secret
+    // key, SFTP password) of a destination another admin created, since the response
+    // this handler builds threads `config` straight to the agent unmasked.
     let row: Option<(String, String, serde_json::Value, Option<Uuid>)> = sqlx::query_as(
-        "SELECT name, dtype, config, server_id FROM backup_destinations WHERE id = $1",
+        "SELECT bd.name, bd.dtype, bd.config, bd.server_id FROM backup_destinations bd \
+         LEFT JOIN servers s ON bd.server_id = s.id \
+         WHERE bd.id = $1 AND (bd.server_id IS NULL OR s.is_local OR s.user_id = $2)",
     )
     .bind(id)
+    .bind(claims.sub)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| internal_error("test connection", e))?;

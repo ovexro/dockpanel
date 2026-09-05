@@ -266,12 +266,22 @@ pub struct ServerSla {
 
 /// GET /api/backup-orchestrator/all — Unified fleet-wide backup list across site, database, and volume backups.
 ///
-/// Admin-only, paginated. Optional filters: `kind` (site|database|volume) and `server_id`.
+/// Scoped, not truly fleet-wide despite the name: an admin sees the local server plus any
+/// server THEY registered, same predicate `list_volume_backups`/`chain_report` use (v2.184.0
+/// / this session). Before this fix `AdminUser` alone gated it — a flat, unscoped CTE handing
+/// every admin account the backup ids and resource names (site domains, db/container:volume
+/// names, filenames, sizes) of the ENTIRE fleet, including servers another admin registered.
+/// That id was also the exact discovery channel a caller needed to walk into the (now also
+/// fixed) unscoped chain-report endpoints.
+///
+/// Optional filters: `kind` (site|database|volume) and `server_id`.
 /// Site backups derive their server via `sites.server_id`; database and volume backups carry
-/// `server_id` directly (nullable — NULL is joined to the unique local server row).
+/// `server_id` directly (nullable — a NULL row predates the fleet backfill and is treated as
+/// local, matching the COALESCE default below; it is visible to every admin the same as any
+/// other local-server row, never scoped away).
 pub async fn list_all_backups(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Query(params): Query<UnifiedBackupsQuery>,
 ) -> Result<Json<UnifiedBackupsResponse>, ApiError> {
     let (limit, offset) = paginate(params.limit, params.offset);
@@ -318,6 +328,7 @@ pub async fn list_all_backups(
            FROM unified u LEFT JOIN servers srv ON srv.id = u.server_id \
           WHERE ($1::uuid IS NULL OR u.server_id = $1) \
             AND ($2::text IS NULL OR u.kind = $2) \
+            AND (u.server_id IS NULL OR srv.is_local OR srv.user_id = $5) \
           ORDER BY u.created_at DESC LIMIT $3 OFFSET $4"
     );
 
@@ -326,19 +337,23 @@ pub async fn list_all_backups(
         .bind(&kind_filter)
         .bind(limit)
         .bind(offset)
+        .bind(claims.sub)
         .fetch_all(&state.db)
         .await
         .map_err(|e| internal_error("list all backups", e))?;
 
     let count_sql = format!(
-        "{cte} SELECT COUNT(*)::bigint FROM unified u \
+        "{cte} SELECT COUNT(*)::bigint FROM unified u LEFT JOIN servers srv ON srv.id = u.server_id \
           WHERE ($1::uuid IS NULL OR u.server_id = $1) \
-            AND ($2::text IS NULL OR u.kind = $2)"
+            AND ($2::text IS NULL OR u.kind = $2) \
+            AND (u.server_id IS NULL OR srv.is_local OR srv.user_id = $3) \
+          "
     );
 
     let (total,): (i64,) = sqlx::query_as(&count_sql)
         .bind(params.server_id)
         .bind(&kind_filter)
+        .bind(claims.sub)
         .fetch_one(&state.db)
         .await
         .map_err(|e| internal_error("list all backups count", e))?;
@@ -1644,8 +1659,11 @@ pub async fn trigger_drill(
     let backup_type = req.backup_type.clone();
     let backup_id = req.backup_id;
 
-    // Run drill async — the agent call can take 20-60s (DB drill is slower:
-    // engine container boot + full restore + ANALYZE).
+    // Run drill async. Uses post_long: a plain `post` caps the whole round trip at 60s,
+    // but the agent-side restore this triggers is budgeted 220s (database) to 360s
+    // (volume: 300s restore + 60s probe) — see drill_scheduler.rs's identical fix for the
+    // scheduled path, which this on-demand button shares the same underlying agent
+    // handlers with.
     tokio::spawn(async move {
         let result: Result<serde_json::Value, String> = match backup_type.as_str() {
             "site" => {
@@ -1657,7 +1675,7 @@ pub async fn trigger_drill(
                 match row {
                     Ok(Some((domain, filename))) => {
                         let body = serde_json::json!({ "domain": domain, "filename": filename });
-                        agent.post("/backups/drill/site", Some(body)).await.map_err(|e| e.to_string())
+                        agent.post_long("/backups/drill/site", Some(body), crate::services::agent::DRILL_TIMEOUT_SECS).await.map_err(|e| e.to_string())
                     }
                     Ok(None) => Err("Site backup not found".to_string()),
                     Err(e) => {
@@ -1678,7 +1696,7 @@ pub async fn trigger_drill(
                             "db_name": db_name,
                             "filename": filename,
                         });
-                        agent.post("/backups/drill/db", Some(body)).await.map_err(|e| e.to_string())
+                        agent.post_long("/backups/drill/db", Some(body), crate::services::agent::DRILL_TIMEOUT_SECS).await.map_err(|e| e.to_string())
                     }
                     Ok(None) => Err("Database backup not found".to_string()),
                     Err(e) => {
@@ -1698,7 +1716,7 @@ pub async fn trigger_drill(
                             "container_name": container_name,
                             "filename": filename,
                         });
-                        agent.post("/backups/drill/volume", Some(body)).await.map_err(|e| e.to_string())
+                        agent.post_long("/backups/drill/volume", Some(body), crate::services::agent::DRILL_TIMEOUT_SECS).await.map_err(|e| e.to_string())
                     }
                     Ok(None) => Err("Volume backup not found".to_string()),
                     Err(e) => {
@@ -1868,7 +1886,18 @@ async fn build_chain_report(
     state: &AppState,
     kind: &'static str,
     backup_id: Uuid,
+    caller_id: Uuid,
 ) -> Result<ChainReport, ApiError> {
+    // Every branch below joins `servers` and scopes by `sv.is_local OR sv.user_id =
+    // caller_id` — the same predicate `list_volume_backups`/`restore_volume_backup`
+    // already established for this exact fleet (v2.184.0). Before this fix `AdminUser`
+    // alone gated these two handlers, and every query here was a bare `WHERE id = $1`:
+    // any admin could pull another admin's backup provenance (site domain, db/container
+    // names, filenames, full hash chain, every verification and drill) as JSON or PDF —
+    // the same bug `list_all_backups` below carries, just reached through a different
+    // route. A `server_id` predating the fleet backfill (NULL, database/volume only —
+    // `sites.server_id` is NOT NULL) fails closed via the JOIN rather than falling back
+    // to "visible to nobody in particular", matching the established precedent.
     let backup = match kind {
         "site" => {
             let row: Option<(
@@ -1879,9 +1908,11 @@ async fn build_chain_report(
                 "SELECT b.id, b.site_id, s.domain, b.filename, b.size_bytes, \
                         b.sha256_hash, b.previous_hash, b.created_at \
                    FROM backups b JOIN sites s ON s.id = b.site_id \
+                   JOIN servers sv ON sv.id = s.server_id AND (sv.is_local OR sv.user_id = $2) \
                   WHERE b.id = $1"
             )
             .bind(backup_id)
+            .bind(caller_id)
             .fetch_optional(&state.db).await
             .map_err(|e| internal_error("chain report: load site backup", e))?;
 
@@ -1903,12 +1934,14 @@ async fn build_chain_report(
                 Option<String>, Option<String>,
                 chrono::DateTime<chrono::Utc>,
             )> = sqlx::query_as(
-                "SELECT id, database_id, db_name, db_type, filename, size_bytes, \
-                        sha256_hash, previous_hash, created_at \
-                   FROM database_backups \
-                  WHERE id = $1"
+                "SELECT db.id, db.database_id, db.db_name, db.db_type, db.filename, db.size_bytes, \
+                        db.sha256_hash, db.previous_hash, db.created_at \
+                   FROM database_backups db \
+                   JOIN servers sv ON sv.id = db.server_id AND (sv.is_local OR sv.user_id = $2) \
+                  WHERE db.id = $1"
             )
             .bind(backup_id)
+            .bind(caller_id)
             .fetch_optional(&state.db).await
             .map_err(|e| internal_error("chain report: load database backup", e))?;
 
@@ -1932,12 +1965,14 @@ async fn build_chain_report(
                 Option<String>, Option<String>,
                 chrono::DateTime<chrono::Utc>,
             )> = sqlx::query_as(
-                "SELECT id, container_id, container_name, volume_name, filename, size_bytes, \
-                        sha256_hash, previous_hash, created_at \
-                   FROM volume_backups \
-                  WHERE id = $1"
+                "SELECT vb.id, vb.container_id, vb.container_name, vb.volume_name, vb.filename, vb.size_bytes, \
+                        vb.sha256_hash, vb.previous_hash, vb.created_at \
+                   FROM volume_backups vb \
+                   JOIN servers sv ON sv.id = vb.server_id AND (sv.is_local OR sv.user_id = $2) \
+                  WHERE vb.id = $1"
             )
             .bind(backup_id)
+            .bind(caller_id)
             .fetch_optional(&state.db).await
             .map_err(|e| internal_error("chain report: load volume backup", e))?;
 
@@ -2058,11 +2093,11 @@ fn slug(s: &str) -> String {
 /// verification + every restore drill).
 pub async fn chain_report_json(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Path((kind, id)): Path<(String, Uuid)>,
 ) -> Result<Json<ChainReport>, ApiError> {
     let kind = parse_chain_kind(&kind)?;
-    let report = build_chain_report(&state, kind, id).await?;
+    let report = build_chain_report(&state, kind, id, claims.sub).await?;
     Ok(Json(report))
 }
 
@@ -2071,11 +2106,11 @@ pub async fn chain_report_json(
 /// /var/lib/dockpanel/typst (~30MB, one-time). 503 if install/compile fails.
 pub async fn chain_report_pdf(
     State(state): State<AppState>,
-    AdminUser(_claims): AdminUser,
+    AdminUser(claims): AdminUser,
     Path((kind, id)): Path<(String, Uuid)>,
 ) -> Result<axum::response::Response, ApiError> {
     let kind = parse_chain_kind(&kind)?;
-    let report = build_chain_report(&state, kind, id).await?;
+    let report = build_chain_report(&state, kind, id, claims.sub).await?;
     let json_value = serde_json::to_value(&report)
         .map_err(|e| internal_error("chain report: serialize", e))?;
 

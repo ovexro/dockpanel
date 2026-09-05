@@ -78,13 +78,20 @@ async fn tick(db: &PgPool, agents: &AgentRegistry) -> Result<(), String> {
 
         tracing::info!("Drill schedule due for policy '{}' ({})", policy.name, policy.id);
 
-        // Stamp last_drill_at first so a slow agent dispatch can't double-fire
-        // on the next tick.
-        let _ = sqlx::query(
-            "UPDATE backup_policies SET last_drill_at = NOW() WHERE id = $1"
-        ).bind(policy.id).execute(db).await;
-
-        dispatch_policy_drills(db, agents, policy).await;
+        // Stamp last_drill_at only once a drill actually enqueues. Stamping unconditionally
+        // BEFORE dispatch made a policy whose server has been unreachable for weeks (or
+        // that keeps losing the concurrency guard to a sibling policy) read as "freshly
+        // drilled" every time its cron fired — the one case a DR-verification timestamp
+        // most needs to flag was the case it hid, and no row survived in `backup_drills`
+        // for those early-return paths either, so there was no artifact to catch it by.
+        // The double-fire this used to guard against is already prevented by
+        // `has_running_drill_for_server`'s own `backup_drills` row, inserted synchronously
+        // inside `enqueue_drill` before the slow agent call is even spawned.
+        if dispatch_policy_drills(db, agents, policy).await {
+            let _ = sqlx::query(
+                "UPDATE backup_policies SET last_drill_at = NOW() WHERE id = $1"
+            ).bind(policy.id).execute(db).await;
+        }
     }
 
     Ok(())
@@ -102,7 +109,7 @@ async fn tick(db: &PgPool, agents: &AgentRegistry) -> Result<(), String> {
 /// again, once per week, silently. Checking once per policy keeps the cap the comment
 /// always claimed (one policy's drills in flight per server) without a leg starving
 /// its own sibling.
-async fn dispatch_policy_drills(db: &PgPool, agents: &AgentRegistry, policy: &DuePolicy) {
+async fn dispatch_policy_drills(db: &PgPool, agents: &AgentRegistry, policy: &DuePolicy) -> bool {
     let db_row: Option<(Uuid, Option<Uuid>, String, String, String)> = sqlx::query_as(
         "SELECT id, server_id, db_type, db_name, filename \
          FROM database_backups \
@@ -119,7 +126,7 @@ async fn dispatch_policy_drills(db: &PgPool, agents: &AgentRegistry, policy: &Du
 
     if db_row.is_none() && vol_row.is_none() {
         tracing::debug!("No backups tied to policy {}; skipping drills", policy.id);
-        return;
+        return false;
     }
 
     // Which host owns this policy's drills. A backup row's own `server_id` wins; the
@@ -139,7 +146,7 @@ async fn dispatch_policy_drills(db: &PgPool, agents: &AgentRegistry, policy: &Du
                     "Policy {} has no server and the local server id is not yet known \
                      (setup incomplete) — skipping drills this tick.", policy.id
                 );
-                return;
+                return false;
             }
         },
     };
@@ -152,7 +159,7 @@ async fn dispatch_policy_drills(db: &PgPool, agents: &AgentRegistry, policy: &Du
                  Not drilling on a different host: a drill that runs elsewhere certifies \
                  disaster recovery for a machine it never tested.", policy.id
             );
-            return;
+            return false;
         }
     };
 
@@ -161,8 +168,10 @@ async fn dispatch_policy_drills(db: &PgPool, agents: &AgentRegistry, policy: &Du
             "Skipping drills for policy {} — another drill is already running on server {server_id}",
             policy.id
         );
-        return;
+        return false;
     }
+
+    let mut dispatched = false;
 
     if let Some((backup_id, _, db_type, db_name, filename)) = db_row {
         enqueue_drill(
@@ -174,6 +183,7 @@ async fn dispatch_policy_drills(db: &PgPool, agents: &AgentRegistry, policy: &Du
             }),
             "/backups/drill/db",
         ).await;
+        dispatched = true;
     }
 
     if let Some((backup_id, _, container_name, filename)) = vol_row {
@@ -185,7 +195,10 @@ async fn dispatch_policy_drills(db: &PgPool, agents: &AgentRegistry, policy: &Du
             }),
             "/backups/drill/volume",
         ).await;
+        dispatched = true;
     }
+
+    dispatched
 }
 
 /// True if a drill is already in flight for this server.
@@ -237,7 +250,14 @@ async fn enqueue_drill(
     let db = db.clone();
     let agent_path = agent_path.to_string();
     tokio::spawn(async move {
-        let result = agent.post(&agent_path, Some(body)).await.map_err(|e| e.to_string());
+        // Plain `post` caps the WHOLE round trip at 60s, but the agent-side restore this
+        // triggers is budgeted 220-360s depending on backup type — any drill against a
+        // non-trivial backup was killed by this client-side cap and reported `status =
+        // 'failed'` with a timeout message, a false DR-failure signal on a healthy backup.
+        let result = agent
+            .post_long(&agent_path, Some(body), crate::services::agent::DRILL_TIMEOUT_SECS)
+            .await
+            .map_err(|e| e.to_string());
 
         match result {
             Ok(data) => {

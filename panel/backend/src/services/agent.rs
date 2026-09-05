@@ -97,6 +97,16 @@ const MAX_RESPONSE_SIZE: usize = 50 * 1024 * 1024;
 /// same caveat is recorded at `routes/migration.rs` for the migration importer.
 pub const DB_RESTORE_TIMEOUT_SECS: u64 = 270;
 
+/// A backup drill (scheduled or on-demand) spins a scratch container, restores a real
+/// backup into it end to end, then probes it — the agent-side budget for the slowest leg
+/// (volume: 300s restore + 60s read-probe) is 360s, several multiples of the plain 60s
+/// `post` cap. Unlike `DB_RESTORE_TIMEOUT_SECS`, drills always run inside a detached
+/// `tokio::spawn` (never awaited directly by an axum handler), so there is no 300s
+/// `TimeoutLayer`/nginx `proxy_read_timeout` ceiling to stay under here — the only cost of
+/// headroom is how long a stuck drill occupies the long-op semaphore. Set with margin over
+/// the 360s worst case for container pull/start overhead on a cold box.
+pub const DRILL_TIMEOUT_SECS: u64 = 420;
+
 /// Effectively-disabled total timeout for streamed remote requests.
 ///
 /// reqwest only offers a *total* per-request timeout, and the client default
