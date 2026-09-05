@@ -975,9 +975,17 @@ pub async fn deploy_log(
         }
     });
 
+    // The underlying channel closes (and this stream ends) once the deploy
+    // finishes and its map entry is dropped — but a deploy in progress at
+    // shutdown time can still run well past the graceful-drain window, so
+    // race it against the panel's own shutdown signal too.
     Ok(
-        Sse::new(snapshot_stream.chain(live_stream))
-            .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping")),
+        Sse::new(
+            snapshot_stream
+                .chain(live_stream)
+                .take_until(crate::helpers::shutdown_signal_fut(&state)),
+        )
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping")),
     )
 }
 

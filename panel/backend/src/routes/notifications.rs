@@ -240,7 +240,11 @@ pub async fn stream(
                 Err(_) => None,           // Lagged or closed — skip
             }
         }
-    });
+    })
+    // `notif_tx` lives for the whole process, so without this the stream never
+    // ends on its own — every admin tab with the panel open holds one of these
+    // open indefinitely, which is exactly what blocks a graceful shutdown drain.
+    .take_until(crate::helpers::shutdown_signal_fut(&state));
 
     Sse::new(live_stream).keep_alive(
         KeepAlive::new()

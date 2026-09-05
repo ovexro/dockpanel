@@ -165,10 +165,17 @@ pub async fn handler(
         return (StatusCode::TOO_MANY_REQUESTS, "Too many WebSocket connections").into_response();
     }
 
-    ws.on_upgrade(move |socket| handle_socket(socket, agent, state, claims))
+    let shutdown_rx = state.shutdown_tx.subscribe();
+    ws.on_upgrade(move |socket| handle_socket(socket, agent, state, claims, shutdown_rx))
 }
 
-async fn handle_socket(mut socket: WebSocket, agent: AgentHandle, state: AppState, claims: Claims) {
+async fn handle_socket(
+    mut socket: WebSocket,
+    agent: AgentHandle,
+    state: AppState,
+    claims: Claims,
+    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+) {
     tracing::debug!("WebSocket metrics client connected");
 
     loop {
@@ -184,45 +191,67 @@ async fn handle_socket(mut socket: WebSocket, agent: AgentHandle, state: AppStat
             break;
         }
 
-        // Fetch all four endpoints concurrently
-        let (system_res, processes_res, network_res, gpu_res) = tokio::join!(
-            agent.get("/system/info"),
-            agent.get("/system/processes"),
-            agent.get("/system/network"),
-            agent.get("/apps/gpu-info"),
-        );
+        // One full fetch-send-recv cycle, raced below against the shutdown signal
+        // rather than only checked between iterations: a single `agent.get()` call
+        // already budgets up to 60s (`AgentClient::request`), which alone exceeds
+        // the 20s graceful-drain window, so shutdown has to be able to win
+        // mid-cycle, not just at the top of the loop.
+        let tick = async {
+            let (system_res, processes_res, network_res, gpu_res) = tokio::join!(
+                agent.get("/system/info"),
+                agent.get("/system/processes"),
+                agent.get("/system/network"),
+                agent.get("/apps/gpu-info"),
+            );
 
-        let system = system_res.unwrap_or_else(|_| serde_json::json!(null));
-        let processes = processes_res.unwrap_or_else(|_| serde_json::json!(null));
-        let network = network_res.unwrap_or_else(|_| serde_json::json!(null));
-        let gpu = gpu_res.unwrap_or_else(|_| serde_json::json!(null));
+            let system = system_res.unwrap_or_else(|_| serde_json::json!(null));
+            let processes = processes_res.unwrap_or_else(|_| serde_json::json!(null));
+            let network = network_res.unwrap_or_else(|_| serde_json::json!(null));
+            let gpu = gpu_res.unwrap_or_else(|_| serde_json::json!(null));
 
-        let payload = serde_json::json!({
-            "type": "metrics",
-            "system": system,
-            "processes": processes,
-            "network": network,
-            "gpu": gpu,
-        });
+            let payload = serde_json::json!({
+                "type": "metrics",
+                "system": system,
+                "processes": processes,
+                "network": network,
+                "gpu": gpu,
+            });
 
-        let msg = Message::Text(payload.to_string().into());
-        if socket.send(msg).await.is_err() {
-            // Client disconnected
-            break;
-        }
+            let msg = Message::Text(payload.to_string().into());
+            if socket.send(msg).await.is_err() {
+                // Client disconnected
+                return false;
+            }
 
-        // Also check for incoming close/ping frames
-        match tokio::time::timeout(Duration::from_secs(5), socket.recv()).await {
-            Ok(Some(Ok(Message::Close(_)))) => break,
-            Ok(Some(Err(_))) => break,
-            Ok(None) => break,
-            // Timeout (5s elapsed) or non-close message — continue the loop
-            _ => {}
+            // Also check for incoming close/ping frames
+            match tokio::time::timeout(Duration::from_secs(5), socket.recv()).await {
+                Ok(Some(Ok(Message::Close(_)))) => false,
+                Ok(Some(Err(_))) => false,
+                Ok(None) => false,
+                // Timeout (5s elapsed) or non-close message — continue the loop
+                _ => true,
+            }
+        };
+
+        tokio::select! {
+            keep_going = tick => {
+                if !keep_going {
+                    break;
+                }
+            }
+            _ = shutdown_rx.recv() => {
+                tracing::info!("WebSocket metrics: shutdown signal received, closing");
+                break;
+            }
         }
     }
 
-    // Send explicit close frame so client doesn't linger
-    let _ = socket.send(Message::Close(None)).await;
+    // Send explicit close frame so client doesn't linger. Timed: a
+    // black-holed peer (vanished without FIN/RST) can stall this write on
+    // kernel retransmission, which would otherwise keep THIS connection's
+    // task alive — and with it, axum's graceful-drain wait for it — past the
+    // shutdown signal that just fired to close it.
+    let _ = tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Close(None))).await;
     WS_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
     tracing::debug!("WebSocket metrics client disconnected");
 }

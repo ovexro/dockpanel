@@ -168,10 +168,14 @@ echo "§2 no route can serve the map's contents to a client"
 
 # The capability arm. A provisioning stream is a broadcast Receiver, and the only
 # way to obtain one is `.subscribe()`. `open_provision_log` is the sole place
-# that may. The one legitimate exception is the notifications SSE, a different
-# channel entirely (state.notif_tx) that never touches provision_logs.
+# that may. Two legitimate exceptions exist, neither of which ever touches
+# provision_logs: the notifications SSE (state.notif_tx) and, since s466, the
+# panel-wide graceful-shutdown signal (state.shutdown_tx, broadcast::Sender<()>)
+# that ws_metrics.rs and notifications.rs subscribe to directly — it carries no
+# payload and is ownerless by construction (every subscriber gets the identical
+# "shutting down" signal), so there is no ownership question for it to bypass.
 subs=$(grep -ohE "[a-zA-Z_.]*\.subscribe\(\)" <<< "$SRC_ROUTES" | sort -u)
-rogue=$(grep -vE "^state\.notif_tx\.subscribe\(\)$" <<< "$subs" || true)
+rogue=$(grep -vE "^state\.(notif_tx|shutdown_tx)\.subscribe\(\)$" <<< "$subs" || true)
 if [ -z "$rogue" ]; then
   ok "the only subscribe() in routes/ is the notifications channel"
 else

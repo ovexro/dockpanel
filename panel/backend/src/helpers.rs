@@ -2036,6 +2036,27 @@ pub fn open_provision_log(
     }
 }
 
+/// A future that resolves once the panel's shutdown broadcast fires.
+///
+/// `axum::serve(...).with_graceful_shutdown` waits for every in-flight
+/// connection to close on its own; a WebSocket or SSE handler that only exits
+/// when the CLIENT disconnects can therefore hold the drain open indefinitely
+/// (main.rs::shutdown_signal names the mechanism, and its 20s watchdog exists
+/// only because this half of the fix didn't). Feed the result to
+/// `StreamExt::take_until` on an SSE stream, or race it directly with
+/// `tokio::select!` in a manual per-tick loop (see `ws_metrics::handle_socket`)
+/// — the same shape `spawn_supervised` already gives every background service.
+///
+/// Takes `&AppState` rather than the `Sender` directly so call sites read the
+/// same way as every other per-request state access; the returned future does
+/// not borrow `state` past this call.
+pub fn shutdown_signal_fut(state: &crate::AppState) -> impl std::future::Future<Output = ()> + use<> {
+    let mut rx = state.shutdown_tx.subscribe();
+    async move {
+        let _ = rx.recv().await;
+    }
+}
+
 /// Refuse, at the mint, a stream whose transport can only ever reach the panel's
 /// own agent — when the caller has a different server selected.
 ///

@@ -1207,7 +1207,13 @@ pub async fn progress(
         }
     });
 
-    let stream = snapshot_stream.chain(live_stream);
+    // The underlying channel closes (and this stream ends) once the import
+    // finishes and its map entry is dropped — but an import in progress at
+    // shutdown time can still run well past the graceful-drain window, so
+    // race it against the panel's own shutdown signal too.
+    let stream = snapshot_stream
+        .chain(live_stream)
+        .take_until(crate::helpers::shutdown_signal_fut(&state));
 
     Ok(Sse::new(stream).keep_alive(
         KeepAlive::new()

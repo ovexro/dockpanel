@@ -205,10 +205,16 @@ echo "§E  the original bare error-handling shape around axum::serve is still th
 # .with_graceful_shutdown(shutdown_signal()).await { tracing::error!(...) }`
 # shape, UNCHANGED, still logs the same message. Adding the watchdog inside
 # shutdown_signal() must not have touched main()'s own error handling.
+# s466 CORR: shutdown_signal() now takes shutdown_tx (a separate fix — it
+# needs the sender to broadcast the instant the OS signal arrives, not after
+# this same await already returned — see shutdown-drain-race-pin-e2e.sh §A6/A7)
+# so the call site gained an argument; the shape this arm actually cares about
+# (the bare if-let-Err wrapping THIS SAME await, logging the same message) is
+# unchanged regardless of what's inside the parens.
 if [ -z "$MAIN_FN" ]; then
   bad "E1 SKIPPED: could not bound main()"
 elif has "$MAIN_FLAT" \
-  'if let Err\(e\) = axum::serve\(listener, app\)[[:space:]]*\.with_graceful_shutdown\(shutdown_signal\(\)\)[[:space:]]*\.await' \
+  'if let Err\(e\) = axum::serve\(listener, app\)[[:space:]]*\.with_graceful_shutdown\(shutdown_signal\(shutdown_tx\.clone\(\)\)\)[[:space:]]*\.await' \
   && has "$MAIN_FLAT" 'tracing::error!\("API server error: \{e\}"\)'; then
   ok "E1 the bare 'if let Err(e) = axum::serve(...).with_graceful_shutdown(...).await { tracing::error!(...) }' shape is intact"
 else

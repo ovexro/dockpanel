@@ -207,14 +207,17 @@ else
 fi
 
 HANDLE_SOCKET_BODY=$(fnbody "$WS_METRICS_C" "handle_socket")
-if has "$HANDLE_SOCKET_BODY" 'state: AppState, claims: Claims' && has "$HANDLE_SOCKET_BODY" 'claims_now_invalid\(&state, &claims\)\.await'; then
+# s466 CORR: handle_socket's signature went multi-line (a 5th param, shutdown_rx,
+# was added — see the graceful-shutdown-race pin suite), so state/claims no
+# longer share a line; check each param and the per-tick call separately.
+if has "$HANDLE_SOCKET_BODY" 'state: AppState,' && has "$HANDLE_SOCKET_BODY" 'claims: Claims,' && has "$HANDLE_SOCKET_BODY" 'claims_now_invalid\(&state, &claims\)\.await'; then
   ok "C4 handle_socket takes state+claims and calls claims_now_invalid every loop iteration"
 else
   bad "C4 handle_socket no longer threads state/claims through to a per-tick check"
 fi
 
-if has "$WS_METRICS_C" 'handle_socket\(socket, agent, state, claims\)'; then
-  ok "C5 the handshake now hands state+claims to handle_socket (previously: socket, agent only)"
+if has "$WS_METRICS_C" 'handle_socket\(socket, agent, state, claims, shutdown_rx\)'; then
+  ok "C5 the handshake now hands state+claims(+shutdown_rx, s466) to handle_socket"
 else
   bad "C5 on_upgrade no longer passes state/claims to handle_socket"
 fi

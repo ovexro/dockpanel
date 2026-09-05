@@ -55,6 +55,13 @@ pub struct AppState {
     pub sessions_revoked_at: Arc<RwLock<Option<i64>>>,
     /// Deploy ownership map: deploy_id -> user_id (for SSE log access control).
     pub deploy_owners: Arc<Mutex<HashMap<uuid::Uuid, uuid::Uuid>>>,
+    /// Shutdown broadcast, mirroring the one `spawn_supervised` already hands
+    /// every background service. Route handlers that hold a connection open
+    /// past a single request/response (the metrics websocket, every SSE
+    /// stream below) subscribe to this so `shutdown_signal`'s graceful drain
+    /// isn't left waiting on a client that never disconnects on its own —
+    /// see `helpers::shutdown_signal_fut`.
+    pub shutdown_tx: tokio::sync::broadcast::Sender<()>,
     /// WebAuthn/Passkey challenge store (in-memory, 5-minute TTL).
     pub passkey_challenges: routes::passkeys::ChallengeStore,
     /// Phase 4 W4: panel self-update orchestrator state. Read by
@@ -256,6 +263,10 @@ async fn main() {
     // Register in the global OnceLock so notify_panel() can broadcast without AppState
     services::notifications::init_notif_broadcast(notif_tx.clone());
 
+    // Shutdown broadcast channel — all background services listen for this signal,
+    // and (via AppState below) so does every long-lived route handler.
+    let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
     // GAP 66: Load persisted token blacklist from DB (survives restart)
     let token_blacklist = {
         let blacklisted: Vec<(String,)> = sqlx::query_as(
@@ -300,6 +311,7 @@ async fn main() {
         notif_tx,
         sessions_revoked_at,
         deploy_owners: Arc::new(Mutex::new(HashMap::new())),
+        shutdown_tx: shutdown_tx.clone(),
         passkey_challenges: routes::passkeys::new_challenge_store(),
         panel_update_state: services::panel_update::new_state_handle(),
     };
@@ -314,9 +326,6 @@ async fn main() {
     // spawned task, so a restart takes them with no chance to write a verdict.
     // On boot nothing is running, so any row still claiming to be is stale.
     routes::migration::finalize_analyzing_on_startup(&state.db).await;
-
-    // Shutdown broadcast channel — all background services listen for this signal
-    let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
 
     // Supervised background task spawner: monitors JoinHandle, auto-restarts on panic
     // with exponential backoff, and respects shutdown signal.
@@ -604,16 +613,20 @@ async fn main() {
     );
 
     if let Err(e) = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(shutdown_tx.clone()))
         .await
     {
         tracing::error!("API server error: {e}");
     }
 
-    // Signal all background services to stop
-    tracing::info!("Sending shutdown signal to background services...");
-    let _ = shutdown_tx.send(());
-    // Give services a moment to finish their current work
+    // Background services AND every long-lived route handler subscribed via
+    // AppState::shutdown_tx already got the broadcast from inside
+    // shutdown_signal() itself, the instant the OS signal arrived — sending
+    // it here instead would be circular: `axum::serve(...).await` above does
+    // not return until every in-flight connection's task has ended, so a
+    // websocket/SSE handler waiting on THIS line to know when to close would
+    // deadlock the drain against itself. Give whatever's still winding down
+    // a last moment before the DB pool closes underneath it.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Drain the connection pool so active queries finish before process exits
@@ -630,7 +643,7 @@ async fn main() {
 /// deploy.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 
-async fn shutdown_signal() {
+async fn shutdown_signal(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
@@ -652,6 +665,18 @@ async fn shutdown_signal() {
         _ = ctrl_c => tracing::info!("Received Ctrl+C, shutting down..."),
         _ = terminate => tracing::info!("Received SIGTERM, shutting down..."),
     }
+
+    // Broadcast to every background service AND every long-lived route
+    // handler (the metrics websocket, every SSE stream — AppState::shutdown_tx
+    // / helpers::shutdown_signal_fut) the instant the OS signal arrives, not
+    // after `with_graceful_shutdown` below has already finished waiting for
+    // those same connections to close on their own. This function IS the
+    // `signal` future axum awaits first (before it stops accepting new
+    // connections and starts draining existing ones) — sending from here
+    // means a subscribed handler actually has the ~20s window below to close
+    // itself before the watchdog force-exits, instead of the drain and the
+    // signal waiting on each other.
+    let _ = shutdown_tx.send(());
 
     // `with_graceful_shutdown` waits for every in-flight connection to close on its
     // own — an open SSE stream or WebSocket terminal session blocks that

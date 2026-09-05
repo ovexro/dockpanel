@@ -4,6 +4,45 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.220.0]
+
+### Fixed — the graceful-shutdown watchdog's root cause: no long-lived connection ever watched the shutdown signal
+
+The demo deploy's own `systemctl stop dockpanel-api` triggered the graceful-shutdown watchdog
+(`main.rs::shutdown_signal`, a 20s hard timeout) for the first time in 12 sessions of monitoring — a
+genuine forced exit (`std::process::exit(1)`, systemd `status=1/FAILURE`), not another clean
+non-trigger. Root cause: `axum::serve(...).with_graceful_shutdown(...)` waits for every in-flight
+connection to close on its own, and a WebSocket or SSE handler that only exits when the client
+disconnects (or, for the provision-log SSE streams, when the underlying job finishes) can block that
+drain indefinitely — axum spawns each connection onto its own task that the shutdown signal resolving
+does not cancel.
+
+Fixed by threading a shutdown broadcast into every long-lived connection handler in the crate:
+
+- `AppState` gained `shutdown_tx: broadcast::Sender<()>`, the same channel `spawn_supervised` already
+  hands every background service, plus a shared `helpers::shutdown_signal_fut(&AppState)` future that
+  resolves on the first broadcast.
+- `ws_metrics.rs::handle_socket` (the only axum `WebSocketUpgrade` site in the crate — `terminal.rs` and
+  `logs.rs` exist here too but only mint signed tickets; the browser dials the agent's websocket
+  directly, so neither ever holds a connection open through this process) now races its whole per-tick
+  fetch/send/recv cycle against the shutdown signal via `tokio::select!`, not just a
+  check at the top of the loop — a single agent call already budgets up to 60s, which alone exceeds the
+  20s drain window.
+- All 6 SSE handlers in the crate — `notifications.rs::stream` (keyed on the process-lifetime
+  `notif_tx` broadcast, so this stream would otherwise never end on its own; every admin tab with the
+  panel open holds one) plus the 5 provision-log-shaped streams (`sites.rs`, `git_deploys.rs`,
+  `docker_apps.rs`, `system.rs`, `migration.rs`) — now end with `.take_until(shutdown_signal_fut(...))`.
+- **Caught before shipping by an adversarial skeptic review**: the first cut sent the broadcast *after*
+  `axum::serve(...).with_graceful_shutdown(...).await` returned — but that await never returns until
+  every connection (including the ones now waiting on this exact signal) has already closed, making the
+  fix circular and a no-op for its own stated purpose. Fixed by moving the send inside
+  `shutdown_signal()` itself, which axum polls *before* it starts draining connections, so subscribers
+  get the broadcast the instant the OS signal arrives. The same review also flagged the metrics
+  websocket's trailing close-frame send as unbounded against a black-holed peer; now wrapped in a 2s
+  timeout so it can't stall that connection's own drain.
+
+New pin suite `tests/shutdown-drain-race-pin-e2e.sh` (22 assertions, mutation-tested).
+
 ## [2.219.0]
 
 ### Fixed — batched small-file tail audit: drill timeout, ws revocation, and three unscoped backup-management routes
