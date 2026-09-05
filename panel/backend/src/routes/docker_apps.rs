@@ -685,6 +685,33 @@ pub async fn deploy(
                     "name": app_name, "domain": deploy_domain,
                 }));
 
+                // Give the domain an owner row so SSL renewal can find it —
+                // see migration 20260905180000_docker_app_ssl_domains.sql for
+                // why this table exists and what it deliberately does not do.
+                // Written regardless of `tls.mode` (mirrors `docker_stacks`'
+                // own INSERT), so the renewal fallback can see a `none`/
+                // `provided` app and correctly decline to touch it instead of
+                // reading it as "never deployed".
+                if let Some(ref domain) = deploy_domain {
+                    let _ = sqlx::query(
+                        "INSERT INTO docker_app_domains \
+                         (user_id, server_id, app_name, domain, ssl_email, tls_mode) \
+                         VALUES ($1, $2, $3, $4, $5, $6) \
+                         ON CONFLICT (server_id, domain) DO UPDATE SET \
+                           user_id = EXCLUDED.user_id, app_name = EXCLUDED.app_name, \
+                           ssl_email = EXCLUDED.ssl_email, tls_mode = EXCLUDED.tls_mode, \
+                           updated_at = NOW()",
+                    )
+                    .bind(user_id)
+                    .bind(server_id)
+                    .bind(&app_name)
+                    .bind(domain)
+                    .bind(deploy_ssl_email.as_deref())
+                    .bind(tls.mode)
+                    .execute(&db)
+                    .await;
+                }
+
                 // GAP 12: Auto-create monitor for Docker app with domain
                 if let Some(ref domain) = deploy_domain {
                     // Monitor the scheme this deploy actually produced. The agent
@@ -2087,6 +2114,19 @@ pub async fn remove_app(
     // and the next sweep would page for it.
     if let Some(ref name) = removed_name {
         expected_stops::clear(&state.db, server_id, name).await;
+    }
+
+    // The SSL-renewal ownership row this domain got at deploy must not outlive
+    // the app, or a future app reusing the freed domain would inherit a
+    // stranger's renewal history (wrong owner, stale tls_mode/ssl_email).
+    if let Some(domain_removed) = result.get("domain_removed").and_then(|v| v.as_str()) {
+        let _ = sqlx::query(
+            "DELETE FROM docker_app_domains WHERE server_id = $1 AND lower(domain) = lower($2)",
+        )
+        .bind(server_id)
+        .bind(domain_removed)
+        .execute(&state.db)
+        .await;
     }
 
     // Auto-cleanup DNS record if a domain was removed

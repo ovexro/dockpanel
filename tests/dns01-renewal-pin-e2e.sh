@@ -270,8 +270,11 @@ has "E1 one budget, named once" "$F_BSSL" "pub(crate)constDNS01_ORDER_TIMEOUT_SE
 # other door, so the total moves. The right-hand side is a typed literal, so a
 # new door legitimately moves this arm — bumping it is the repair, and changing
 # the panel to dodge it would be the defect.
+# ⭐ 7 -> 8 at GAP 209: the scanner gained a THIRD renewal door, for a Docker app
+# whose domain resolves to neither a site nor a Compose stack — same reasoning,
+# same shared budget, same legitimate bump.
 eq "E2 and every DNS-01 door spends THAT budget — issuance included" \
-   "$(( $(occ "$F_BSSL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_HEAL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_SCAN" "DNS01_ORDER_TIMEOUT_SECS") ))" "7"
+   "$(( $(occ "$F_BSSL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_HEAL" "DNS01_ORDER_TIMEOUT_SECS") + $(occ "$F_SCAN" "DNS01_ORDER_TIMEOUT_SECS") ))" "8"
 # ⛔ A COUNT OF THE CONSTANT'S USES CANNOT SEE A CALLER THAT DOES NOT USE IT —
 # that is how the issuance door stayed invisible to E2 for a whole release (#671:
 # a count is blind to the thing it does not count). E2b asks the complementary

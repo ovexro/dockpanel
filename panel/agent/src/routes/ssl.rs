@@ -342,8 +342,8 @@ async fn upload_cert(
 struct RenewRequest {
     email: String,
     /// Absent when the caller has no `SiteConfig` to describe this domain with —
-    /// a Compose stack's certificate, which has no `sites` row behind it. See
-    /// `renew` for what its absence means.
+    /// a Compose stack's or a Docker app's certificate, neither of which has a
+    /// `sites` row behind it. See `renew` for what its absence means.
     #[serde(default)]
     runtime: Option<String>,
     root: Option<String>,
@@ -431,12 +431,12 @@ async fn renew(
     // exists to pick up config changes made since the original provision — which
     // is only meaningful for a domain the panel holds a config FOR.
     //
-    // A Compose stack is the domain it isn't. Its acme vhost is a proxy whose
-    // published port is derived HERE, from the compose file, and the panel has no
-    // row to send: renewing it from an invented `SiteConfig` would overwrite a
-    // working proxy with one carrying `proxy_port: None` and take the stack off
-    // the air to install a certificate. So the panel sends no `runtime`, and the
-    // absence is the instruction.
+    // A Compose stack — or a Docker app — is the domain it isn't. Its acme vhost
+    // is a proxy whose published port is derived HERE, from the compose file or
+    // the container, and the panel has no row to send: renewing it from an
+    // invented `SiteConfig` would overwrite a working proxy with one carrying
+    // `proxy_port: None` and take it off the air to install a certificate. So
+    // the panel sends no `runtime`, and the absence is the instruction.
     let mut canonical = None;
     match body.runtime {
         // Regenerate nginx config so any config changes since the original

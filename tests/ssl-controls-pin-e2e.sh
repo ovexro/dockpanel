@@ -134,16 +134,19 @@ eq "A2 the global unique constraint is dropped" \
 
 eq "A3 the auto-fix site lookup carries a server term" \
    "$(occ "$F_SCAN" 'FROMsitessWHEREs.domain=$1ANDs.server_id=$2ANDs.ssl_enabled=TRUE')" "1"
-# TWO since v2.161.0: the site lookup above and the Compose-stack lookup the
-# same loop falls through to. Both resolve a DOMAIN, and a domain is unique only
-# per server, so both must bind the member that raised the finding — a name-only
-# lookup on a fleet renews through the wrong host's agent.
+# FIVE since GAP 209 (was two since v2.161.0): the site lookup, the
+# Compose-stack lookup, its cooldown, and now the Docker-app lookup and ITS
+# cooldown — the same loop falls through to both fallbacks in turn. All resolve
+# a DOMAIN, and a domain is unique only per server, so every one must bind the
+# member that raised the finding — a name-only lookup on a fleet renews through
+# the wrong host's agent.
 eq "A4 it binds the scanned member, not an arbitrary host" \
-   "$(occ "$F_SCAN" '.bind(domain).bind(member.id)')" "3"
-# ⛔ A COUNT CANNOT SEE A DOOR THAT DOES NOT BIND — a fourth domain-keyed lookup
-# added without the server term leaves this arm at 3 and green. So each door
+   "$(occ "$F_SCAN" '.bind(domain).bind(member.id)')" "5"
+# ⛔ A COUNT CANNOT SEE A DOOR THAT DOES NOT BIND — a sixth domain-keyed lookup
+# added without the server term leaves this arm at 5 and green. So each door
 # also owns a literal arm: A3 for the site read, A4b for the stack read, A4c for
-# the stack renewal's cooldown. THIS IS NOT BOOKKEEPING: when the stack read
+# the stack renewal's cooldown, A4d for the Docker-app read, A4e for the
+# Docker-app renewal's cooldown. THIS IS NOT BOOKKEEPING: when the stack read
 # joined, bumping A4 from 1 to 2 left it satisfied by the site door alone, and a
 # mutation that deleted the new door's server term kept A4 GREEN — only A4b
 # caught it. The count tracks the total; the literal arms hold each door.
@@ -155,6 +158,14 @@ eq "A4b the stack fallback lookup carries a server term too" \
 # the file that had not learned it.
 eq "A4c the stack renewal cooldown counts this host's attempts, not the fleet's" \
    "$(occ "$F_SCAN" "action='auto_fix.renew_stack_ssl'ANDtarget_name=\$1ANDserver_id=\$2")" "1"
+# GAP 209: the Docker-app fallback, added because neither the site lookup above
+# nor the stack lookup can ever match a Docker app's domain (it owns no `sites`
+# row and no `docker_stacks` row either) — see migration
+# 20260905180000_docker_app_ssl_domains.sql.
+eq "A4d the Docker-app fallback lookup carries a server term too" \
+   "$(occ "$F_SCAN" 'FROMdocker_app_domainsWHERElower(domain)=lower($1)ANDserver_id=$2')" "1"
+eq "A4e the Docker-app renewal cooldown counts this host's attempts, not the fleet's" \
+   "$(occ "$F_SCAN" "action='auto_fix.renew_docker_app_ssl'ANDtarget_name=\$1ANDserver_id=\$2")" "1"
 # The signature is what makes the id REACHABLE at all.
 eq "A5 auto_fix_safe_findings receives the member, not just its handle" \
    "$(occ "$F_SCAN" 'asyncfnauto_fix_safe_findings(pool:&PgPool,member:&FleetMember,')" "1"
@@ -452,12 +463,13 @@ eq "F3 an unreadable issuer is 'unknown', never 'foreign'" \
 eq "F4 a host with no certificate is not foreign either" \
    "$(occ "$F_HELP" 'if!status.get("has_cert").and_then(|v|v.as_bool()).unwrap_or(false){')" "1"
 
-# ALL FIVE DOORS. Every path that can overwrite fullchain.pem asks the question.
+# ALL SIX DOORS. Every path that can overwrite fullchain.pem asks the question.
 # ⚠ Was "ALL THREE" and named three while the tree held five: the mail host door
 # has been unpinned since it was written, and v2.161.0 added the Compose-stack
-# door. A census whose prose counts lower than the tree is how a new door joins
-# without ever being asked — which is exactly how the stack door was written
-# without the guard in the first place.
+# door; GAP 209 then added a sixth, the Docker-app door. A census whose prose
+# counts lower than the tree is how a new door joins without ever being asked —
+# which is exactly how the stack door was written without the guard in the
+# first place.
 #
 # ⚠ s411: THE NAME CHECKED MUST BE THE NAME THE ORDER IS ABOUT TO OVERWRITE.
 # This asked `site.domain` unconditionally until s411 — correct for HTTP-01, but
@@ -475,8 +487,13 @@ eq "F5b and that name is the DNS-01 order's own subject, not always the site" \
    "$(occ "$F_SSL" 'RenewalPlan::Dns01{subject,..}=>subject.as_str(),')" "1"
 eq "F6 the scanner's auto-fix asks (the loop that needs no opt-in)" \
    "$(occ "$F_SCAN" 'crate::helpers::foreign_cert_issuer(agent,domain).await')" "1"
-eq "F6b and its Compose-stack sibling asks too — the same loop, the same disk" \
-   "$(occ "$F_SCAN" 'crate::helpers::foreign_cert_issuer(&member.agent,domain).await')" "1"
+# TWO since GAP 209: the Compose-stack fallback and the Docker-app fallback call
+# this literally the same way (`&member.agent, domain` — neither function has a
+# local `agent` binding the way the site arm above does), so this count is now
+# shared between them. F8b/F8c disambiguate WHICH door by pinning each one's own
+# distinct "stops rather than renewing" sentence instead.
+eq "F6b and its Compose-stack and Docker-app siblings ask too — the same loop, the same disk" \
+   "$(occ "$F_SCAN" 'crate::helpers::foreign_cert_issuer(&member.agent,domain).await')" "2"
 eq "F7 the auto-healer asks" \
    "$(occ "$F_HEAL" 'crate::helpers::foreign_cert_issuer(&agent,domain).await')" "1"
 eq "F7b the mail host door asks" \
@@ -489,6 +506,8 @@ eq "F8 the scanner stops rather than renewing" \
 # the other's line — the sibling-satisfaction discipline this file keeps.
 eq "F8b and the stack door stops too" \
    "$(occ "$F_SCAN" 'Auto-fix:NOTrenewingtheComposestackcertificatefor{domain}')" "1"
+eq "F8c and the Docker-app door stops too" \
+   "$(occ "$F_SCAN" 'Auto-fix:NOTrenewingtheDockerappcertificatefor{domain}')" "1"
 eq "F9 the healer stops rather than renewing" \
    "$(occ "$F_HEAL" 'Auto-heal:NOTrenewing{domain}')" "1"
 

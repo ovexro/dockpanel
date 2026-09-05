@@ -4,6 +4,32 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.224.0]
+
+### Fixed — Docker Apps' auto-provisioned SSL certificates now renew, and have a manual fix path
+
+The highest-severity finding left over from v2.223.0's loose-ends audit: a
+Docker App's SSL certificate (auto-provisioned at deploy, ACME or a registered
+certificate) had no owner row anywhere in the database, so neither of the
+panel's two existing renewal doors — a `sites` lookup, and the Compose-stack
+fallback right beside it — could ever find one to renew. The weekly
+filesystem-walk scan still raised the `ssl_expiry` warning (visibility was
+never the gap), but nothing ever acted on it, and there was no manual "renew"
+control either — a Docker App behind a domain would silently go back to HTTP
+once its certificate expired.
+
+Closed with a new, deliberately minimal `docker_app_domains` table (migration
+`20260905180000_docker_app_ssl_domains.sql`) recording only what a renewal
+decision needs — owner, server, TLS mode, ACME contact — written at deploy and
+removed at teardown, mirroring `docker_stacks`' own SSL columns. Wired into the
+scanner's existing reactive fallback chain as a third door
+(`renew_docker_app_certificate`, sibling of the Compose-stack arm: same
+host-scoping discipline, same TLS-mode guard so a `provided`/operator-uploaded
+certificate is never overwritten, same foreign-issuer guard, same per-host
+cooldown under its own action string). Because that fallback already runs both
+on the weekly schedule and whenever an admin clicks Scan, this closes the
+manual fix path too — no new UI control was needed.
+
 ## [2.223.0]
 
 ### Fixed — first-ever loose-ends audit: 11 severed pairs closed across both crates, the frontend, and 3 doc files

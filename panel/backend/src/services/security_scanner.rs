@@ -476,15 +476,28 @@ pub(crate) async fn auto_fix_safe_findings(
                 else {
                     // The subject came from the agent's FILESYSTEM walk of
                     // /etc/dockpanel/ssl, which is where a Compose stack's ACME
-                    // certificate also lands — a stack's domain can never own a
-                    // `sites` row (`domain_claim::find_occupant` returns
-                    // `Occupant::Stack` and every `INSERT INTO sites` goes
+                    // certificate — and a Docker app's — also lands. Neither a
+                    // stack's domain nor an app's can ever own a `sites` row
+                    // (`domain_claim::find_occupant` returns `Occupant::Stack`/
+                    // `Occupant::DockerApp` and every `INSERT INTO sites` goes
                     // through `ensure_claimable`), so this read cannot ever
-                    // match one. Until v2.161.0 a stack fell out of this loop
-                    // here with no log, no alert and no renewal: the panel
-                    // raised a critical `ssl_expiry` finding naming the domain
-                    // every week and then had nothing behind it.
-                    renew_stack_certificate(pool, member, domain).await;
+                    // match either. Until v2.161.0 a stack fell out of this loop
+                    // here with no log, no alert and no renewal; a Docker app
+                    // had the identical gap until this fallback existed at all
+                    // (no `docker_apps`/`deployed_apps` table ever gave it a row
+                    // to be found by) — in both cases the panel raised a
+                    // critical `ssl_expiry` finding naming the domain every
+                    // week and then had nothing behind it.
+                    if !renew_stack_certificate(pool, member, domain).await
+                        && !renew_docker_app_certificate(pool, member, domain).await
+                    {
+                        tracing::info!(
+                            "Auto-fix: {domain} is expiring on {} but matches neither a site, a \
+                             Compose stack, nor a Docker app on that host — nothing here can \
+                             renew it",
+                            member.name
+                        );
+                    }
                     continue;
                 };
 
@@ -891,6 +904,30 @@ fn stack_domain_state_key(kind: &str, domain: &str) -> String {
     format!("{prefix}{keep}-{}", &digest[..16])
 }
 
+/// The `state_key` a Docker app's SSL renewal failure both FIRES and RESOLVES
+/// under — the sibling of `stack_renewal_state_key`, kept as its own function
+/// rather than a shared one for the same isolation reason `auto_fix_safe_findings`
+/// itself is a sibling of nothing: a `stack:` and an `app:` prefix must never
+/// collide, since a domain can hold only one occupant type at a time but the
+/// two renewal doors run independently and must not share a dedup bucket.
+pub(crate) fn docker_app_renewal_state_key(domain: &str) -> String {
+    docker_app_domain_state_key(notifications::ssl_renewal_key::FAILED, domain)
+}
+
+fn docker_app_domain_state_key(kind: &str, domain: &str) -> String {
+    const MAX: usize = 100;
+    let readable = format!("app:{kind}:{domain}");
+    if readable.len() <= MAX {
+        return readable;
+    }
+    use sha2::{Digest, Sha256};
+    let digest = hex::encode(Sha256::digest(domain.as_bytes()));
+    let prefix = format!("app:{kind}:");
+    let budget = MAX - prefix.len() - 17;
+    let keep: String = domain.chars().take(budget).collect();
+    format!("{prefix}{keep}-{}", &digest[..16])
+}
+
 /// The `state_key` a REGISTERED certificate's SSL-expiry warning ladder fires
 /// and resolves under — `alert_engine::check_registered_cert_expiry`'s sibling
 /// of this file's own `stack_ssl_expiry_state_key`. Keyed on the certificate's
@@ -915,7 +952,13 @@ pub(crate) fn registered_cert_expiry_state_key(alias: &str) -> String {
     format!("{prefix}{keep}-{}", &digest[..16])
 }
 
-async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &str) {
+/// Returns whether `domain` matched a `docker_stacks` row at all — NOT whether
+/// the renewal succeeded. `false` means "keep looking" (the caller tries
+/// [`renew_docker_app_certificate`] next); `true` covers every other outcome,
+/// including a mode-guard decline or a failed order, because a domain that
+/// matched THIS table can never also match the Docker-app one
+/// (`domain_claim`'s occupant types are mutually exclusive).
+async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &str) -> bool {
     // 1. Resolve, ON THE HOST THAT RAISED THE FINDING — the same host discipline
     //    the site read above learned the hard way. A domain is unique only per
     //    server, so a name-only lookup on a fleet can hand back another host's
@@ -935,21 +978,9 @@ async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &s
     .unwrap_or(None);
 
     let Some((stack_id, user_id, ssl_email, tls_mode)) = stack else {
-        // The silent drop must not survive the fix. A certificate under
-        // /etc/dockpanel/ssl belonging to neither a site nor a stack on this
-        // host is a real condition (a domain moved, a stack deleted without its
-        // certificate) and the operator's only evidence used to be nothing at all.
-        // ⛔ `info!`, not `debug!`: nothing shipped runs at debug. `main.rs`
-        // defaults the filter to "info" and setup.sh, update.sh and the compose
-        // file all pin RUST_LOG=info, so a debug line here is another silent
-        // drop wearing a log statement. It fires at most once per expiring
-        // certificate per weekly scan.
-        tracing::info!(
-            "Auto-fix: {domain} is expiring on {} but matches neither a site nor a Compose stack \
-             on that host — nothing here can renew it",
-            member.name
-        );
-        return;
+        // No stack row either — the caller tries a Docker app next, and logs
+        // the combined "matches nothing" outcome only if that also misses.
+        return false;
     };
 
     // 2. THE MODE GUARD, and the whole safety of this change.
@@ -978,7 +1009,7 @@ async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &s
              The expiring file under /etc/dockpanel/ssl is a leftover; the stack serves its \
              registered certificate from the registry."
         );
-        return;
+        return true;
     }
 
     // The agent's `RenewRequest.email` is a required `String`, so a blank
@@ -991,7 +1022,7 @@ async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &s
             "Auto-fix: cannot renew {domain} — the stack is in ACME mode with no ssl_email, \
              and the agent requires a contact address to place an order"
         );
-        return;
+        return true;
     };
 
     // 3. Agent version gate. An agent older than 2.161.0 parses `runtime` as
@@ -1018,7 +1049,7 @@ async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &s
             reported.as_deref().unwrap_or("no readable version"),
             crate::routes::tls_certificates::STACK_RENEWAL_MIN_AGENT
         );
-        return;
+        return true;
     }
 
     // 3b. THE ISSUER GUARD — what is actually on disk, not what the row claims.
@@ -1053,7 +1084,7 @@ async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &s
             "Auto-fix: NOT renewing the Compose stack certificate for {domain} — the installed \
              certificate was issued by {issuer}, not by DockPanel. Renewing would replace it."
         );
-        return;
+        return true;
     }
 
     // 4. THE COOLDOWN, counting the rows step 6 writes.
@@ -1083,7 +1114,7 @@ async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &s
     .flatten();
 
     if recent.map(|r| r.0).unwrap_or(0) > 0 {
-        return;
+        return true;
     }
 
     tracing::info!("Auto-fix: renewing the Compose stack certificate for {domain}");
@@ -1258,6 +1289,218 @@ async fn renew_stack_certificate(pool: &PgPool, member: &FleetMember, domain: &s
             .await;
         }
     }
+    true
+}
+
+/// (id, user_id, app_name, ssl_email, tls_mode) — named so the query below
+/// doesn't trip clippy's `type_complexity` the way an inline 5-tuple does.
+type DockerAppDomainRow = (uuid::Uuid, uuid::Uuid, String, Option<String>, Option<String>);
+
+/// The Docker-app sibling of [`renew_stack_certificate`] — same contract
+/// (returns whether `domain` matched a `docker_app_domains` row, not whether
+/// the renewal succeeded), same reason for existing: `docker_app_domains` also
+/// carries no `ssl_expiry`/renewal-schedule column, so nothing else ever
+/// re-orders a Docker app's certificate on a schedule, and the agent's own
+/// weekly filesystem walk of `/etc/dockpanel/ssl` cannot tell it apart from a
+/// site's or a stack's certificate — it raises the same `ssl_expiry` finding
+/// either way. See migration `20260905180000_docker_app_ssl_domains.sql` for
+/// why the table exists and what it deliberately does not carry.
+
+async fn renew_docker_app_certificate(pool: &PgPool, member: &FleetMember, domain: &str) -> bool {
+    // 1. Resolve, ON THE HOST THAT RAISED THE FINDING — same host discipline as
+    //    the stack arm above, for the same reason: a domain is unique only per
+    //    server, so a name-only lookup could hand back another host's app and
+    //    renew through the wrong agent.
+    let app: Option<DockerAppDomainRow> =
+        sqlx::query_as(
+            "SELECT id, user_id, app_name, ssl_email, tls_mode \
+             FROM docker_app_domains WHERE lower(domain) = lower($1) AND server_id = $2",
+        )
+        .bind(domain)
+        .bind(member.id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+    let Some((app_id, user_id, app_name, ssl_email, tls_mode)) = app else {
+        return false;
+    };
+
+    // 2. THE MODE GUARD — identical reasoning to the stack arm: a Docker app
+    //    deployed with `tls_mode = "provided"` serves an operator-registered
+    //    certificate, and ordering an ACME one here would silently leave a
+    //    second, unused certificate on disk under the same domain (or worse,
+    //    become the renew target itself in some future change).
+    let mode = crate::routes::stacks::effective_tls_mode(tls_mode.as_deref(), ssl_email.as_deref());
+    if mode != "acme" {
+        tracing::info!(
+            "Auto-fix: not renewing {domain} — Docker app {app_name}'s TLS mode is '{mode}', not \
+             ACME. The expiring file under /etc/dockpanel/ssl is a leftover; the app serves its \
+             registered certificate from the registry."
+        );
+        return true;
+    }
+
+    let Some(contact) = ssl_email.as_deref().map(str::trim).filter(|e| !e.is_empty()) else {
+        tracing::warn!(
+            "Auto-fix: cannot renew {domain} — Docker app {app_name} is in ACME mode with no \
+             ssl_email, and the agent requires a contact address to place an order"
+        );
+        return true;
+    };
+
+    // 3. Agent version gate — reused from the stack arm: the renewal below
+    //    omits `runtime` for the exact same reason a stack's does (the panel
+    //    holds no `SiteConfig` for a Docker app's proxy either — its published
+    //    port is derived at deploy time from the container, not stored here),
+    //    so it needs the same agent that made `runtime` optional.
+    let reported = member
+        .agent
+        .get("/health")
+        .await
+        .ok()
+        .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(str::to_string));
+    let key = crate::services::panel_update::semver_key;
+    if !(reported.is_some()
+        && key(reported.as_deref()) >= key(Some(crate::routes::tls_certificates::STACK_RENEWAL_MIN_AGENT)))
+    {
+        tracing::warn!(
+            "Auto-fix: not renewing the Docker app certificate for {domain} — {} reports agent \
+             {}, and renewing in place needs {} or later. Update that server's agent.",
+            member.name,
+            reported.as_deref().unwrap_or("no readable version"),
+            crate::routes::tls_certificates::STACK_RENEWAL_MIN_AGENT
+        );
+        return true;
+    }
+
+    // 3b. THE ISSUER GUARD — same reasoning as the stack arm: the finding came
+    //     from a filesystem walk that never looks at the issuer, so a `tls_mode
+    //     = 'acme'` row proves only what the panel intended, never what is
+    //     installed. `upload_cert` is keyed on domain, not on an app, so a
+    //     purchased certificate can land here by more than one route.
+    if let Some(issuer) = crate::helpers::foreign_cert_issuer(&member.agent, domain).await {
+        tracing::info!(
+            "Auto-fix: NOT renewing the Docker app certificate for {domain} — the installed \
+             certificate was issued by {issuer}, not by DockPanel. Renewing would replace it."
+        );
+        return true;
+    }
+
+    // 4. THE COOLDOWN, counting the rows step 6 writes. Its own action string,
+    //    deliberately — sharing one with the stack or site arm would let either
+    //    gate satisfy this one's cooldown and mute a still-failing renewal.
+    let recent: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM activity_logs \
+         WHERE action = 'auto_fix.renew_docker_app_ssl' \
+         AND target_name = $1 \
+         AND server_id = $2 \
+         AND created_at > NOW() - INTERVAL '6 hours'",
+    )
+    .bind(domain)
+    .bind(member.id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    if recent.map(|r| r.0).unwrap_or(0) > 0 {
+        return true;
+    }
+
+    tracing::info!("Auto-fix: renewing the Docker app certificate for {domain}");
+
+    // 5. Act. NO `runtime` key — see the agent-version-gate comment above for
+    //    why: the certificate paths do not move, `provision_cert` overwrites
+    //    fullchain.pem/privkey.pem in place, and the app's existing vhost
+    //    already names exactly those paths.
+    let result = member
+        .agent
+        .post_long(
+            &format!("/ssl/{domain}/renew"),
+            Some(serde_json::json!({ "email": contact })),
+            crate::routes::ssl::DNS01_ORDER_TIMEOUT_SECS,
+        )
+        .await
+        .map_err(|e| e.to_string());
+
+    let success = result.is_ok();
+
+    // 6. Record — AND THIS ROW IS THE COOLDOWN step 4 counts. Written on BOTH
+    //    outcomes, for the same reason as the stack arm: an unlogged failure
+    //    would leave the gate above counting zero and re-order weekly against a
+    //    CA that just refused.
+    let details = match &result {
+        Ok(v) => v.to_string(),
+        Err(e) => e.clone(),
+    };
+    crate::services::activity::log_activity_on_server(
+        pool,
+        user_id,
+        "security-scanner",
+        "auto_fix.renew_docker_app_ssl",
+        Some("app"),
+        Some(domain),
+        Some(&format!("app_id={app_id}, success={success}, result={details}")),
+        None,
+        Some(member.id),
+    )
+    .await;
+
+    match result {
+        Ok(_) => {
+            tracing::info!("Auto-fix: Docker app certificate renewed for {domain}");
+            // No `ssl_expiry` write here, unlike the stack arm — the analogous
+            // `docker_app_domains` has no such column either (Tier 2, same as
+            // `docker_stacks` had until it grew one); this door records its
+            // outcome in `activity_logs` instead, and the next weekly scan
+            // re-derives everything from the filesystem regardless.
+            crate::services::system_log::log_event(
+                pool,
+                "info",
+                "security_scanner",
+                &format!("Auto-renewed the Docker app SSL certificate for {domain}"),
+                None,
+            )
+            .await;
+
+            notifications::resolve_alert(
+                pool,
+                user_id,
+                Some(member.id),
+                None,
+                "ssl_renewal_failure",
+                &docker_app_renewal_state_key(domain),
+                &format!("SSL renewal recovered: {domain}"),
+                &format!(
+                    "DockPanel renewed the certificate for the Docker app on {domain}. The \
+                     earlier renewal failure is resolved."
+                ),
+            )
+            .await;
+        }
+        Err(e) => {
+            tracing::warn!("Auto-fix: Docker app SSL renewal failed for {domain}: {e}");
+            notifications::fire_alert_deduped(
+                pool,
+                user_id,
+                Some(member.id),
+                None,
+                "ssl_renewal_failure",
+                &docker_app_renewal_state_key(domain),
+                "critical",
+                &format!("SSL renewal failed: {domain}"),
+                &format!(
+                    "The certificate for the Docker app on {domain} is expiring and DockPanel \
+                     could not renew it automatically: {e}. The app will stop loading over HTTPS \
+                     when the certificate expires. Redeploying the app reissues it."
+                ),
+                12,
+            )
+            .await;
+        }
+    }
+    true
 }
 
 async fn send_scan_alerts(pool: &PgPool, member: &FleetMember, critical: i32, warning: i32, total: i32) {
