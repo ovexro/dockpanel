@@ -983,6 +983,12 @@ pub async fn enable_ssl_for_site(
     domain: &str,
     site_config: &SiteConfig,
 ) -> Result<crate::services::wordpress::CanonicalUrlOutcome, String> {
+    // Every caller (provision, upload_cert, renew, DNS-01, Docker-app auto-SSL,
+    // git-deploy auto-SSL) funnels through here — locking once here, rather than
+    // in each of the 6 callers, is what makes them all mutually exclusive on the
+    // same domain. See site_lock's module doc.
+    let _guard = crate::site_lock::lock_site(domain).await;
+
     let ssl_config = SiteConfig {
         runtime: site_config.runtime.clone(),
         root: site_config.root.clone(),

@@ -514,12 +514,11 @@ pub async fn start_migration(
     .await
     .map_err(|e| internal_error("create migration", e))?;
 
-    // The actual migration would be handled by a background task that:
-    // 1. Exports container (docker export) on source
-    // 2. Transfers image to target server
-    // 3. Imports and starts on target
-    // 4. Updates DNS if needed
-    // For now, we create the migration record and the background task processes it.
+    // No background task exists anywhere in the tree to do the actual container
+    // export/transfer/import this would need — the row above is written once
+    // and never updated again (confirmed by the loose-ends audit: zero writers
+    // touch `app_migrations` besides this INSERT). It is permanently stuck at
+    // `status='in_progress'`. See FEATURES.md §Withdrawn Claims ("App Migration").
 
     activity::log_activity(
         &state.db, claims.sub, &claims.email, "migration.started",

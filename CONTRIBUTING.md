@@ -63,7 +63,7 @@ panel/
 ├── backend/     # Rust — API server, auth, DB, multi-server dispatch
 │   ├── src/routes/     # REST endpoints (62 files)
 │   ├── src/services/   # Background tasks (36 files)
-│   └── migrations/     # SQL migrations (128 files)
+│   └── migrations/     # SQL migrations (129 files)
 ├── cli/         # Rust — CLI tool (clap-based)
 │   └── src/commands/   # Subcommand handlers (11 files)
 └── frontend/    # React 19 + TypeScript + Tailwind 4

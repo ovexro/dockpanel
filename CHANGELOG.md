@@ -4,6 +4,71 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.223.0]
+
+### Fixed — first-ever loose-ends audit: 11 severed pairs closed across both crates, the frontend, and 3 doc files
+
+The first run, ever, of a cross-cutting "severed pair" audit (a writer with no
+reader, an endpoint with no caller, a doc that contradicts the code beside it)
+rather than the usual per-file rotation — which is structurally blind to this
+class of gap. 6 finder dimensions, 20 verified candidates, 11 closed this
+release:
+
+- **`site_lock` (the v2.222.0 concurrency fix) missed `enable_ssl_for_site`.**
+  All 9 site-mutating entry points it was wired into hold a per-domain lock;
+  the SSL-enable path — which does the identical tmp-write+rename on the same
+  nginx vhost file, and is called from 6 different sites (provision, upload,
+  renew, DNS-01, Docker-app auto-SSL, git-deploy auto-SSL) — did not. Now
+  locked once, inside `enable_ssl_for_site` itself, closing all 6 callers at
+  once.
+- **7 `retention_*` data-retention settings had no operator control.**
+  `auto_healer`'s nightly cleanup has read them since GAP 67, but no key was
+  ever added to `ALLOWED_KEYS`, so every install was permanently stuck at the
+  hardcoded defaults with no way to change them. Now settable (validated
+  1-3650 days) with a new "Data Retention" section in Settings.
+- **`WordPress.tsx` collapsed a failed request into "Not Detected."** A
+  timeout, an unreachable agent, or contention from the new `site_lock` queue
+  all landed in the same bare `catch`, which showed a false "No wp-config.php
+  found" plus an Install-over-it button for a site that was merely
+  unreachable. Now shows a distinct error + Retry, mirroring the fix already
+  applied to `Databases.tsx`'s equivalent bug.
+- **6 "Create"/"Add" buttons silently no-op'd on an empty required field** —
+  Extensions, Servers, Files (create + rename), ResellerUsers, and SiteDetail's
+  Add Alias. No error, no disabled state, nothing: a full-looking, clickable
+  button that does nothing. Now `disabled` on the same guard condition, matching
+  the pattern already used correctly on Cdn.tsx/Migration.tsx/Apps.tsx/Dns.tsx.
+- **Three `FEATURES.md`/`docs/api-reference.md` claims had gone stale**: API
+  keys still said "authenticate nothing" a release after `dp_`-prefixed keys
+  were wired into real auth (v2.221.0) — narrowed to the `dpiac_`/`dpx_`
+  families, which are unaffected; the mail Withdrawn-Claims row still said
+  clients are redirected away from mail management, a release after v2.102.0
+  gave them 9 real scoped endpoints and the redirect was removed; and
+  Auto-Optimization's "(via Settings)" claim was simply false — the backend and
+  agent are fully wired, but zero frontend code has ever called it.
+- **A `whmcs.rs` comment claimed a background task migrates containers between
+  servers.** No such task exists anywhere in the tree — the row is written once
+  and stuck at `in_progress` forever (already correctly documented in
+  `FEATURES.md` §Withdrawn Claims; the source comment just never matched it).
+- **`monitors.maintenance_until`** — added, never wired to any INSERT/UPDATE/
+  SELECT, superseded by the separate `maintenance_windows` table that shipped
+  instead. Dropped.
+- **`GET /api/update/fleet/{id}`** had no caller — the list endpoint already
+  returns full per-server progress, so nothing ever needed the single-run
+  fetch the docs told operators to poll. Docs corrected to describe the
+  endpoint actually used.
+- **A dead top-level `Extensions` lazy-import** left over from the Extensions→
+  Integrations tab consolidation shipped its own JS chunk that no route ever
+  loaded. Removed.
+
+9 further findings — Docker Apps' auto-provisioned SSL certs get no renewal
+and no manual fix path (Sites and Docker Stacks both get renewal sweeps),
+Restic backups skip the entire scheduler/retry/alert layer local backups get,
+WordPress vuln-scanning has no schedule and never alerts on critical CVEs, two
+orphaned columns, unreachable billing checkout/portal routes, two dead
+dashboard endpoints, and a container-policy usage endpoint with no reader —
+are real but need a product/architecture decision, not a mechanical fix;
+tracked for a future session.
+
 ## [2.222.0]
 
 ### Fixed — WordPress Toolkit second-pass audit: version-comparison correctness, a dead vuln-detail list, and zero site-level concurrency control

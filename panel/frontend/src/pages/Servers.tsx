@@ -221,7 +221,7 @@ export default function Servers() {
             </div>
           </div>
           <div className="flex gap-3">
-            <button onClick={handleCreate} className="px-4 py-2 bg-rust-500 text-dark-950 rounded-lg text-sm font-bold hover:bg-rust-400 transition-colors">
+            <button onClick={handleCreate} disabled={!form.name.trim()} className="px-4 py-2 bg-rust-500 text-dark-950 rounded-lg text-sm font-bold hover:bg-rust-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
               Create Server
             </button>
             <button onClick={() => setCreating(false)} className="px-4 py-2 bg-dark-700 text-dark-200 rounded-lg text-sm hover:bg-dark-600 transition-colors">

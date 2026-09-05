@@ -1858,6 +1858,133 @@ export default function Settings() {
         </div>
         )}
 
+        {/* Data retention windows. The reader (auto_healer.rs's run_retention_cleanup,
+            GAP 67) has existed for a while but had no ALLOWED_KEYS entry and no
+            control here — every install was stuck at the hardcoded defaults with no
+            way to change them. Found by the first dockpanel loose-ends audit. */}
+        {user?.role === "admin" && (
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mt-4">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Data Retention</h3>
+            <p className="text-xs text-dark-200 mt-0.5">How long each log/history table keeps rows before the nightly cleanup deletes them.</p>
+          </div>
+          <div className="divide-y divide-dark-700">
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Activity Log</p>
+                <p className="text-xs text-dark-400">Days to keep (default: 365)</p>
+              </div>
+              <input type="number" min="1" max="3650" value={settings.retention_activity_days || "365"}
+                onChange={async (e) => {
+                  try {
+                    await api.put("/settings", { retention_activity_days: e.target.value });
+                    setSettings(prev => ({ ...prev, retention_activity_days: e.target.value }));
+                    setMessage({ text: "Activity Log retention updated", type: "success" });
+                  } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed to save", type: "error" }); }
+                }}
+                className="w-20 px-2 py-1 border border-dark-500 rounded text-sm text-center focus:ring-2 focus:ring-accent-500 outline-none bg-dark-700"
+              />
+            </div>
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">System Logs</p>
+                <p className="text-xs text-dark-400">Days to keep (default: 30)</p>
+              </div>
+              <input type="number" min="1" max="3650" value={settings.retention_system_log_days || "30"}
+                onChange={async (e) => {
+                  try {
+                    await api.put("/settings", { retention_system_log_days: e.target.value });
+                    setSettings(prev => ({ ...prev, retention_system_log_days: e.target.value }));
+                    setMessage({ text: "System Logs retention updated", type: "success" });
+                  } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed to save", type: "error" }); }
+                }}
+                className="w-20 px-2 py-1 border border-dark-500 rounded text-sm text-center focus:ring-2 focus:ring-accent-500 outline-none bg-dark-700"
+              />
+            </div>
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Alert History</p>
+                <p className="text-xs text-dark-400">Days to keep (default: 90)</p>
+              </div>
+              <input type="number" min="1" max="3650" value={settings.retention_alert_days || "90"}
+                onChange={async (e) => {
+                  try {
+                    await api.put("/settings", { retention_alert_days: e.target.value });
+                    setSettings(prev => ({ ...prev, retention_alert_days: e.target.value }));
+                    setMessage({ text: "Alert History retention updated", type: "success" });
+                  } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed to save", type: "error" }); }
+                }}
+                className="w-20 px-2 py-1 border border-dark-500 rounded text-sm text-center focus:ring-2 focus:ring-accent-500 outline-none bg-dark-700"
+              />
+            </div>
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Security Scan History</p>
+                <p className="text-xs text-dark-400">Days to keep (default: 90)</p>
+              </div>
+              <input type="number" min="1" max="3650" value={settings.retention_scan_days || "90"}
+                onChange={async (e) => {
+                  try {
+                    await api.put("/settings", { retention_scan_days: e.target.value });
+                    setSettings(prev => ({ ...prev, retention_scan_days: e.target.value }));
+                    setMessage({ text: "Security Scan History retention updated", type: "success" });
+                  } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed to save", type: "error" }); }
+                }}
+                className="w-20 px-2 py-1 border border-dark-500 rounded text-sm text-center focus:ring-2 focus:ring-accent-500 outline-none bg-dark-700"
+              />
+            </div>
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Webhook Delivery Log</p>
+                <p className="text-xs text-dark-400">Days to keep (default: 7)</p>
+              </div>
+              <input type="number" min="1" max="3650" value={settings.retention_webhook_days || "7"}
+                onChange={async (e) => {
+                  try {
+                    await api.put("/settings", { retention_webhook_days: e.target.value });
+                    setSettings(prev => ({ ...prev, retention_webhook_days: e.target.value }));
+                    setMessage({ text: "Webhook Delivery Log retention updated", type: "success" });
+                  } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed to save", type: "error" }); }
+                }}
+                className="w-20 px-2 py-1 border border-dark-500 rounded text-sm text-center focus:ring-2 focus:ring-accent-500 outline-none bg-dark-700"
+              />
+            </div>
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Notification History</p>
+                <p className="text-xs text-dark-400">Days to keep (default: 30)</p>
+              </div>
+              <input type="number" min="1" max="3650" value={settings.retention_notification_days || "30"}
+                onChange={async (e) => {
+                  try {
+                    await api.put("/settings", { retention_notification_days: e.target.value });
+                    setSettings(prev => ({ ...prev, retention_notification_days: e.target.value }));
+                    setMessage({ text: "Notification History retention updated", type: "success" });
+                  } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed to save", type: "error" }); }
+                }}
+                className="w-20 px-2 py-1 border border-dark-500 rounded text-sm text-center focus:ring-2 focus:ring-accent-500 outline-none bg-dark-700"
+              />
+            </div>
+            <div className="px-5 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-dark-100">Monitor Check History</p>
+                <p className="text-xs text-dark-400">Days to keep (default: 7)</p>
+              </div>
+              <input type="number" min="1" max="3650" value={settings.retention_monitor_days || "7"}
+                onChange={async (e) => {
+                  try {
+                    await api.put("/settings", { retention_monitor_days: e.target.value });
+                    setSettings(prev => ({ ...prev, retention_monitor_days: e.target.value }));
+                    setMessage({ text: "Monitor Check History retention updated", type: "success" });
+                  } catch (err) { setMessage({ text: err instanceof Error ? err.message : "Failed to save", type: "error" }); }
+                }}
+                className="w-20 px-2 py-1 border border-dark-500 rounded text-sm text-center focus:ring-2 focus:ring-accent-500 outline-none bg-dark-700"
+              />
+            </div>
+          </div>
+        </div>
+        )}
+
         {user?.role === "admin" && <CredentialEncryptionCard setMessage={setMessage} />}
 
         {/* OAuth Sign-In Providers.

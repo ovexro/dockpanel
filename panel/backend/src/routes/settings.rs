@@ -71,6 +71,14 @@ pub const ALLOWED_KEYS: &[&str] = &[
     // did not happen to set an environment variable no UI mentions, with no way
     // for an operator to notice or correct it.
     "base_url",
+    // Data-retention windows (read by services/auto_healer.rs's run_retention_cleanup
+    // via key LIKE retention_%). Found half-wired by the loose-ends audit: the
+    // reader has existed since GAP 67, but no key was ever added here, so every
+    // install was permanently stuck at the hardcoded defaults with no operator
+    // control to change them.
+    "retention_activity_days", "retention_system_log_days", "retention_alert_days",
+    "retention_scan_days", "retention_webhook_days", "retention_notification_days",
+    "retention_monitor_days",
 ];
 
 /// Settings keys masked in the GET response and encrypted at rest, alongside
@@ -170,6 +178,23 @@ pub async fn update(
                 StatusCode::BAD_REQUEST,
                 "base_url must be an absolute HTTP(S) URL, e.g. https://panel.example.com",
             ));
+        }
+    }
+
+    // Validate the retention windows: each must be a positive integer day-count,
+    // else `run_retention_cleanup`'s `key LIKE 'retention_%'` reader would silently
+    // fall back to its default on a bad value — reject it here instead so the
+    // operator finds out immediately.
+    for key in [
+        "retention_activity_days", "retention_system_log_days", "retention_alert_days",
+        "retention_scan_days", "retention_webhook_days", "retention_notification_days",
+        "retention_monitor_days",
+    ] {
+        if let Some(v) = body.get(key) {
+            match v.parse::<i64>() {
+                Ok(n) if (1..=3650).contains(&n) => {}
+                _ => return Err(err(StatusCode::BAD_REQUEST, &format!("{key} must be an integer between 1 and 3650"))),
+            }
         }
     }
 

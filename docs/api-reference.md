@@ -667,11 +667,12 @@ leaves the stored value unchanged — there is no way to clear one through this 
 
 ### API Keys (4)
 
-> ⚠ **A key issued here authenticates nothing.** The endpoints below generate,
-> hash, store and rotate keys, and no code path ever reads a stored hash back to
-> authenticate a request — the only bearer-token extractor JWT-decodes the value
-> and nothing else. Authenticate with the session cookie or a JWT. See
-> `FEATURES.md` §Withdrawn Claims.
+> A `dp_`-prefixed key issued here authenticates requests: send it as
+> `Authorization: Bearer dp_...` and `auth.rs`'s `AuthUser` extractor looks up
+> its hash and authenticates as the owning user (since v2.221.0; `last_used_at`
+> updates on each use). This does **not** extend to the separate `dpiac_`
+> (Terraform/Pulumi) or `dpx_` (extensions) key families, which still
+> authenticate nothing — see `FEATURES.md` §Withdrawn Claims.
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -992,8 +993,10 @@ schema outright and is unaffected.
 `POST /api/update/fleet` builds an ordered plan of your remote servers — oldest
 agent version first, skipping any that are already at the target and any that
 have not checked in for five minutes — and returns `202` with a `run_id`. Poll
-`GET /api/update/fleet/{id}` for per-server progress; each entry carries the
-outcome and, on failure, the reason.
+`GET /api/update/fleet` (the list endpoint) for progress; it returns every run
+with its full per-server `plan`/`progress`/outcome, which is already everything
+a single run needs to render — there is no need to additionally fetch a
+single run by id.
 
 Each member updates **its own agent binary**: the agent fetches
 `dockpanel-agent-linux-<arch>` for the requested release tag, verifies it

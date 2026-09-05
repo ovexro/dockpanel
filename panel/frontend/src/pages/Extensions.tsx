@@ -276,7 +276,7 @@ export default function Extensions() {
             </div>
           </div>
           <div className="flex gap-3">
-            <button onClick={handleCreate} className="px-4 py-2 bg-rust-500 text-dark-950 rounded-lg text-sm font-bold hover:bg-rust-400 transition-colors">Create Extension</button>
+            <button onClick={handleCreate} disabled={!formName.trim() || !formUrl.trim()} className="px-4 py-2 bg-rust-500 text-dark-950 rounded-lg text-sm font-bold hover:bg-rust-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Create Extension</button>
             <button onClick={() => setCreating(false)} className="px-4 py-2 bg-dark-700 text-dark-200 rounded-lg text-sm hover:bg-dark-600 transition-colors">Cancel</button>
           </div>
         </div>

@@ -99,7 +99,6 @@ const WordPress = lazyRetry(() => import("./pages/WordPress"));
 const WordPressToolkit = lazyRetry(() => import("./pages/WordPressToolkit"));
 const Logs = lazyRetry(() => import("./pages/Logs"));
 const Apps = lazyRetry(() => import("./pages/Apps"));
-const Extensions = lazyRetry(() => import("./pages/Extensions"));
 const Security = lazyRetry(() => import("./pages/Security"));
 const Settings = lazyRetry(() => import("./pages/Settings"));
 const Account = lazyRetry(() => import("./pages/Account"));

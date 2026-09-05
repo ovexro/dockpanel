@@ -31,6 +31,7 @@ export default function WordPress() {
   const [plugins, setPlugins] = useState<WpPlugin[]>([]);
   const [themes, setThemes] = useState<WpTheme[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [tab, setTab] = useState<"plugins" | "themes">("plugins");
   const [message, setMessage] = useState({ text: "", type: "" });
   const [busy, setBusy] = useState("");
@@ -54,12 +55,19 @@ export default function WordPress() {
     try {
       const data = await api.get<WpInfo>(`/sites/${id}/wordpress`);
       setInfo(data);
+      setError("");
       if (data.installed) {
         loadPlugins();
         loadThemes();
       }
-    } catch {
-      setInfo({ installed: false });
+    } catch (e) {
+      // A failed request (agent unreachable, timeout, contention from the
+      // site_lock queue) is NOT the same signal as a genuine "no wp-config.php
+      // found" — collapsing both into installed:false showed a false "Not
+      // Detected" + an Install-over-it CTA for a site that was merely
+      // temporarily unreachable. Surface the error instead; loadInfo() (via
+      // the Retry button) is the only thing that should ever set installed:false.
+      setError(e instanceof Error ? e.message : "Failed to load WordPress status");
     } finally {
       setLoading(false);
     }
@@ -204,7 +212,26 @@ export default function WordPress() {
         </div>
       )}
 
-      {!info?.installed ? (
+      {error ? (
+        /* Load failed — distinct from "not installed" (see loadInfo's catch). */
+        <div className="bg-dark-800 rounded-lg border border-dark-500 p-8">
+          <div className="text-center max-w-md mx-auto">
+            <div className="w-16 h-16 bg-danger-500/15 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <svg className="w-8 h-8 text-danger-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+              </svg>
+            </div>
+            <h2 className="text-lg font-semibold text-dark-50 mb-2">Could Not Load WordPress Status</h2>
+            <p className="text-sm text-dark-200 mb-6">{error}</p>
+            <button
+              onClick={() => { setLoading(true); loadInfo(); }}
+              className="px-5 py-2.5 bg-accent-600 text-white rounded-lg text-sm font-medium hover:bg-accent-700"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      ) : !info?.installed ? (
         /* WordPress Not Installed */
         <div className="bg-dark-800 rounded-lg border border-dark-500 p-8">
           <div className="text-center max-w-md mx-auto">
