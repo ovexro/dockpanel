@@ -23,12 +23,12 @@
  */
 
 export const measurements = {
-  /** Published release assets, linux/amd64, v2.103.0. Verified by the GitHub API. */
+  /** Published release assets, linux/amd64, v2.222.0. Verified by the GitHub API. */
   binary: {
     api: 24,
     agent: 21,
-    cli: 1.7,
-    total: 47,
+    cli: 3.9,
+    total: 49,
   },
 
   /**

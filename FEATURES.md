@@ -229,8 +229,8 @@ honest:
 |--------|-------|--------|----------|
 | API binary | 24 MB | release | v2.182.0 |
 | Agent binary | 21 MB | release | v2.103.0 |
-| CLI binary | 1.7 MB | release | v2.103.0 |
-| Panel binaries, all three | 47 MB | release | v2.182.0 |
+| CLI binary | 3.9 MB | release | v2.222.0 |
+| Panel binaries, all three | 49 MB | release | v2.222.0 |
 | API RAM (RSS) | ~14 MB | measured | 2026-07-27 |
 | Agent RAM (RSS) | ~35 MB | measured | 2026-07-27 |
 | Panel services RAM (agent + API) | ~49 MB | measured | 2026-07-27 |
