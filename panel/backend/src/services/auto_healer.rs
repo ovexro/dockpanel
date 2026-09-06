@@ -2240,8 +2240,8 @@ async fn auto_sleep_idle_containers(pool: &PgPool, agents: &AgentRegistry) {
     // running-check listed the LOCAL host's containers, and the stop was posted
     // to the LOCAL agent. Auto-sleep was quietly inoperative for every fleet
     // member — the failure looked exactly like "nothing was idle".
-    let configs: Vec<(String, String, Option<String>, i32, Option<uuid::Uuid>)> = sqlx::query_as(
-        "SELECT container_id, container_name, domain, sleep_after_minutes, server_id \
+    let configs: Vec<(String, String, Option<String>, i32, Option<uuid::Uuid>, bool)> = sqlx::query_as(
+        "SELECT container_id, container_name, domain, sleep_after_minutes, server_id, gpu_enabled \
          FROM container_sleep_config \
          WHERE auto_sleep_enabled = true AND is_sleeping = false"
     )
@@ -2255,7 +2255,7 @@ async fn auto_sleep_idle_containers(pool: &PgPool, agents: &AgentRegistry) {
 
     let now = chrono::Utc::now();
 
-    for (container_id, container_name, domain, threshold_minutes, server_id) in &configs {
+    for (container_id, container_name, domain, threshold_minutes, server_id, gpu_enabled) in &configs {
         // Resolve the host from the row. The backfill gave every existing row a
         // server, so a NULL here means a row written by something that does not
         // set the column yet — refuse rather than falling back to this box,
@@ -2307,6 +2307,31 @@ async fn auto_sleep_idle_containers(pool: &PgPool, agents: &AgentRegistry) {
                     .execute(pool)
                     .await;
                 }
+            }
+        }
+
+        // A GPU workload doing headless compute (no HTTP traffic at all) is
+        // invisible to the nginx check above, so it looked idle the instant it
+        // stopped answering requests — the exact case `gpu_enabled` was added
+        // for and then never consulted (it had no reader anywhere until now).
+        // Ask the same agent for its live per-process GPU usage; a process this
+        // agent attributes to this container's name counts as activity exactly
+        // like real HTTP traffic does above.
+        if *gpu_enabled
+            && let Ok(gpu_info) = agent.get("/apps/gpu-info").await
+        {
+            let active = gpu_info.get("processes")
+                .and_then(|v| v.as_array())
+                .is_some_and(|procs| procs.iter().any(|p| {
+                    p.get("container_name").and_then(|v| v.as_str()) == Some(container_name.as_str())
+                }));
+            if active {
+                let _ = sqlx::query(
+                    "UPDATE container_sleep_config SET last_activity_at = NOW() WHERE container_id = $1"
+                )
+                .bind(container_id)
+                .execute(pool)
+                .await;
             }
         }
 

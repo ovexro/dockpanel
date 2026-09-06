@@ -21,6 +21,35 @@ interface ActivityItem {
   created_at: string;
 }
 
+interface TimelineEvent {
+  type: string;
+  detail: string;
+  target?: string;
+  created_at: string;
+}
+
+interface FleetServer {
+  id: string;
+  name: string;
+  ip_address?: string;
+  firing_alerts: number;
+  active_incidents: number;
+  sites: number;
+  databases: number;
+  cpu_pct?: number;
+  mem_pct?: number;
+  disk_pct?: number;
+  status: string;
+}
+
+interface FleetOverview {
+  servers: FleetServer[];
+  total_servers: number;
+  total_firing: number;
+  total_incidents: number;
+  total_sites: number;
+}
+
 interface DockerImage {
   size: number | string;
   Size?: number | string;
@@ -272,6 +301,11 @@ export default function Dashboard() {
   const [dockerInfo, setDockerInfo] = useState<{ total: number; running: number; stopped: number } | null>(null);
   // Feature #2: Recent activity feed
   const [recentActivity, setRecentActivity] = useState<ActivityItem[]>([]);
+  // GET /api/dashboard/timeline — unified deploy/backup/incident/alert/security
+  // feed, tenant-scoped server-side; had zero frontend caller until now.
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  // GET /api/dashboard/fleet — admin-only cross-server health; same gap.
+  const [fleetOverview, setFleetOverview] = useState<FleetOverview | null>(null);
   // Feature #6: Bandwidth usage summary
   const [bandwidthTotal, setBandwidthTotal] = useState({ rx: 0, tx: 0 });
   // Feature #8: Docker image disk usage
@@ -374,6 +408,19 @@ export default function Dashboard() {
       api
         .get<ActivityItem[]>("/activity?limit=5")
         .then(setRecentActivity)
+        .catch(() => {});
+    }
+    // Unified timeline — scoped to the caller's own resources server-side
+    // (AuthUser, not AdminUser), so safe to fetch for every role.
+    api
+      .get<TimelineEvent[]>("/dashboard/timeline")
+      .then(setTimeline)
+      .catch(() => {});
+    // Fleet-wide health overview — admin only in the backend (AdminUser).
+    if (isAdmin) {
+      api
+        .get<FleetOverview>("/dashboard/fleet")
+        .then(setFleetOverview)
         .catch(() => {});
     }
     // Feature #8: Docker image disk usage — `docker_apps` again, so admin only.
@@ -777,6 +824,8 @@ export default function Dashboard() {
               { id: "health_banner", label: "Health Indicator" },
               { id: "sites_grid", label: "Sites Grid" },
               { id: "activity", label: "Recent Activity", hostOnly: true },
+              { id: "timeline", label: "Timeline" },
+              { id: "fleet", label: "Fleet Health", hostOnly: true },
               { id: "issues", label: "Active Issues" },
               { id: "ssl_countdown", label: "SSL Countdown" },
               { id: "network", label: "Network I/O", hostOnly: true },
@@ -1219,6 +1268,37 @@ export default function Dashboard() {
             </div>
           )}
 
+          {/* Fleet Health — cross-server overview for admins. GET /api/dashboard/fleet
+              was fully built and hardened (v2.185.0/v2.188.0) but had zero frontend
+              caller; a single-server install has nothing this adds over the rest of
+              the page, so it only renders once there's an actual fleet to show. */}
+          {isAdmin && isVisible("fleet") && fleetOverview && fleetOverview.servers.length > 1 && (
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
+              <div className="px-4 py-2.5 border-b border-dark-600 flex justify-between items-center">
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Fleet Health</h3>
+                <Link to="/servers" className="text-[10px] text-rust-400 hover:text-rust-300">Manage</Link>
+              </div>
+              <div className="divide-y divide-dark-600">
+                {fleetOverview.servers.map((s) => (
+                  <Link key={s.id} to="/servers" className="px-4 py-2 flex items-center justify-between text-xs hover:bg-dark-700/50 transition-colors">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className={`w-2 h-2 rounded-full shrink-0 ${s.status === "healthy" ? "bg-rust-500" : "bg-warn-500"}`} />
+                      <span className="text-dark-100 font-mono truncate">{s.name}</span>
+                    </div>
+                    <div className="flex items-center gap-3 text-[10px] text-dark-300 shrink-0">
+                      {s.cpu_pct != null && <span>CPU {s.cpu_pct.toFixed(0)}%</span>}
+                      {s.mem_pct != null && <span>Mem {s.mem_pct.toFixed(0)}%</span>}
+                      <span>{s.sites} sites</span>
+                      {s.firing_alerts > 0
+                        ? <span className="text-danger-400 font-bold">{s.firing_alerts} firing</span>
+                        : <span className="text-rust-400">0 firing</span>}
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Feature #5: Site Status Mini-Grid */}
           {isVisible("sites_grid") && sitesList.length > 0 && (
             <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
@@ -1261,6 +1341,36 @@ export default function Dashboard() {
                       {a.target_name && <span className="text-dark-100 font-mono truncate">{a.target_name}</span>}
                     </div>
                     <span className="text-dark-400 text-[10px] shrink-0 ml-2">{timeAgo(a.created_at)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Timeline — unified deploy/backup/incident/alert/security feed. Scoped
+              server-side to the caller's own resources, so (unlike Recent Activity
+              above) it renders for every role, not just admins. GET
+              /api/dashboard/timeline was fully built and hardened but had zero
+              frontend caller. */}
+          {isVisible("timeline") && timeline.length > 0 && (
+            <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden mb-6">
+              <div className="px-4 py-2.5 border-b border-dark-600 flex justify-between items-center">
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Timeline</h3>
+              </div>
+              <div className="divide-y divide-dark-600">
+                {timeline.slice(0, 10).map((e, i) => (
+                  <div key={i} className="px-4 py-2 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 uppercase ${
+                        e.type === "alert" || e.type === "incident" ? "bg-danger-500/15 text-danger-400" :
+                        e.type === "security" ? "bg-warn-500/15 text-warn-400" :
+                        e.type === "deploy" ? "bg-rust-500/15 text-rust-400" :
+                        "bg-dark-700 text-dark-200"
+                      }`}>{e.type}</span>
+                      <span className="text-dark-100 font-mono truncate">{e.detail}</span>
+                      {e.target && <span className="text-dark-400 truncate">· {e.target}</span>}
+                    </div>
+                    <span className="text-dark-400 text-[10px] shrink-0 ml-2">{timeAgo(e.created_at)}</span>
                   </div>
                 ))}
               </div>

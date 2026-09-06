@@ -34,7 +34,6 @@ struct SettingRow {
 pub const ALLOWED_KEYS: &[&str] = &[
     "panel_name", "smtp_host", "smtp_port", "smtp_username", "smtp_password",
     "smtp_from", "smtp_from_name", "smtp_encryption",
-    "stripe_price_starter", "stripe_price_pro", "stripe_price_agency",
     "agent_auto_update_enabled",
     "pdns_api_url", "pdns_api_key",
     "auto_heal_enabled", "auto_heal_docker_reclaim", "status_page_enabled", "enforce_2fa",

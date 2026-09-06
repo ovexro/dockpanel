@@ -16,8 +16,6 @@
 | `CORS_ORIGINS` | No | `https://panel.example.com` | Comma-separated list of allowed CORS origins |
 | `LOG_FORMAT` | No | `text` | Set to `json` for JSON structured logging |
 | `SECRETS_ENCRYPTION_KEY` | No | derived from `JWT_SECRET` | Dedicated key for encrypting stored credentials and Secrets Manager values. **Requires v2.112.0 or later — see the warning below before setting it on an existing install.** |
-| `STRIPE_SECRET_KEY` | No | — | Stripe secret key (only if billing is enabled) |
-| `STRIPE_WEBHOOK_SECRET` | No | — | Stripe webhook signing secret (only if billing is enabled) |
 | `RUST_LOG` | No | `info` | Log level (`error`, `warn`, `info`, `debug`, `trace`) |
 
 ### `SECRETS_ENCRYPTION_KEY` — separating credential encryption from `JWT_SECRET`

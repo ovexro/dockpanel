@@ -4,6 +4,20 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.228.0]
+
+### Closed three of p209's nine deferred findings (Loose-Ends Audit, v2.223.0): a dashboard gap, a GPU correctness bug, and a withdrawn feature
+
+Re-verified all six still-open deferred findings against current HEAD before acting (per this project's own audit-verification standard); three survived as this release's scope, three did not need code changes.
+
+**Added — Fleet Health and Timeline widgets on the Dashboard.** `GET /api/dashboard/fleet` and `GET /api/dashboard/timeline` were fully built and hardened across two prior releases (v2.185.0/v2.188.0) with zero frontend caller. Wired both into `Dashboard.tsx`: Fleet Health (admin-only, renders once more than one server exists) shows a per-server status dot, CPU/memory, site count and firing-alert count; Timeline (every role, server-side tenant-scoped) merges recent deploys/backups/incidents/alerts/security scans into one feed.
+
+**Fixed — a GPU workload with no HTTP traffic was auto-slept out from under itself.** `container_sleep_config.gpu_enabled` existed since v2.something's GPU-passthrough work but had no reader or writer anywhere: `deploy`'s own `gpu_enabled` flag reached Docker's HostConfig and stopped there, and `auto_sleep_idle_containers` judged idleness purely from nginx-derived HTTP traffic — real for a web app, meaningless for a container doing headless GPU compute. Fixed in two parts: `deploy` now seeds `container_sleep_config.gpu_enabled` the moment a container exists (without touching an admin's own `auto_sleep_enabled`/`sleep_after_minutes` choice on conflict), and the auto-sleeper now asks the agent's own `/apps/gpu-info` for a live process attributed to the container's name, treating that exactly like real HTTP traffic when deciding idleness.
+
+**Withdrawn — the Stripe subscription-billing surface.** `routes/billing.rs` was a complete, actively-hardened Checkout/Customer-Portal/webhook integration with zero UI trigger, sitting in direct contradiction with the product's own stated identity ("Zero subscriptions", "no premium tier and nothing is held back") — and even reachable it sold nothing, since `plan_server_limit` has been unconditionally unlimited for every user since v2.176's enforcement-removal migration. Removed the routes, the `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` config, the `stripe_price_*` settings and their Settings.tsx panel, and the now-inert `users.stripe_customer_id`/`stripe_subscription_id`/`plan`/`plan_status`/`plan_server_limit` columns (migration `20260906010000_drop_stripe_billing.sql`). `routes/whmcs.rs`'s own unrelated write to `users.plan` (a WHMCS-provisioning concept, not Stripe's) was repointed to the column that's actually read back, `whmcs_service_map.plan`. See FEATURES.md's Withdrawn Claims table.
+
+**Not changed — three findings confirmed already-fine or out of scope for a mechanical fix.** The Restic backup scheduler/retry/alert gap remains genuinely unreachable from any shipped UI or CLI (unchanged since v2.207.0), so it stays a zero-exposure future-session item. `GET /api/servers/{id}/metrics` remains a legitimate documented, API-key-gated public API surface with no first-party page to slot a caller into. `GET /api/container-policies/{user_id}/usage` returns a live fleet-wide count with no per-user filter and no bulk form — wiring a per-row usage bar today would visually claim per-user data that isn't real; filed as a deferred-scope register entry instead of a quick wire-up.
+
 ## [2.227.0]
 
 ### Fixed — a returning OAuth login only ever checked the provider's NAME, never the provider's own account id

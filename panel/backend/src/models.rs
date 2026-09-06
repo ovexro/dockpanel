@@ -18,13 +18,6 @@ pub struct User {
     #[serde(skip_serializing)]
     pub reset_expires: Option<DateTime<Utc>>,
     #[serde(skip_serializing)]
-    pub stripe_customer_id: Option<String>,
-    #[serde(skip_serializing)]
-    pub stripe_subscription_id: Option<String>,
-    pub plan: String,
-    pub plan_status: String,
-    pub plan_server_limit: i32,
-    #[serde(skip_serializing)]
     pub totp_secret: Option<String>,
     pub totp_enabled: bool,
     #[serde(skip_serializing)]

@@ -370,6 +370,7 @@ pub async fn deploy(
     };
     let deploy_memory = body.memory_mb;
     let deploy_cpu = body.cpu_percent;
+    let deploy_gpu_enabled = body.gpu_enabled;
 
     // Read reverse proxy preference (nginx or traefik)
     let reverse_proxy: Option<(String,)> = sqlx::query_as(
@@ -708,6 +709,34 @@ pub async fn deploy(
                     .bind(domain)
                     .bind(deploy_ssl_email.as_deref())
                     .bind(tls.mode)
+                    .execute(&db)
+                    .await;
+                }
+
+                // Seed container_sleep_config's gpu_enabled the moment it's
+                // knowable. Nothing else in the panel records whether a
+                // container was deployed with GPU passthrough — `deploy_app`'s
+                // own DeviceRequest is written straight into Docker's HostConfig
+                // and never echoed back by `/apps` — so without this the column
+                // stays permanently false and auto_sleep_idle_containers cannot
+                // tell a GPU workload from an idle web app. auto_sleep_enabled
+                // and sleep_after_minutes are deliberately NOT in the UPDATE SET:
+                // an admin's own choice made through the sleep-settings screen
+                // (or the column defaults on a fresh row) must survive a
+                // redeploy the sleeper hasn't seen yet.
+                if let Some(new_container_id) = result.get("container_id").and_then(|v| v.as_str()) {
+                    let _ = sqlx::query(
+                        "INSERT INTO container_sleep_config \
+                             (container_id, container_name, domain, gpu_enabled, auto_sleep_enabled, sleep_after_minutes, last_activity_at, server_id) \
+                         VALUES ($1, $2, $3, $4, false, 30, NOW(), $5) \
+                         ON CONFLICT (container_id) DO UPDATE SET \
+                             gpu_enabled = $4, container_name = $2, domain = $3, server_id = $5, updated_at = NOW()",
+                    )
+                    .bind(new_container_id)
+                    .bind(&app_name)
+                    .bind(&deploy_domain)
+                    .bind(deploy_gpu_enabled)
+                    .bind(dns_server_id)
                     .execute(&db)
                     .await;
                 }

@@ -56,7 +56,7 @@ export default function CommandPalette() {
     { id: "servers", label: "Servers", icon, path: "/servers", category: "Admin", keywords: "multi-server agent fleet remote" },
     { id: "users", label: "Users", icon, path: "/users", category: "Admin", keywords: "accounts roles permissions suspend reset password" },
     { id: "container-policies", label: "Container Policies", icon, path: "/container-policies", category: "Admin", keywords: "isolation limits quotas docker user policy network" },
-    { id: "integrations", label: "Integrations", icon, path: "/integrations", category: "Admin", keywords: "webhooks extensions whmcs terraform stripe billing api" },
+    { id: "integrations", label: "Integrations", icon, path: "/integrations", category: "Admin", keywords: "webhooks extensions whmcs terraform billing api" },
     { id: "secrets", label: "Secrets", icon, path: "/secrets", category: "Admin", keywords: "vault encrypted credentials aes keys" },
     { id: "security", label: "Security", icon: "M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z", path: "/security", category: "Admin", keywords: "firewall fail2ban ssh hardening diagnostics scan lockdown recordings audit" },
     { id: "system", label: "System", icon, path: "/system", category: "Admin", keywords: "health updates services processes network info" },

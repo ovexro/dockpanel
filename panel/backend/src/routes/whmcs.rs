@@ -278,26 +278,28 @@ pub async fn webhook(
                     .to_string();
 
                 let row: (uuid::Uuid,) = sqlx::query_as(
-                    "INSERT INTO users (email, password_hash, role, email_verified, approved, plan) \
-                     VALUES ($1, $2, 'user', true, true, $3) RETURNING id"
+                    "INSERT INTO users (email, password_hash, role, email_verified, approved) \
+                     VALUES ($1, $2, 'user', true, true) RETURNING id"
                 )
                 .bind(email)
                 .bind(&hash)
-                .bind(plan)
                 .fetch_one(&state.db)
                 .await
                 .map_err(|e| internal_error("whmcs create user", e))?;
                 row.0
             };
 
-            // Map service
+            // Map service. `users.plan` was withdrawn with the Stripe billing
+            // routes it existed to serve (routes/billing.rs) — the WHMCS plan
+            // name lives only here, in `whmcs_service_map.plan`, which is what
+            // Integrations.tsx actually reads.
             sqlx::query(
                 "INSERT INTO whmcs_service_map (whmcs_service_id, user_id, plan, status) \
                  VALUES ($1, $2, $3, 'active') ON CONFLICT (whmcs_service_id) DO UPDATE SET status = 'active'"
             )
             .bind(service_id)
             .bind(user_id)
-            .bind(body.plan.as_deref().unwrap_or("basic"))
+            .bind(plan)
             .execute(&state.db)
             .await
             .ok();

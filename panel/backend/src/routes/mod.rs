@@ -12,7 +12,6 @@ pub mod branding_assets;
 pub mod cdn;
 pub mod dashboard;
 pub mod oauth;
-pub mod billing;
 pub mod crons;
 pub mod databases;
 pub mod deploy;
@@ -1434,10 +1433,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/monitors/{id}/uptime", get(monitors::uptime_stats))
         .route("/api/monitors/{id}/chart", get(monitors::response_chart))
         .route("/api/monitors/{id}/check", post(monitors::force_check))
-        // Billing
-        .route("/api/billing/plan", get(billing::current_plan))
-        .route("/api/billing/checkout", post(billing::create_checkout))
-        .route("/api/billing/portal", post(billing::customer_portal))
         // Branding logo upload (admin)
         .route("/api/branding/logo", post(branding_assets::upload_logo))
         // Public endpoints (no auth)
@@ -1463,7 +1458,6 @@ pub fn router() -> Router<AppState> {
         // Heartbeat endpoint (no auth — monitor validates by ID)
         .route("/api/heartbeat/{monitor_id}/{token}", post(monitors::heartbeat))
         // Webhooks (no auth — validated by secret/signature)
-        .route("/api/webhooks/stripe", post(billing::webhook))
         .route("/api/webhooks/deploy/{site_id}/{secret}", post(deploy::webhook))
         // Staging Environments
         .route("/api/sites/{id}/staging", get(staging::get_staging).post(staging::create).delete(staging::destroy))

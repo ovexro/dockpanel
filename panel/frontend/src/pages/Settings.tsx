@@ -179,13 +179,6 @@ const NOTIF_CHANNELS = [
  *  else is passed through verbatim — an operator typing {{host}} gets "{{host}}". */
 const NOTIF_PLACEHOLDERS = ["{{title}}", "{{message}}", "{{severity}}", "{{timestamp}}"] as const;
 
-/** The plans routes/billing.rs builds `stripe_price_{plan}` from. */
-const STRIPE_PLANS = [
-  { id: "starter", label: "Starter" },
-  { id: "pro", label: "Pro" },
-  { id: "agency", label: "Agency" },
-] as const;
-
 export default function Settings() {
   const { user } = useAuth();
   const [settings, setSettings] = useState<Record<string, string>>({});
@@ -291,16 +284,6 @@ export default function Settings() {
     Object.fromEntries(NOTIF_CHANNELS.map(c => [c.id, ""]))
   );
 
-  // Stripe plan price IDs — routes/billing.rs looks each one up by
-  // `stripe_price_{plan}` and its comment already said "admin configures via
-  // Settings page", which was not true of any page.
-  const [stripePrices, setStripePrices] = useState<Record<string, string>>(
-    Object.fromEntries(STRIPE_PLANS.map(p => [p.id, ""]))
-  );
-  // Whether STRIPE_SECRET_KEY is present in api.env. The price IDs below are
-  // settings; the secret key is not, so the two halves of billing are configured
-  // in different places and only one of them is on this page.
-  const [billingEnabled, setBillingEnabled] = useState<boolean | null>(null);
   const [canary, setCanary] = useState<{ enabled: boolean; watching: number; total: number; armable: number; paths: { path: string; state: string; plantable: boolean; detail: string | null }[] } | null>(null);
   const [canaryErr, setCanaryErr] = useState<string | null>(null);
   const [arming, setArming] = useState(false);
@@ -332,9 +315,6 @@ export default function Settings() {
       }])));
       setNotifTemplates(Object.fromEntries(
         NOTIF_CHANNELS.map(c => [c.id, data[`notif_template_${c.id}`] || ""])
-      ));
-      setStripePrices(Object.fromEntries(
-        STRIPE_PLANS.map(p => [p.id, data[`stripe_price_${p.id}`] || ""])
       ));
     } catch (e) {
       setMessage({
@@ -473,9 +453,6 @@ export default function Settings() {
       .catch(() => {});
     api.get<OAuthRedirects>("/settings/oauth-redirects")
       .then(setOauthRedirects)
-      .catch(() => {});
-    api.get<{ billing_enabled?: boolean }>("/billing/plan")
-      .then((d) => setBillingEnabled(!!d.billing_enabled))
       .catch(() => {});
     healthTimer.current = setInterval(loadHealth, 30000);
     return () => clearInterval(healthTimer.current);
@@ -1000,66 +977,6 @@ export default function Settings() {
           </div>
         </div>
 
-        {/* Stripe plan pricing.
-            routes/billing.rs builds the key from the plan being checked out, and
-            when the row is missing answers 503 "Price not configured for the pro
-            plan. Set '…' in settings." — an error naming a setting no page could
-            set, next to a comment reading "admin configures via Settings page".
-            This is that page.
-            The key names are deliberately not spelled out here: §9 of
-            tests/settings-controls-pin-e2e.sh greps this tree for them, and a
-            key named only in prose would credit a control that does not exist. */}
-        {user?.role === "admin" && (
-        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
-          <div className="px-5 py-3 border-b border-dark-600">
-            <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Stripe Plan Pricing</h3>
-            <p className="text-xs text-dark-200 mt-0.5">Stripe Price IDs used at checkout. A plan with no price ID cannot be subscribed to.</p>
-          </div>
-          {billingEnabled === false && (
-            <div className="px-5 py-3 border-b border-dark-600 bg-dark-900/40">
-              <p className="text-xs text-dark-300">
-                <span className="text-dark-100 font-medium">Billing is off.</span> The price IDs below are stored but unused until
-                <code className="font-mono mx-1">STRIPE_SECRET_KEY</code> is set in <code className="font-mono">/etc/dockpanel/api.env</code> —
-                that half of the configuration is not a panel setting.
-              </p>
-            </div>
-          )}
-          <div className="p-5 space-y-3">
-            {STRIPE_PLANS.map(p => (
-              <div key={p.id}>
-                <label htmlFor={`stripe-price-${p.id}`} className="block text-sm font-medium text-dark-100 mb-1">{p.label}</label>
-                <input
-                  id={`stripe-price-${p.id}`}
-                  type="text"
-                  value={stripePrices[p.id] || ""}
-                  onChange={e => setStripePrices(prev => ({ ...prev, [p.id]: e.target.value }))}
-                  placeholder="price_1AbCdEfGhIjKlMnO"
-                  className="w-full px-3 py-2 border border-dark-500 rounded-lg text-sm font-mono focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
-                />
-              </div>
-            ))}
-            <button
-              onClick={async () => {
-                setSaving("stripe");
-                try {
-                  const body = Object.fromEntries(
-                    STRIPE_PLANS.map(p => [`stripe_price_${p.id}`, (stripePrices[p.id] || "").trim()])
-                  );
-                  await api.put("/settings", body);
-                  setSettings(prev => ({ ...prev, ...body }));
-                  setMessage({ text: "Plan pricing saved", type: "success" });
-                } catch (e) {
-                  setMessage({ text: e instanceof Error ? e.message : "Failed", type: "error" });
-                } finally {
-                  setSaving(null);
-                }
-              }}
-              disabled={saving === "stripe"}
-              className="px-4 py-2 bg-rust-500 text-white rounded-lg text-sm font-medium hover:bg-rust-600 disabled:opacity-50"
-            >{saving === "stripe" ? "Saving..." : "Save Pricing"}</button>
-          </div>
-        </div>
-        )}
 
         {/* Feature #5: Configuration Backup */}
         <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">

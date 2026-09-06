@@ -85,8 +85,6 @@ pub struct Config {
     pub agent_token: String,
     pub listen_addr: String,
     pub db_max_connections: u32,
-    pub stripe_secret_key: Option<String>,
-    pub stripe_webhook_secret: Option<String>,
     pub base_url: String,
     pub cors_origins: Vec<String>,
 }
@@ -129,8 +127,6 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(20),
-            stripe_secret_key: std::env::var("STRIPE_SECRET_KEY").ok().filter(|s| !s.is_empty()),
-            stripe_webhook_secret: std::env::var("STRIPE_WEBHOOK_SECRET").ok().filter(|s| !s.is_empty()),
             base_url,
             cors_origins,
         }

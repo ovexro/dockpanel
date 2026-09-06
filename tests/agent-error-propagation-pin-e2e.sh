@@ -132,15 +132,6 @@ else
   bad "no upstream_error — Stripe/Cloudflare failures have nowhere honest to go"
 fi
 
-# billing.rs talks ONLY to Stripe — it makes no agent call at all, so any
-# agent_error in it is by definition mislabelling a third-party failure.
-n=$(code_of panel/backend/src/routes/billing.rs | grep -cF 'agent_error(')
-if [ "$n" -eq 0 ]; then
-  ok "billing.rs routes no Stripe error through agent_error"
-else
-  bad "billing.rs calls agent_error $n time(s) — it makes no agent calls, so a Stripe outage reports the agent as offline"
-fi
-
 # dns.rs legitimately talks to BOTH: Cloudflare over reqwest and the agent for
 # the cloudflared service. The separation is type-enforced (agent_error only
 # accepts AgentError, which a reqwest::Error is not), so what is pinned here is
