@@ -198,17 +198,34 @@ pub async fn deploy(
     .map_err(|e| internal_error("container policy check", e))?;
 
     if let Some((max_containers, max_memory, max_cpu, allowed_images)) = &policy {
-        // Check container count via agent (count dockpanel-managed containers).
-        // Fail CLOSED: an agent error OR a malformed (non-array) response refuses the deploy
-        // instead of silently bypassing the quota. Mirrors list_apps' agent_error propagation.
+        // Check container count via agent (count dockpanel-managed containers
+        // this CALLER owns — every other admin's containers on the same box
+        // used to count against this one's cap; see count_owned_by).
+        // Fail CLOSED on the target: an agent error OR a malformed (non-array)
+        // response refuses the deploy instead of silently bypassing the quota.
+        // Mirrors list_apps' agent_error propagation.
         let apps_json = agent
             .get("/apps")
             .await
             .map_err(|e| agent_error("container count check", e))?;
-        let count = apps_json
+        apps_json
             .as_array()
-            .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "Could not verify container count"))?
-            .len();
+            .ok_or_else(|| err(StatusCode::BAD_GATEWAY, "Could not verify container count"))?;
+        let mut count = count_owned_by(&apps_json, claims.sub);
+
+        // The quota is per USER, not per machine (mirrors policy_usage's own
+        // fleet walk, and the doc line under Info on the Container Policies
+        // page) — fold in the caller's containers on every OTHER online
+        // server too. Best-effort: an unreachable peer only undercounts here
+        // and never blocks this deploy; the target server above is exempt
+        // from that leniency because reaching it live is already required to
+        // deploy there at all.
+        for member in state.agents.online_fleet().await.iter().filter(|m| m.id != server_id) {
+            if let Ok(peer_apps) = member.agent.get("/apps").await {
+                count += count_owned_by(&peer_apps, claims.sub);
+            }
+        }
+
         if count >= *max_containers as usize {
             return Err(err(StatusCode::FORBIDDEN, &format!("Container limit reached ({max_containers})")));
         }
@@ -2280,6 +2297,56 @@ pub async fn gpu_info(
 
 // ─── Container Isolation Policies (Admin) ──────────────────────
 
+// A container already carries its owner — `deploy_app` stamps the deploying
+// admin's id onto the `dockpanel.user.id` label, and `list_deployed_apps`
+// reads it straight back onto `DeployedApp.user_id` for every `/apps`
+// response. Nothing about that primitive was missing; two counters below just
+// summed the whole array instead of consulting it. A container with no label
+// (deployed before this existed, or a malformed one) has no owner here and is
+// excluded from every user's count — not folded into anyone's total.
+fn app_owner(app: &serde_json::Value) -> Option<Uuid> {
+    app.get("user_id")?.as_str().and_then(|s| Uuid::parse_str(s).ok())
+}
+
+fn count_owned_by(apps_json: &serde_json::Value, user_id: Uuid) -> usize {
+    apps_json
+        .as_array()
+        .map(|arr| arr.iter().filter(|a| app_owner(a) == Some(user_id)).count())
+        .unwrap_or(0)
+}
+
+/// One fleet walk producing every online user's container count at once, so a
+/// page listing N users' policies does not re-walk the fleet N times. Best
+/// effort per host, same posture the display endpoint already documented: an
+/// unreachable member undercounts (visible via the returned `unreachable`)
+/// rather than blocking the caller or lying about the total.
+async fn fleet_usage_by_user(state: &AppState) -> (HashMap<Uuid, usize>, usize, usize, usize) {
+    let mut by_user: HashMap<Uuid, usize> = HashMap::new();
+    let mut unowned = 0usize;
+    let mut unreachable = 0usize;
+    let fleet = state.agents.online_fleet().await;
+    for member in &fleet {
+        match member.agent.get("/apps").await {
+            Ok(apps_json) => {
+                for app in apps_json.as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
+                    match app_owner(app) {
+                        Some(uid) => *by_user.entry(uid).or_insert(0) += 1,
+                        None => unowned += 1,
+                    }
+                }
+            }
+            Err(e) => {
+                unreachable += 1;
+                tracing::warn!(
+                    "Container quota: {} did not answer ({e}) — the usage figures are a floor",
+                    member.name
+                );
+            }
+        }
+    }
+    (by_user, fleet.len() - unreachable, unreachable, unowned)
+}
+
 #[derive(serde::Deserialize)]
 pub struct PolicyRequest {
     pub user_id: Option<Uuid>,
@@ -2309,6 +2376,11 @@ pub async fn list_policies(
         .await
         .map_err(|e| internal_error("list container policies", e))?;
 
+    // One fleet walk for every row on this page, instead of one per policy —
+    // each entry gets its own count from the SAME snapshot (see
+    // fleet_usage_by_user's own comment for the unreachable-server posture).
+    let (by_user, servers_counted, servers_unreachable, unowned) = fleet_usage_by_user(&state).await;
+
     // Also fetch user emails for display
     let items: Vec<serde_json::Value> = {
         let mut result = Vec::with_capacity(policies.len());
@@ -2329,12 +2401,18 @@ pub async fn list_policies(
                 "allowed_images": allowed,
                 "created_at": created,
                 "updated_at": updated,
+                "used": by_user.get(uid).copied().unwrap_or(0),
             }));
         }
         result
     };
 
-    Ok(Json(serde_json::json!({ "policies": items })))
+    Ok(Json(serde_json::json!({
+        "policies": items,
+        "servers_counted": servers_counted,
+        "servers_unreachable": servers_unreachable,
+        "unowned_containers": unowned,
+    })))
 }
 
 /// POST /api/container-policies — Create a container policy for a user.
@@ -2516,27 +2594,17 @@ pub async fn policy_usage(
     // account run `max_containers` on every host and still read as within quota on
     // each — the limit was enforced per box while being presented per person.
     //
+    // AND scoped to the requested user_id — every `/apps` entry already carries
+    // its owner (see app_owner's own comment); this used to sum the whole fleet
+    // regardless of whose usage was asked for, so two different users' policies
+    // read back the identical fleet-wide count.
+    //
     // Still best-effort per host, and deliberately so: unlike deploy, this is a
     // display figure, and a member that will not answer must not blank the number.
     // But an under-count is now visible rather than silent — `servers_unreachable`
     // says the total is a floor.
-    let mut container_count = 0usize;
-    let mut unreachable = 0usize;
-    let fleet = state.agents.online_fleet().await;
-    for member in &fleet {
-        match member.agent.get("/apps").await {
-            Ok(apps_json) => {
-                container_count += apps_json.as_array().map(|a| a.len()).unwrap_or(0);
-            }
-            Err(e) => {
-                unreachable += 1;
-                tracing::warn!(
-                    "Container quota: {} did not answer ({e}) — the usage figure is a floor",
-                    member.name
-                );
-            }
-        }
-    }
+    let (by_user, servers_counted, servers_unreachable, unowned) = fleet_usage_by_user(&state).await;
+    let container_count = by_user.get(&user_id).copied().unwrap_or(0);
 
     match policy {
         Some((max_c, max_m, max_cpu)) => {
@@ -2545,16 +2613,18 @@ pub async fn policy_usage(
                 "memory_mb": { "max": max_m },
                 "cpu_percent": { "max": max_cpu },
                 "has_policy": true,
-                "servers_counted": fleet.len() - unreachable,
-                "servers_unreachable": unreachable,
+                "servers_counted": servers_counted,
+                "servers_unreachable": servers_unreachable,
+                "unowned_containers": unowned,
             })))
         }
         None => {
             Ok(Json(serde_json::json!({
                 "containers": { "used": container_count, "max": null },
                 "has_policy": false,
-                "servers_counted": fleet.len() - unreachable,
-                "servers_unreachable": unreachable,
+                "servers_counted": servers_counted,
+                "servers_unreachable": servers_unreachable,
+                "unowned_containers": unowned,
             })))
         }
     }

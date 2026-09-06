@@ -4,6 +4,20 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.229.0]
+
+### Fixed — the container-policy usage figure was fleet-wide for every caller, and so was deploy-time enforcement
+
+p209's ninth deferred finding, carried since v2.223.0 and re-scoped twice since (most recently v2.228.0's changelog, which framed it as needing new container-ownership attribution). Re-reading the code this session before building anything found that framing was wrong: the attribution primitive already existed. `deploy_app` has stamped a `dockpanel.user.id` Docker label on every container since container policies shipped, and `list_deployed_apps` already read it straight back onto `DeployedApp.user_id` in every `/apps` response — nothing needed a new column or a new migration. Two call sites simply never consulted it:
+
+**`GET /api/container-policies/{user_id}/usage`** summed every container on the entire online fleet, for every caller, regardless of the `user_id` in the path — two different users' policies read back the identical number. It now derives its count from a per-user map built off the same fleet walk.
+
+**`deploy`'s own quota enforcement** was worse: it summed every container on the *target server alone*, any user, and compared that to the calling admin's personal `max_containers`. On a shared server this let one admin's containers count against another's cap, and let an admin who spread deployments across multiple servers exceed their real total without ever tripping the check on any single one. It now counts only the caller's own containers, fleet-wide — the target server still fails closed on an unreachable agent (unchanged from before, since deploying there requires it live anyway); other servers are best-effort, matching the display endpoint's own long-standing posture that an unreachable peer undercounts rather than blocking the deploy.
+
+**`GET /api/container-policies`** (the list the Container Policies page actually calls) never carried a usage figure at all — the frontend's "Containers" column showed only the configured limit. It now embeds a live `used` count per row from one shared fleet walk, so listing N users' policies does not re-walk the fleet N times. The page renders it as a used/max figure with a small fill bar (green/amber/red past 70%/90%), matching the pattern already used on the Reseller Dashboard, plus a note when a server didn't answer so the figures are visibly a floor rather than silently wrong.
+
+New pin suite `container-ownership-pin-e2e.sh` (9 assertions) — mutation-tested against the pre-fix code before being trusted (6 of 9 arms confirmed red on the old shape, the other 3 correctly stayed green since they pin the pre-existing labeling primitive, not this session's change).
+
 ## [2.228.0]
 
 ### Closed three of p209's nine deferred findings (Loose-Ends Audit, v2.223.0): a dashboard gap, a GPU correctness bug, and a withdrawn feature
