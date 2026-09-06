@@ -206,6 +206,12 @@ async fn run_scan(pool: &PgPool, member: &FleetMember, jwt_secret: &str) {
         "Security scan completed: {total} findings ({critical} critical, {warning} warning, {info} info)"
     );
 
+    // Give any Docker App deployed BEFORE migration 20260905180000 an owner
+    // row, so this same scan's own ssl_expiry auto-fix below can find it —
+    // see `reconcile_docker_app_domains` for why this can't be a one-time
+    // migration-time backfill the way `docker_stacks`' was.
+    reconcile_docker_app_domains(pool, member).await;
+
     // Auto-fix safe findings (non-destructive only)
     if let Some(findings) = findings {
         auto_fix_safe_findings(pool, member, findings, jwt_secret).await;
@@ -409,6 +415,91 @@ async fn ssl_dns01_downgraded_alert(
         12,
     )
     .await;
+}
+
+/// Give every currently-deployed Docker App with a domain an owner row in
+/// `docker_app_domains`, if it doesn't already have one.
+///
+/// Migration `20260905180000_docker_app_ssl_domains.sql` only writes this
+/// table going FORWARD — `routes::docker_apps::deploy`'s INSERT. Any app
+/// deployed before that migration landed, or restored from a backup taken
+/// before it, never gets a row and stays exactly as invisible to
+/// [`renew_docker_app_certificate`] as it was before the migration shipped —
+/// the same gap the migration's own commit claims to have closed, just moved
+/// to "before my first upgrade" instead of "always". Unlike `docker_stacks`'
+/// analogous migration (`20260826000000_tls_certificate_registry.sql`), which
+/// backfilled with a plain `UPDATE` because every stack already had a row to
+/// update, a Docker app has no pre-existing row — `domain_claim`'s own
+/// comment: "Docker apps are not rows" — so recovering one means asking the
+/// agent what is actually running, the same call `routes::docker_apps::list_apps`
+/// already makes.
+///
+/// Deliberately conservative: `tls_mode`/`ssl_email` are left NULL (unknown)
+/// rather than guessed from the container, so a reconciled row can never be
+/// mistaken for a confirmed ACME certificate and trigger a renewal over an
+/// operator-provided one. [`renew_docker_app_certificate`] treats a NULL
+/// `tls_mode` as "unconfirmed" and declines, distinctly from a real `none`.
+/// `ON CONFLICT DO NOTHING`: an existing row already carries real deploy-time
+/// values and must never be clobbered by a reconciliation pass.
+///
+/// Runs once per scheduled scan (weekly per host, gated by `run`'s own
+/// cadence check) rather than once at backend startup, so a row lost to a
+/// database restore self-heals on the next scan instead of needing its own
+/// schedule to stay correct.
+async fn reconcile_docker_app_domains(pool: &PgPool, member: &FleetMember) {
+    let apps = match member.agent.get("/apps").await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                "Docker-app SSL reconciliation skipped for {}: could not list apps ({e})",
+                member.name
+            );
+            return;
+        }
+    };
+    let Some(apps) = apps.as_array() else {
+        return;
+    };
+
+    for app in apps {
+        let Some(domain) = app
+            .get("domain")
+            .and_then(|v| v.as_str())
+            .filter(|d| !d.is_empty())
+        else {
+            continue;
+        };
+        let Some(name) = app.get("name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(user_id) = app
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+        else {
+            // No `dockpanel.user.id` label — a deployment old enough to
+            // predate that label too. Nothing safe to attribute the row to;
+            // the app stays exactly as invisible as before this pass, not
+            // worse than it already was.
+            tracing::debug!(
+                "Docker-app SSL reconciliation: skipping {name} on {} — no owning user_id label",
+                member.name
+            );
+            continue;
+        };
+
+        let _ = sqlx::query(
+            "INSERT INTO docker_app_domains (user_id, server_id, app_name, domain) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (server_id, domain) DO NOTHING",
+        )
+        .bind(user_id)
+        .bind(member.id)
+        .bind(name)
+        .bind(domain)
+        .execute(pool)
+        .await;
+    }
 }
 
 /// Auto-fix safe findings after a scan completes.
@@ -1325,6 +1416,23 @@ async fn renew_docker_app_certificate(pool: &PgPool, member: &FleetMember, domai
     let Some((app_id, user_id, app_name, ssl_email, tls_mode)) = app else {
         return false;
     };
+
+    // 1b. THE RECONCILED-ROW GUARD — a NULL `tls_mode` can only come from
+    //     `reconcile_docker_app_domains`; `deploy`'s own INSERT always binds a
+    //     real value. Falling through to `effective_tls_mode` below would read
+    //     this identically to a genuine `none`, whose message asserts "the app
+    //     serves its registered certificate from the registry" — false for a
+    //     row that was never actually deployed with that knowledge. Decline
+    //     the same way (never renew on unconfirmed ownership), but say why.
+    if tls_mode.is_none() {
+        tracing::info!(
+            "Auto-fix: not renewing {domain} — Docker app {app_name}'s TLS ownership was \
+             reconciled from an already-running container, and its certificate mode was never \
+             recorded at deploy time. Redeploy the app (or confirm ownership manually) to enable \
+             auto-renewal."
+        );
+        return true;
+    }
 
     // 2. THE MODE GUARD — identical reasoning to the stack arm: a Docker app
     //    deployed with `tls_mode = "provided"` serves an operator-registered

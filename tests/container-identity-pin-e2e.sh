@@ -437,6 +437,47 @@ else
   else
     bad "D3 every rollback happens before the promotion starts, so a half-swapped host stays that way (rename@$FIRST_RENAME rollback@$LAST_ROLLBACK)"
   fi
+
+  # The docker-app twin got the IDENTICAL fix (s471) — it shared the v2.54.0
+  # defect via `find_free_port`/`health_check_port`/`swap_nginx_proxy_port` but
+  # never received the v2.55.0 repair, until now. Same three arms, D4-D6.
+  #
+  # Sliced from `retired_name = format!` onward (a real identifier, not a
+  # comment — `code()` already stripped comments out of `$D`, so a marker like
+  # "Promote it" would match nothing). The rest of the function's body has
+  # several pre-existing rollback removes on the create/health-check/nginx-swap
+  # failure paths, all textually BEFORE this point and all legitimately
+  # best-effort since nothing has been promoted yet — keying on the whole body
+  # would find one of those first and fail this arm for the wrong reason.
+  if [ -n "$D" ]; then
+    # Recomputed rather than reused from §C: §C's guard also requires `$G`
+    # and `$O` to be readable, so under `set -u` a `$BGD` left unset by a
+    # skipped §C would abort the script here instead of just this arm.
+    BGD_LOCAL=$(fnbody "$D" "blue_green_update")
+    BGD_COMMIT=$(awk '/retired_name = format!/{f=1} f{print}' <<< "$BGD_LOCAL")
+    FREE_D=$(lineof "$BGD_COMMIT" 'rename_container\(')
+    DESTROY_D=$(lineof "$BGD_COMMIT" 'remove_container\(')
+    if [ "$FREE_D" -gt 0 ] && [ "$DESTROY_D" -gt 0 ] && [ "$FREE_D" -lt "$DESTROY_D" ]; then
+      ok "D4 the docker-app twin ALSO frees the name before it destroys anything (rename@$FREE_D remove@$DESTROY_D)"
+    else
+      bad "D4 the docker-app twin still destroys before the name is freed (rename@$FREE_D remove@$DESTROY_D)"
+    fi
+    CHECKED_D=$(perl -0777 -ne 'my $n = () = /if let Err\(e\) = docker\s*\.rename_container\(/gs; print $n' <<< "$BGD_COMMIT")
+    if [ "${CHECKED_D:-0}" -ge 2 ]; then
+      ok "D5 the docker-app twin ALSO error-checks both promotion renames ($CHECKED_D)"
+    else
+      bad "D5 only ${CHECKED_D:-0} of the docker-app twin's two promotion renames is checked — the other returns Ok over a half-swapped host"
+    fi
+    FIRST_RENAME_D=$(lineof "$BGD_COMMIT" 'rename_container\(')
+    LAST_ROLLBACK_D=$(lastlineof "$BGD_COMMIT" 'swap_nginx_proxy_port\(domain, temp_port, old_port\)')
+    if [ "$FIRST_RENAME_D" -gt 0 ] && [ "$LAST_ROLLBACK_D" -gt "$FIRST_RENAME_D" ]; then
+      ok "D6 a docker-app promotion failure ALSO rolls the vhost back (rename@$FIRST_RENAME_D rollback@$LAST_ROLLBACK_D)"
+    else
+      bad "D6 a docker-app promotion failure does not roll the vhost back (rename@$FIRST_RENAME_D rollback@$LAST_ROLLBACK_D)"
+    fi
+  else
+    skip "§D docker-app twin — $DA could not be read"
+  fi
 fi
 
 # ── §E a mask is not a value ───────────────────────────────────────────

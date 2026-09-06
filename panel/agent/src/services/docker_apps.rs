@@ -4994,25 +4994,57 @@ async fn blue_green_update(
         }
     }
 
-    // Traffic is now flowing to the new container. Stop and remove old container.
-    docker
-        .stop_container(old_container_id, Some(StopContainerOptions { t: 10 }))
-        .await
-        .ok();
-    docker
-        .remove_container(
+    // Traffic is now flowing to the new container. Promote it.
+    //
+    // ORDER MATTERS, and the old order was destroy-then-rename with both
+    // results discarded by `.ok()`. When the removal failed the rename could
+    // not possibly succeed — the name was still taken — and the function
+    // returned `Ok` over a half-swapped host: the old container alive under
+    // the real name, the new one alive as the stand-in, nginx pointing at the
+    // stand-in. A reported-successful update that leaves the app listed
+    // twice, with no self-heal on the next update. Ported from the identical
+    // fix in `git_build.rs::blue_green_update` (CHANGELOG v2.55.0) — that
+    // twin shares `find_free_port`/`health_check_port`/`swap_nginx_proxy_port`
+    // with this function but never received the fix itself.
+    //
+    // So: free the name first, by a rename that destroys nothing and can be
+    // undone. Only once the promotion is real does anything get removed.
+    let retired_name = format!("{name}.retired");
+    if let Err(e) = docker
+        .rename_container(
             old_container_id,
-            Some(RemoveContainerOptions {
-                v: false,
-                force: true,
-                ..Default::default()
-            }),
+            RenameContainerOptions {
+                name: retired_name.clone(),
+            },
         )
         .await
-        .ok();
+    {
+        // Nothing has been destroyed. Put traffic back on the old container
+        // and fail honestly.
+        swap_nginx_proxy_port(domain, temp_port, old_port).ok();
+        crate::services::nginx::reload().await.ok();
+        docker
+            .stop_container(&new_container.id, Some(StopContainerOptions { t: 5 }))
+            .await
+            .ok();
+        docker
+            .remove_container(
+                &new_container.id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    v: false,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .ok();
+        return Err(format!(
+            "Could not free the container name for promotion: {e}. Rolled back — the previous \
+             container is still serving {domain}."
+        ));
+    }
 
-    // Rename blue container to the original name
-    docker
+    if let Err(e) = docker
         .rename_container(
             &new_container.id,
             RenameContainerOptions {
@@ -5020,7 +5052,64 @@ async fn blue_green_update(
             },
         )
         .await
+    {
+        // The name is free and the old container is untouched and still
+        // running — put it back under the real name.
+        docker
+            .rename_container(
+                old_container_id,
+                RenameContainerOptions {
+                    name: name.to_string(),
+                },
+            )
+            .await
+            .ok();
+        swap_nginx_proxy_port(domain, temp_port, old_port).ok();
+        crate::services::nginx::reload().await.ok();
+        docker
+            .stop_container(&new_container.id, Some(StopContainerOptions { t: 5 }))
+            .await
+            .ok();
+        docker
+            .remove_container(
+                &new_container.id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    v: false,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .ok();
+        return Err(format!(
+            "Could not promote the new container: {e}. Rolled back — the previous container is \
+             still serving {domain}."
+        ));
+    }
+
+    // Promotion is committed. Removing the retired container is housekeeping:
+    // a failure here leaks a stopped container under a name nothing can be
+    // created as, which is why it is safe to only log it.
+    docker
+        .stop_container(&retired_name, Some(StopContainerOptions { t: 10 }))
+        .await
         .ok();
+    if let Err(e) = docker
+        .remove_container(
+            &retired_name,
+            Some(RemoveContainerOptions {
+                force: true,
+                v: false,
+                ..Default::default()
+            }),
+        )
+        .await
+    {
+        tracing::warn!(
+            "Blue-green for {name} promoted cleanly but {retired_name} could not be removed: \
+             {e}. It is stopped and holds no port; remove it by hand."
+        );
+    }
 
     tracing::info!(
         "App updated (blue-green, zero-downtime): {name}, port {old_port} → {temp_port}"

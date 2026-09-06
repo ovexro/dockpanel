@@ -4,6 +4,59 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.225.0]
+
+### Fixed — a dedicated audit of Docker Apps' Docker-orchestration file found two real gaps, one of them in v2.224.0's own SSL fix
+
+A dedicated fan-out sweep of `panel/agent/src/services/docker_apps.rs` for the
+swallowed-`.ok()` bug class (the standing next-priority carry from v2.223.0's
+loose-ends audit) found the premise itself was a category error: this file
+owns no database dependency at all, so the class doesn't exist here — the
+actual instance that motivated the carry was already fixed in the
+same-named-but-different `routes/docker_apps.rs` (backend crate) at v2.222.0.
+Corrected the standing note rather than the code.
+
+The sweep did find two real, independently-verified defects instead:
+
+**`blue_green_update` swallowed its promotion.** After nginx had already been
+swapped to the new container, the old container's stop/remove and the new
+container's rename were each discarded with `.ok()`, and the function reported
+success unconditionally. If the remove ever failed, the rename would then fail
+too (the name was still taken) — also swallowed — leaving the correctly-serving
+container stuck under its temporary name and the stopped original orphaned
+under the real one, both carrying the same management labels, so the app would
+list twice until someone manually removed the ghost. The identical bug, in the
+sibling `git_build.rs::blue_green_update` (which shares `find_free_port`/
+`health_check_port`/`swap_nginx_proxy_port` with this function), was
+root-caused and fixed in v2.55.0 — that fix was never ported to this twin.
+Ported now: the promotion frees the old container's name with a checked,
+rollback-able rename *before* anything is destroyed, matching the twin exactly.
+Currently prospective on this install (zero blue-green updates have run here),
+not a reported incident.
+
+**v2.224.0's own SSL-ownership fix had no backfill.** The new
+`docker_app_domains` table was only ever written going forward, at deploy — any
+Docker App already running before the v2.224.0 upgrade never gets a row and
+stays exactly as unrenewable as before that release, contradicting its own
+changelog claim. `docker_stacks`' analogous migration backfilled with a plain
+`UPDATE` because every stack already had a row to update from; a Docker App
+has none (`domain_claim`'s own comment: "Docker apps are not rows"), so
+recovering one means asking each server's agent what is actually deployed.
+Added `reconcile_docker_app_domains`, run once per scheduled security scan
+(self-healing, not a one-time migration-time step): it asks the agent's own
+`/apps` listing, and inserts an owner row — deliberately with `tls_mode`/
+`ssl_email` left unconfirmed rather than guessed — for any already-running app
+with a domain that doesn't have one yet. A reconciled row's certificate mode is
+treated as distinctly *unconfirmed*, not the same as a real `none`, so the
+renewal fallback still declines to touch it but says why instead of silently
+matching nothing.
+
+Both findings came out of the same fan-out: the primary sweep (which also
+re-verified GitHub #110 and #125 as already fixed, live at HEAD) plus a
+completeness critic that opened the newest commit in the tree instead of only
+the file named in the brief — the commit everyone's own `git status` was
+reading, sitting unopened the whole time.
+
 ## [2.224.0]
 
 ### Fixed — Docker Apps' auto-provisioned SSL certificates now renew, and have a manual fix path
