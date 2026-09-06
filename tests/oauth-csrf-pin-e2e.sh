@@ -203,6 +203,78 @@ if S=$(subj "$OAUTH"); then
   fi
 fi
 
+echo "== §C  a matching provider NAME does not bypass a mismatched provider account id =="
+#
+# s473 / p209 deferred item 5, re-verified then closed: oauth_id was captured
+# on link/create and never consulted on a returning login — only the provider
+# NAME was checked. oauth_id is the provider's own permanent account id and is
+# only ever written alongside oauth_provider (never separately), so this gap
+# meant an email changing hands AT THE PROVIDER (a departed employee's mailbox
+# reassigned to a new hire's fresh account there) would silently hand the new
+# person the departed employee's dockpanel account and role, because the two
+# accounts share nothing the callback checked except the email string and the
+# provider's short name.
+
+if S=$(subj "$OAUTH"); then
+  CALLBODY=$(fnbody "$S" callback)
+
+  if [ "${#CALLBODY}" -ge 800 ]; then
+    if grep -qE 'oauth_id\.as_deref\(\) *!= *Some\(oauth_id\.as_str\(\)\)' <<< "$CALLBODY"; then
+      ok "C1 callback() compares the incoming provider account id against the stored oauth_id, not just the provider name"
+    else
+      bad "C1 callback() compares the incoming provider account id against the stored oauth_id"
+    fi
+
+    # Order matters: the oauth_id check must sit INSIDE the "provider name
+    # already matches" arm — textually AFTER the provider-name-mismatch reject,
+    # never before it (which would misfire on a genuinely different provider).
+    o_provider_mismatch=$(first_offset "$CALLBODY" 'oauth_provider\.as_deref\(\) *!= *Some\(provider_name\.as_str\(\)\)')
+    o_id_mismatch=$(first_offset "$CALLBODY" 'oauth_id\.as_deref\(\) *!= *Some\(oauth_id\.as_str\(\)\)')
+    if [ -n "$o_provider_mismatch" ] && [ -n "$o_id_mismatch" ] && [ "$o_provider_mismatch" -lt "$o_id_mismatch" ]; then
+      ok "C2 the oauth_id check sits in the 'same provider name' branch, after the provider-name check"
+    else
+      bad "C2 the oauth_id check sits in the 'same provider name' branch, after the provider-name check"
+    fi
+
+    # A mismatch must actually REJECT, not merely be observed. This handler had
+    # exactly 2 CONFLICT returns before this fix (the different-provider reject
+    # + the auto-create duplicate-email reject) and 3 after.
+    conflict_count=$(grep -coE 'StatusCode::CONFLICT' <<< "$CALLBODY")
+    if [ "$conflict_count" -ge 3 ]; then
+      ok "C3 a third CONFLICT reject exists (the id-mismatch branch actually returns an error)"
+    else
+      bad "C3 a third CONFLICT reject exists (found $conflict_count, need >= 3)"
+    fi
+
+    # The whole fix depends on oauth_provider never being written without
+    # oauth_id in the SAME statement — split them and a legitimate returning
+    # user starts failing C1's own check. Pin both writers.
+    if grep -qE 'UPDATE users SET oauth_provider = \$1, oauth_id = \$2' <<< "$CALLBODY"; then
+      ok "C4 the auto-link UPDATE still writes oauth_provider and oauth_id together"
+    else
+      bad "C4 the auto-link UPDATE writes oauth_provider and oauth_id together"
+    fi
+
+    if grep -qE 'INSERT INTO users \(email, password_hash, role, email_verified, oauth_provider, oauth_id, approved\)' <<< "$CALLBODY"; then
+      ok "C5 the auto-create INSERT still writes oauth_provider and oauth_id together"
+    else
+      bad "C5 the auto-create INSERT writes oauth_provider and oauth_id together"
+    fi
+
+    o_issue=$(first_offset "$CALLBODY" 'let token = jsonwebtoken::encode')
+    if [ -n "$o_id_mismatch" ] && [ -n "$o_issue" ] && [ "$o_id_mismatch" -lt "$o_issue" ]; then
+      ok "C6 the oauth_id check runs before a session can be issued, not after"
+    else
+      bad "C6 the oauth_id check runs before a session can be issued, not after"
+    fi
+  else
+    bad "C1 callback() subject resolved (${#CALLBODY}c) — C1-C6 would be vacuous"
+    bad "C2 order: oauth_id check after provider-name check"
+    bad "C3 a third CONFLICT reject exists"; bad "C4 UPDATE writes both columns together"
+    bad "C5 INSERT writes both columns together"; bad "C6 check runs before session issuance"
+  fi
+fi
+
 echo
 printf 'oauth-csrf: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

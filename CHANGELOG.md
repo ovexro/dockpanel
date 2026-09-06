@@ -4,6 +4,35 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.227.0]
+
+### Fixed — a returning OAuth login only ever checked the provider's NAME, never the provider's own account id
+
+`oauth.rs`'s callback handler links and re-authenticates an existing account by
+email plus provider name alone; `oauth_id` — the provider's own permanent
+account identifier — was captured on first link but never consulted again on
+a returning login. Flagged as a security-hardening fork by the first-ever
+Loose-Ends Audit (v2.223.0) and left deferred since; re-verified against
+current source this session before acting on it, per this project's own
+audit-verification standard.
+
+The realistic way this bites is an email changing hands **at the provider**
+rather than at DockPanel — a departed employee's mailbox reassigned to a new
+hire's fresh Google/GitHub/GitLab account. That new account has a different
+permanent id but the same verified email and the same provider name, and the
+old check would have logged the new person straight into the departed
+employee's dockpanel account and role.
+
+Closed by extending the existing three-way link/reject decision to a fourth
+arm: a matching provider name with a mismatched `oauth_id` now fails closed,
+the same way a mismatched provider name already did. `oauth_id` is only ever
+written together with `oauth_provider` (the link `UPDATE` and the auto-create
+`INSERT`), so no legitimate returning login can trip the new check — verified
+by re-running the full backend suite (474/474, unchanged) and by a live
+mutation test (reverting just the new branch reproduces the exact silent-login
+gap and turns the new pin red; restoring it turns the pin green again). 6 new
+regression pins added to `oauth-csrf-pin-e2e.sh` §C.
+
 ## [2.226.0]
 
 ### Added — WordPress vulnerability scanning has a schedule and an alert, matching its Docker-image peer

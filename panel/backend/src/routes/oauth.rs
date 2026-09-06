@@ -365,10 +365,12 @@ pub async fn callback(
 
     let user = match user {
         Some(mut u) => {
-            // Three-way, not two: auto-link an OAuth-only account with no provider
-            // yet, allow a plain login when already linked to THIS SAME provider,
-            // and reject everything else (a password-holder with no link yet, OR
-            // an account already linked to a DIFFERENT provider).
+            // Four-way, not three: auto-link an OAuth-only account with no
+            // provider yet, allow a plain login when already linked to THIS
+            // SAME provider account, reject a provider-account swap under a
+            // matching provider NAME, and reject everything else (a
+            // password-holder with no link yet, OR an account already linked
+            // to a DIFFERENT provider).
             //
             // The prior code only tested `oauth_provider.is_none()` on the reject
             // branch, so once ANY provider was linked, a callback from a SECOND,
@@ -390,6 +392,20 @@ pub async fn callback(
                 ).await;
                 u.oauth_provider = Some(provider_name.clone());
             } else if u.oauth_provider.as_deref() != Some(provider_name.as_str()) {
+                return Err(err(StatusCode::CONFLICT,
+                    "An account with this email exists, linked to a different sign-in method. \
+                     Log in with your existing method and link this one in Settings."));
+            } else if u.oauth_id.as_deref() != Some(oauth_id.as_str()) {
+                // The provider NAME matches, but the provider's own permanent
+                // account id does not — `oauth_id` is only ever written
+                // together with `oauth_provider` (the UPDATE above and the
+                // auto-create INSERT below), so a genuine returning login can
+                // never land here; matching on email + provider name alone
+                // was the whole check. The realistic way to reach this branch
+                // is the email changing hands AT THE PROVIDER (a departed
+                // employee's mailbox reassigned to a new hire's fresh
+                // account) — without this, that new person would silently
+                // inherit the departed employee's dockpanel account and role.
                 return Err(err(StatusCode::CONFLICT,
                     "An account with this email exists, linked to a different sign-in method. \
                      Log in with your existing method and link this one in Settings."));
