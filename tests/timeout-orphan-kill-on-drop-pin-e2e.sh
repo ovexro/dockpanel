@@ -238,7 +238,7 @@ windowHasKillOnDrop "$WORDPRESS_SVC" '"-u", "www-data", WP_CLI, "eval"' \
   "wordpress.rs's health_check sudo wp-cli eval carries kill_on_drop(true)"
 
 echo
-echo "== J. backups.rs (services) + backups.rs (routes): the 9 sites the s452 fix to THIS SAME FILE (site D above) did not cover are annotated (s453 dockpanel-fanout run wf_a5d044b9-fa0, rotation target services/backups.rs + routes/backups.rs) =="
+echo "== J. backups.rs (services): the 4 sites the s452 fix to THIS SAME FILE (site D above) did not cover are annotated (s453 dockpanel-fanout run wf_a5d044b9-fa0, rotation target services/backups.rs + routes/backups.rs) =="
 # extract_payload / restore_inner / list_backup_files / restore_single_file all
 # wrap tar in tokio::time::timeout without kill_on_drop — the D-above fix only
 # ever covered create_backup's OWN tar czf, not these four siblings in the
@@ -251,31 +251,19 @@ windowHasKillOnDrop "$BACKUPS_SVC" '"tzf", filepath_str' \
   "backups.rs's list_backup_files tar tzf carries kill_on_drop(true)"
 windowHasKillOnDrop "$BACKUPS_SVC" '"xzf", backup_str,' \
   "backups.rs's restore_single_file tar xzf (into the live webroot) carries kill_on_drop(true)"
-# The Restic lane (routes/backups.rs) had ZERO kill_on_drop sites before this
-# session across all 5 of its safe_command("restic"/"which") calls.
-windowHasKillOnDrop "$BACKUPS_ROUTE" 'safe_command("which").arg("restic")' \
-  "routes/backups.rs's ensure_restic (which restic) carries kill_on_drop(true)"
-windowHasKillOnDrop "$BACKUPS_ROUTE" '"-r", &repo, "--password-file", password_file, "init"' \
-  "routes/backups.rs's restic init carries kill_on_drop(true)"
-windowHasKillOnDrop "$BACKUPS_ROUTE" '"backup", &site_dir, "--tag", &domain, "--json"' \
-  "routes/backups.rs's restic backup carries kill_on_drop(true)"
-windowHasKillOnDrop "$BACKUPS_ROUTE" '"snapshots", "--json"' \
-  "routes/backups.rs's restic snapshots carries kill_on_drop(true)"
-windowHasKillOnDrop "$BACKUPS_ROUTE" '"restore", &snapshot_id, "--target", "/", "--include", &site_dir' \
-  "routes/backups.rs's restic restore carries kill_on_drop(true)"
 
 echo
-echo "== K. routes/backups.rs: the post-restic-restore chown no longer hands the application .git (setup-critic finding, s453 — routes/backups.rs:340 was 1 of 8 .git-blind recursive site-root chowns tracked since p108/s377; the other 7 remain open, filed as their own future rotation target) =="
+echo "== K. routes/backups.rs: the post-restore chown no longer hands the application .git (setup-critic finding, s453 — routes/backups.rs:340 was 1 of 8 .git-blind recursive site-root chowns tracked since p108/s377; the other 7 remain open, filed as their own future rotation target) =="
 if grep -q 'fn chown_restored_tree' "$BACKUPS_ROUTE" 2>/dev/null \
   && { grep -A20 'fn chown_restored_tree' "$BACKUPS_ROUTE" 2>/dev/null | grep -c '\.git' >/dev/null; }; then
   ok "routes/backups.rs defines chown_restored_tree, and it names .git explicitly (skips it in the www-data chown, re-secures it to root)"
 else
   bad "routes/backups.rs's chown_restored_tree is missing or no longer mentions .git — re-scope this pin"
 fi
-if grep -q 'chown_restored_tree(&site_dir)' "$BACKUPS_ROUTE" 2>/dev/null; then
-  ok "restic_restore calls chown_restored_tree instead of a blanket chown -R"
+if grep -q 'chown_restored_tree(&format!("/var/www/{domain}"))' "$BACKUPS_ROUTE" 2>/dev/null; then
+  ok "restore calls chown_restored_tree instead of a blanket chown -R"
 else
-  bad "restic_restore no longer visibly calls chown_restored_tree — re-scope this pin"
+  bad "restore no longer visibly calls chown_restored_tree — re-scope this pin"
 fi
 
 echo
@@ -312,13 +300,10 @@ else
   bad "wordpress.rs's route table no longer visibly registers install, update-with-rollback, or harden — re-scope this pin"
 fi
 if grep -q '"/backups/{domain}/browse/{filename}"' "$BACKUPS_ROUTE" 2>/dev/null \
-  && grep -q '"/backups/{domain}/restore-file/{filename}"' "$BACKUPS_ROUTE" 2>/dev/null \
-  && grep -q '"/backups/{domain}/restic/backup"' "$BACKUPS_ROUTE" 2>/dev/null \
-  && grep -q '"/backups/{domain}/restic/snapshots"' "$BACKUPS_ROUTE" 2>/dev/null \
-  && grep -q '"/backups/{domain}/restic/restore/{snapshot_id}"' "$BACKUPS_ROUTE" 2>/dev/null; then
-  ok "routes/backups.rs's route table still registers browse, restore-file, and all 3 restic endpoints (the routes that reach every site fixed in section J/K)"
+  && grep -q '"/backups/{domain}/restore-file/{filename}"' "$BACKUPS_ROUTE" 2>/dev/null; then
+  ok "routes/backups.rs's route table still registers browse and restore-file (the routes that reach every site fixed in section J/K)"
 else
-  bad "routes/backups.rs's route table no longer visibly registers browse, restore-file, or the restic endpoints — re-scope this pin"
+  bad "routes/backups.rs's route table no longer visibly registers browse or restore-file — re-scope this pin"
 fi
 
 echo

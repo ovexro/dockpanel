@@ -81,7 +81,7 @@ async fn restore(
 
     // `restore_backup`'s tar extraction runs `--no-same-owner`, which leaves the
     // whole site root:root — unwritable by the www-data-running app until this
-    // runs. Mirrors `restic_restore`'s own call to the same helper, below.
+    // runs.
     chown_restored_tree(&format!("/var/www/{domain}")).await;
 
     let mut payload = serde_json::to_value(&report)
@@ -165,176 +165,20 @@ async fn remove(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
-// ── Restic incremental backups ──────────────────────────────────────
-
 use crate::safe_cmd::safe_command;
-
-/// POST /backups/{domain}/restic/backup — Run incremental backup with Restic.
-/// Refuse before running restic when the binary is not on this box.
-///
-/// Shared by backup AND restore. It was inline in `restic_backup` and restore
-/// simply did not have it, so a host whose repo survived a rebuild but whose
-/// package did not answered the spawn failure as a 500 — which the panel
-/// replaces with an incident id. The operator was told their agent was broken
-/// in the middle of a restore, on a working agent, with the remedy being one
-/// `apt install` they were never shown.
-async fn ensure_restic() -> Result<(), ApiErr> {
-    let has_restic = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        safe_command("which").arg("restic").kill_on_drop(true).output()
-    ).await.ok().and_then(|r| r.ok()).map(|o| o.status.success()).unwrap_or(false);
-
-    if !has_restic {
-        return Err(err(StatusCode::PRECONDITION_FAILED,
-            "Restic not installed. Install it with your system package manager \
-             (apt install restic / dnf install restic)."));
-    }
-    Ok(())
-}
-
-async fn restic_backup(
-    Path(domain): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiErr> {
-    if !is_valid_domain(&domain) {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
-    }
-
-    let repo = format!("/var/backups/dockpanel/restic/{}", domain.replace('.', "_"));
-    let site_dir = format!("/var/www/{domain}");
-    let password_file = "/etc/dockpanel/restic-password";
-
-    if !std::path::Path::new(site_dir.as_str()).exists() {
-        return Err(err(StatusCode::NOT_FOUND, "Site directory not found"));
-    }
-
-    ensure_restic().await?;
-
-    // Ensure password file exists
-    if !std::path::Path::new(password_file).exists() {
-        // Generate random password and save it
-        let password: String = (0..32).map(|_| format!("{:02x}", rand::random::<u8>())).collect();
-        std::fs::write(password_file, &password)
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Write password: {e}")))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(password_file, std::fs::Permissions::from_mode(0o600));
-        }
-    }
-
-    // Init repo if needed
-    if !std::path::Path::new(&format!("{repo}/config")).exists() {
-        std::fs::create_dir_all(&repo).ok();
-        let init = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            safe_command("restic")
-                .args(["-r", &repo, "--password-file", password_file, "init"])
-                .kill_on_drop(true)
-                .output()
-        ).await;
-
-        if init.ok().and_then(|r| r.ok()).map(|o| o.status.success()).unwrap_or(false) {
-            tracing::info!("Restic repo initialized for {domain}");
-        } else {
-            return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "Failed to init restic repo"));
-        }
-    }
-
-    // Run incremental backup
-    let backup = tokio::time::timeout(
-        std::time::Duration::from_secs(600),
-        safe_command("restic")
-            .args(["-r", &repo, "--password-file", password_file,
-                   "backup", &site_dir, "--tag", &domain, "--json"])
-            .kill_on_drop(true)
-            .output()
-    ).await
-        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Backup timed out (10min)"))?
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Restic: {e}")))?;
-
-    if !backup.status.success() {
-        let stderr = String::from_utf8_lossy(&backup.stderr);
-        return Err(err(StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Restic backup failed: {}", stderr.chars().take(300).collect::<String>())));
-    }
-
-    // Parse restic JSON output for summary
-    let stdout = String::from_utf8_lossy(&backup.stdout);
-    let summary: serde_json::Value = stdout.lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .filter(|v: &serde_json::Value| v.get("message_type").and_then(|m| m.as_str()) == Some("summary"))
-        .next()
-        .unwrap_or(serde_json::json!({}));
-
-    tracing::info!("Restic backup completed for {domain}");
-    Ok(Json(serde_json::json!({
-        "ok": true,
-        "type": "restic",
-        "files_new": summary.get("files_new"),
-        "files_changed": summary.get("files_changed"),
-        "data_added": summary.get("data_added"),
-        "total_bytes_processed": summary.get("total_bytes_processed"),
-        "snapshot_id": summary.get("snapshot_id"),
-    })))
-}
-
-/// GET /backups/{domain}/restic/snapshots — List Restic snapshots.
-async fn restic_snapshots(
-    Path(domain): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiErr> {
-    if !is_valid_domain(&domain) {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
-    }
-
-    let repo = format!("/var/backups/dockpanel/restic/{}", domain.replace('.', "_"));
-    let password_file = "/etc/dockpanel/restic-password";
-
-    if !std::path::Path::new(&format!("{repo}/config")).exists() {
-        return Ok(Json(serde_json::json!({ "snapshots": [], "total": 0 })));
-    }
-
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        safe_command("restic")
-            .args(["-r", &repo, "--password-file", password_file, "snapshots", "--json"])
-            .kill_on_drop(true)
-            .output()
-    ).await
-        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Timeout"))?
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Restic: {e}")))?;
-
-    // Unlike `restic_backup`/`restic_restore`, this path used to skip the exit
-    // check entirely: a wrong/rotated password or a locked/corrupted repo
-    // produces empty stdout, which `serde_json::from_slice` fails to parse —
-    // and `unwrap_or_default()` silently turned that failure into "0
-    // snapshots", indistinguishable from a site that genuinely has none yet.
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(err(StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Failed to list restic snapshots: {}", stderr.chars().take(300).collect::<String>())));
-    }
-
-    let snapshots: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap_or_default();
-    let total = snapshots.len();
-
-    Ok(Json(serde_json::json!({
-        "snapshots": snapshots,
-        "total": total,
-    })))
-}
 
 /// Hand a restored site tree back to the web server without exposing `.git`.
 ///
-/// A restic restore run as root (this agent) reproduces each member's
-/// original uid/gid, so `.git` — if this site uses Git Deploy — comes back
-/// however `deploy.rs::hand_tree_to_web_user` last left it: root-owned,
-/// unreadable to www-data. A blanket `chown -R www-data:www-data` over the
-/// whole tree would undo exactly that: it hands the application `.git/config`
-/// and `.git/hooks/`, which the next `git_build.rs` deploy then reads and
-/// executes as root — the same defect `deploy.rs` was fixed to avoid (see its
-/// own `hand_tree_to_web_user` doc comment). Mirror that split here: chown
-/// everything except `.git` to www-data, then explicitly re-secure `.git` to
-/// root, rather than trust whatever ownership the restore happened to leave it at.
+/// `restore_backup`'s tar extraction runs `--no-same-owner`, so the whole
+/// site comes back root-owned — unwritable to the web-server-running app
+/// until this runs. A blanket `chown -R www-data:www-data` over the whole
+/// tree would also hand the application `.git/config` and `.git/hooks/` if
+/// this site uses Git Deploy, which the next `git_build.rs` deploy then reads
+/// and executes as root — the same defect `deploy.rs` was fixed to avoid (see
+/// its own `hand_tree_to_web_user` doc comment). Mirror that split here:
+/// chown everything except `.git` to www-data, then explicitly re-secure
+/// `.git` to root, rather than trust whatever ownership the extraction
+/// happened to leave it at.
 async fn chown_restored_tree(target: &str) {
     if let Ok(entries) = std::fs::read_dir(target) {
         for entry in entries.flatten() {
@@ -355,64 +199,6 @@ async fn chown_restored_tree(target: &str) {
     }
 }
 
-/// POST /backups/{domain}/restic/restore/{snapshot_id} — Restore from Restic snapshot.
-async fn restic_restore(
-    Path((domain, snapshot_id)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>, ApiErr> {
-    if !is_valid_domain(&domain) {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
-    }
-    // Validate snapshot ID format (hex string)
-    if snapshot_id.len() < 6 || !snapshot_id.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid snapshot ID"));
-    }
-
-    // Held through the restic restore below — same reasoning as `restore` above.
-    let _guard = crate::site_lock::lock_site(&domain).await;
-
-    ensure_restic().await?;
-
-    let repo = format!("/var/backups/dockpanel/restic/{}", domain.replace('.', "_"));
-    let password_file = "/etc/dockpanel/restic-password";
-    let site_dir = format!("/var/www/{domain}");
-
-    // The repository has to exist before a restore can name a snapshot in it.
-    // `restic_snapshots` already checks this and answers an empty list; restore
-    // checked nothing and let restic fail, which arrived as an incident id.
-    if !std::path::Path::new(&repo).join("config").exists() {
-        return Err(err(StatusCode::NOT_FOUND,
-            "No restic repository for this site on this server — nothing to restore from."));
-    }
-
-    // `--target /` reproduces each snapshot member at its original absolute
-    // path; every snapshot this agent itself produces (`restic_backup` above
-    // always sources from exactly `site_dir`) is confined to that tree
-    // already. `--include` makes that confinement structural rather than an
-    // unchecked invariant — the same guarantee the tar-based restore lane
-    // gets for free from `-C site_root_str` on relative archive members.
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(600),
-        safe_command("restic")
-            .args(["-r", &repo, "--password-file", password_file,
-                   "restore", &snapshot_id, "--target", "/", "--include", &site_dir])
-            .kill_on_drop(true)
-            .output()
-    ).await
-        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "Restore timed out"))?
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Restic: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(err(StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Restore failed: {}", stderr.chars().take(300).collect::<String>())));
-    }
-
-    chown_restored_tree(&site_dir).await;
-
-    tracing::info!("Restic restore completed for {domain} from {snapshot_id}");
-    Ok(Json(serde_json::json!({ "ok": true, "snapshot_id": snapshot_id })))
-}
-
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/backups/{domain}/create", post(create))
@@ -421,7 +207,4 @@ pub fn router() -> Router<AppState> {
         .route("/backups/{domain}/restore/{filename}", post(restore))
         .route("/backups/{domain}/restore-file/{filename}", post(restore_file))
         .route("/backups/{domain}/{filename}", delete(remove))
-        .route("/backups/{domain}/restic/backup", post(restic_backup))
-        .route("/backups/{domain}/restic/snapshots", get(restic_snapshots))
-        .route("/backups/{domain}/restic/restore/{snapshot_id}", post(restic_restore))
 }

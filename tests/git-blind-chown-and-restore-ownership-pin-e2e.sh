@@ -195,11 +195,6 @@ if bodyhasre "$BACKUPS_ROUTE" "fn chown_restored_tree" 'OsStr::new\(\"\.git\"\)'
 else
   bad "chown_restored_tree lost its own .git guard"
 fi
-if bodyhas "$BACKUPS_ROUTE" "async fn restic_restore" "chown_restored_tree("; then
-  ok "restic_restore's own pre-existing call to chown_restored_tree is untouched"
-else
-  bad "restic_restore no longer calls chown_restored_tree — unrelated regression"
-fi
 # The underlying extraction flags that CAUSE the root-ownership are the
 # reason this fix is needed at all — if they're gone, the bug (and the
 # reason for this pin) may no longer apply, which is worth knowing either way.

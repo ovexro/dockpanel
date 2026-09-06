@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.229.0.** The version stamp, the template count and every
+> **Reflects v2.230.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -404,7 +404,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. One-hundred-thirty suites, **4333 assertions**, all green at the current commit:
+survivable. One-hundred-thirty suites, **4322 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -434,7 +434,7 @@ survivable. One-hundred-thirty suites, **4333 assertions**, all green at the cur
 | `update-rollback-pin-e2e.sh` | 52 |
 | `agent-error-propagation-pin-e2e.sh` | 20 |
 | `backup-destinations-git-env-pin-e2e.sh` | 37 |
-| `agent-refusal-status-pin-e2e.sh` | 38 |
+| `agent-refusal-status-pin-e2e.sh` | 34 |
 | `agent-sandbox-paths-pin-e2e.sh` | 11 |
 | `backup-lands-pin-e2e.sh` | 62 |
 | `migration-analyze-async-pin-e2e.sh` | 28 |
@@ -498,7 +498,7 @@ survivable. One-hundred-thirty suites, **4333 assertions**, all green at the cur
 | `published-docs-truth-pin-e2e.sh` | 17 |
 | `ssrf-url-guard-pin-e2e.sh` | 12 |
 | `upload-refusal-pin-e2e.sh` | 23 |
-| `rename-carries-backups-pin-e2e.sh` | 43 |
+| `rename-carries-backups-pin-e2e.sh` | 42 |
 | `monitors-honest-reads-pin-e2e.sh` | 33 |
 | `certificate-registry-pin-e2e.sh` | 127 |
 | `oauth-csrf-pin-e2e.sh` | 17 |
@@ -522,10 +522,10 @@ survivable. One-hundred-thirty suites, **4333 assertions**, all green at the cur
 | `secrets-mask-value-boundary-pin-e2e.sh` | 10 |
 | `escalation-user-route-scope-pin-e2e.sh` | 13 |
 | `git-clone-ssrf-pin-e2e.sh` | 16 |
-| `timeout-orphan-kill-on-drop-pin-e2e.sh` | 41 |
+| `timeout-orphan-kill-on-drop-pin-e2e.sh` | 36 |
 | `security-firewalld-ssh-include-pin-e2e.sh` | 24 |
 | `database-icc-reconcile-and-file-download-pin-e2e.sh` | 11 |
-| `git-blind-chown-and-restore-ownership-pin-e2e.sh` | 29 |
+| `git-blind-chown-and-restore-ownership-pin-e2e.sh` | 28 |
 | `scanner-supply-chain-and-credential-perms-pin-e2e.sh` | 20 |
 | `cms-installer-hardening-pin-e2e.sh` | 32 |
 | `pkg-rs-and-clone-dedup-hardening-pin-e2e.sh` | 27 |

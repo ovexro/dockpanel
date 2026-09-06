@@ -665,26 +665,16 @@ fn copy_dir_shallow(src: &str, dst: &str) -> std::io::Result<()> {
 
 /// The backup trees this agent keys by site domain.
 ///
-/// Three trees, three spellings of the same site, and every one of them is
-/// rebuilt from the LIVE domain by whoever reads it — the panel's `backups`
-/// table stores a filename and no path at all. So a rename that does not carry
-/// these leaves every archive on disk under a name nothing will look up again,
-/// while the panel keeps listing the rows and answers a restore with a path that
-/// does not exist.
-///
-/// The restic key substitutes `_` for `.`, and that substitution is injective
-/// here: `is_valid_domain` permits only ASCII alphanumerics and `-` inside a
-/// label, so a `_` in the key can only have come from a `.`. That is what
-/// separates it from the fail2ban jail key in step 8, which maps `.` onto `-`
-/// where `-` is already legal, and therefore needs an ownership guard.
+/// Two trees, two spellings of the same site, and each one is rebuilt from
+/// the LIVE domain by whoever reads it — the panel's `backups` table stores a
+/// filename and no path at all. So a rename that does not carry these leaves
+/// every archive on disk under a name nothing will look up again, while the
+/// panel keeps listing the rows and answers a restore with a path that does
+/// not exist.
 fn domain_backup_trees(old_domain: &str, new_domain: &str) -> Vec<(String, String)> {
     let root = "/var/backups/dockpanel";
     vec![
         (format!("{root}/{old_domain}"), format!("{root}/{new_domain}")),
-        (
-            format!("{root}/restic/{}", old_domain.replace('.', "_")),
-            format!("{root}/restic/{}", new_domain.replace('.', "_")),
-        ),
         (
             format!("{root}/wp-snapshots/{old_domain}"),
             format!("{root}/wp-snapshots/{new_domain}"),

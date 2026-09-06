@@ -108,14 +108,13 @@ for pair in "F_TREES:200" "F_OCC:100" "F_UNDO:200" "F_RENAME:5000" \
   [ "$n" -ge "$min" ] || { bad "SETUP" "$v resolved $n chars, expected >= $min — the pattern stopped matching"; exit 1; }
 done
 
-echo "── §A  the three domain-keyed trees are named in ONE place"
+echo "── §A  the two domain-keyed trees are named in ONE place"
 has "A1 the archive root"      "$F_TREES" 'letroot="/var/backups/dockpanel";'
-has "A2 the restic repo, keyed with the substitution its writer uses" "$F_TREES" 'restic/{}",old_domain.replace('"'"'.'"'"',"_")'
-has "A3 the wordpress snapshots" "$F_TREES" 'wp-snapshots/{old_domain}'
-# Two per tree — an old path and a new one — so three trees is six. Counted
-# rather than merely present: adding a fourth tree without teaching the undo and
+has "A2 the wordpress snapshots" "$F_TREES" 'wp-snapshots/{old_domain}'
+# Two per tree — an old path and a new one — so two trees is four. Counted
+# rather than merely present: adding a third tree without teaching the undo and
 # the refusals about it is the way this grows a hole.
-eq  "A4 three trees, each with an old and a new path" "$(occ "$F_TREES" 'format!("{root}/')" 6
+eq  "A3 two trees, each with an old and a new path" "$(occ "$F_TREES" 'format!("{root}/')" 4
 
 echo "── §B  the handler actually uses them, and the result of the move is READ"
 has "B1 the handler resolves the trees once"  "$F_RENAME" 'domain_backup_trees(&old_domain,new_domain)'

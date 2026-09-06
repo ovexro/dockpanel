@@ -4,6 +4,21 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.230.0]
+
+### Withdrawn — Restic incremental backups (API only)
+
+p209's ninth deferred finding closed at v2.229.0 left the final one, p209's second: the Restic backup lane skips the scheduler/retry/alert/staleness treatment local backups get. Re-confirmed "zero exposure" at v2.227.0 and v2.228.0 without ever being put to an actual build-or-withdraw decision. Scoped properly this session, before touching any code, by a 4-way parallel research pass — and the standing "zero exposure" framing turned out to be incomplete: `README.md` has advertised Restic as a real, working "API only" feature since early in the project, and the three routes really were live and JWT-authenticated end-to-end (`POST /api/sites/{id}/restic/backup`, `GET .../restic/snapshots`, `POST .../restic/restore/{snapshot_id}`, proxying to three agent-side handlers). Reachability from any *shipped surface* was genuinely zero — no frontend control beyond a cosmetic command-palette search keyword, no CLI subcommand, absent from `docs/api-reference.md` — but a self-hosted operator who read the README and called the documented API directly would have a real backup path with no retry, no failure alert, and no retention (`forget`/`prune` were never implemented, so snapshots accumulated on disk forever).
+
+Weighed building it out (cheap — the codebase already has this exact scheduler pattern twice, ~half a day of mechanical work) against withdrawal. Chose full removal over both building and a docs-only reword: building would have kept an undemanded, still-headless feature alive and given it more surface area; a docs-only fix would have left ~330-400 lines of live authenticated endpoints in the tree indefinitely, reopening the same "is this actually exposed" question in some future session. Removed:
+
+- The three backend proxy handlers (`routes/backups.rs`) and their route registrations.
+- The agent-side `ensure_restic`/`restic_backup`/`restic_snapshots`/`restic_restore` and their three routes; `chown_restored_tree` (shared with the ordinary tar-based restore path) stays, with its doc comment no longer framed around Restic's uid/gid-preserving restore behavior.
+- The Restic entry in `nginx.rs`'s site-rename backup-tree carry (two domain-keyed trees now, not three) and the cosmetic command-palette search keyword.
+- The two README lines advertising it, and the corresponding `docs/api-reference.md`/`FEATURES.md` route-count figures (837 → 831 HTTP routes: 3 backend + 3 agent routes removed).
+
+No DB migration needed — Restic never had persisted schema; its password lived only in a flat file on the agent's disk. Updated 4 pin suites whose assertions targeted the removed code (`timeout-orphan-kill-on-drop-pin-e2e.sh`, `agent-refusal-status-pin-e2e.sh`, `git-blind-chown-and-restore-ownership-pin-e2e.sh`, `rename-carries-backups-pin-e2e.sh`) rather than leave them red against code that no longer exists. See FEATURES.md's Withdrawn Claims table.
+
 ## [2.229.0]
 
 ### Fixed — the container-policy usage figure was fleet-wide for every caller, and so was deploy-time enforcement

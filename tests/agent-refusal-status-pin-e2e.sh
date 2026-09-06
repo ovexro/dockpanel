@@ -23,7 +23,6 @@ bad() { FAIL=$((FAIL+1)); printf '  \033[0;31m✗\033[0m %s\n' "$1"; }
 
 R_FILES=panel/agent/src/routes/files.rs
 S_FILES=panel/agent/src/services/files.rs
-R_BACKUPS=panel/agent/src/routes/backups.rs
 R_VOL=panel/agent/src/routes/volume_backup.rs
 S_VOL=panel/agent/src/services/volume_backup.rs
 R_STAGING=panel/agent/src/routes/staging.rs
@@ -33,7 +32,7 @@ S_SEC=panel/agent/src/services/security.rs
 R_SMTP=panel/agent/src/routes/smtp.rs
 S_SMTP=panel/agent/src/services/smtp.rs
 ERRRS=panel/backend/src/error.rs
-for f in "$R_FILES" "$S_FILES" "$R_BACKUPS" "$R_VOL" "$S_VOL" "$R_STAGING" \
+for f in "$R_FILES" "$S_FILES" "$R_VOL" "$S_VOL" "$R_STAGING" \
          "$S_STAGING" "$R_SEC" "$S_SEC" "$R_SMTP" "$S_SMTP" "$ERRRS"; do
   [ -f "$f" ] || { echo "missing $f"; exit 1; }
 done
@@ -108,27 +107,9 @@ else
 fi
 
 echo
-echo "── 2. restore paths: a missing tool, and an archive that is gone ──"
+echo "── 2. restore paths: an archive that is gone ──"
 
-SRC_RB=$(strip "$R_BACKUPS"); SRC_RV=$(strip "$R_VOL"); SRC_SV=$(strip "$S_VOL")
-
-if hasE "$SRC_RB" 'fn ensure_restic'; then
-  ok "the restic presence check is a shared guard"
-else
-  bad "no shared restic guard — backup and restore will drift again"
-fi
-RR=$(fnbody "$SRC_RB" restic_restore)
-if [ "$(printf '%s' "$RR" | wc -l)" -lt 10 ]; then
-  bad "restic_restore did not extract — its guard arms measure nothing"
-else
-  ok "restic_restore extracted ($(printf '%s' "$RR" | wc -l) lines)"
-  hasE "$RR" 'ensure_restic' \
-    && ok "restore refuses before running restic, as backup already did" \
-    || bad "restore runs restic unguarded again — a rebuilt host gets an incident id mid-recovery"
-  hasE "$RR" 'NOT_FOUND' \
-    && ok "restoring from a repository that does not exist answers 404" \
-    || bad "a missing repository is a 5xx again"
-fi
+SRC_RV=$(strip "$R_VOL"); SRC_SV=$(strip "$S_VOL")
 
 if has "$SRC_SV" 'Backup file not found'; then
   ok "the volume service still refuses a vanished archive by name"
