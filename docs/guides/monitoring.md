@@ -51,7 +51,7 @@ When a maintenance window is active for a user, their uptime monitors are skippe
 
 Nothing is lost by holding them. Each describes a standing condition that is re-evaluated every 60 seconds, so anything still true when the window closes fires on the next check. The window is applied before any alert state is recorded, precisely so that a held alert is deferred rather than marked as already sent.
 
-Alerts that report a **one-off event** are deliberately not suppressed, because nothing would raise them again afterwards: backup failure, backup verification failure, cron failure, security findings, image scan findings and SSL renewal failures still arrive during a window.
+Alerts that report a **one-off event** are deliberately not suppressed, because nothing would raise them again afterwards: backup failure, backup verification failure, cron failure, security findings, image scan findings, WordPress vulnerability scan findings and SSL renewal failures still arrive during a window.
 
 ### Heartbeat Monitors (Dead Man's Switch)
 

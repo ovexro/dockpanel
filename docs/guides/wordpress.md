@@ -69,7 +69,7 @@ Once the site is created:
 DockPanel includes a WordPress Toolkit (sidebar > WordPress) that provides:
 
 - **Multi-site dashboard** -- See all WordPress installations on the server
-- **Vulnerability scanning** -- Checks plugins against 14 known exploited vulnerabilities
+- **Vulnerability scanning** -- Checks plugins against 14 known exploited vulnerabilities. Manual "Scan" button, plus an optional scheduled background sweep (Settings → WordPress Vulnerability Scanning, off by default) that rescans every WordPress site on an interval and alerts on critical or high severity findings -- the direct peer of Docker image scanning's own scheduled sweep.
 - **Security hardening** -- 7 checks (6 auto-fixable) including file permissions, debug mode, editor access
 - **Bulk updates** -- Update plugins, themes, and WordPress core across multiple sites at once
 
