@@ -4,6 +4,53 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.226.0]
+
+### Added — WordPress vulnerability scanning has a schedule and an alert, matching its Docker-image peer
+
+`wordpress::vuln_scan` (the toolkit's manual "Scan" button) stored a scan
+result and raised nothing — no schedule, no page, no bell — while its direct
+peer, Docker image scanning, has carried a 30-minute background sweep and a
+full fire/resolve alert lifecycle since v2.something. A site with a
+critically-vulnerable plugin stayed invisible until an operator happened to
+reopen its toolkit and click Scan. Flagged high-severity by the first-ever
+Loose-Ends Audit (v2.223.0) and left as the standing next-priority carry since.
+
+Closed by giving it the exact shape its peer already has: the manual scan's
+store-and-alert logic moved into a shared `wordpress::scan_and_store`, now
+called by both the manual endpoint and a new `wp_vuln_scanner` background
+service (the 16th supervised service) that sweeps every WordPress site on
+every online fleet member every 30 minutes. One deliberate divergence from the
+image scanner: a WordPress site belongs to one user, not the whole fleet, so
+the alert pages that site's owner (`sites.user_id`) rather than fanning out to
+every admin. New Settings → WordPress Vulnerability Scanning card (enable +
+rescan interval, both off by default so no existing install's behaviour
+changes silently), a new `wp_vuln_scan` alert type wired into the Settings
+mute grid and the Alerts.tsx filter, and 8 new regression pins proving the
+resolve-before-fire ordering, the per-site-owner routing, and the background
+sweep's wiring — mutation-tested against the real source, not just written.
+
+### Fixed — 59 of 147 Docker App catalogue templates were pinned to `:latest`
+
+A deploy from the app catalogue is not reproducible: two operators deploying
+"n8n" a month apart could get different images, and the SSL/backup/scan
+machinery elsewhere in the project treats an image tag as meaningful metadata.
+Open since v2.51-ish (the catalogue's own `:latest` count), never
+force-repointed because a **guessed** version tag is exactly how issue #103
+shipped 18 unpullable dead references.
+
+Re-litigated by verifying, live against each registry (Docker Hub, ghcr.io,
+quay.io, docker.dragonflydb.io), which of the 78 remaining `:latest`-pinned
+templates resolve to a tag that is the byte-identical manifest `:latest`
+already points to — a zero-behavior-change pin, never a guess. 59 qualified
+and were re-pinned to that exact tag. The remaining 19 stay on `:latest`
+because no such tag exists at all (checked, not assumed): some registries
+build `:latest` off a branch/commit rather than a numbered release
+(`erpnext`'s `:latest` IS its `develop` branch), and some simply publish no
+equivalent tag in reach. Documented in-source rather than left silent. A new
+regression pin (`app-template-images-pin-e2e.sh` §8, mutation-tested) asserts
+none of the 59 drifts back to `:latest`.
+
 ## [2.225.0]
 
 ### Fixed — a dedicated audit of Docker Apps' Docker-orchestration file found two real gaps, one of them in v2.224.0's own SSL fix

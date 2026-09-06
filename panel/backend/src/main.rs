@@ -412,6 +412,9 @@ async fn main() {
     let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
     spawn_supervised("image_scanner", &shutdown_tx, move |rx| services::image_scanner::run(s_db.clone(), s_agents.clone(), rx));
 
+    let (s_db, s_agents) = (state.db.clone(), state.agents.clone());
+    spawn_supervised("wp_vuln_scanner", &shutdown_tx, move |rx| services::wp_vuln_scanner::run(s_db.clone(), s_agents.clone(), rx));
+
     // Its GPU, service-health and container checks each ask ONE machine what it
     // has, so each runs per online server against that server's own agent.
     // See `online_fleet`.

@@ -484,7 +484,7 @@
         }
       ],
       "id": "minio",
-      "image": "minio/minio:latest",
+      "image": "minio/minio:RELEASE.2025-09-07T16-13-09Z",
       "name": "MinIO",
       "volumes": [
         "/data"
@@ -552,7 +552,7 @@
       "default_port": 8085,
       "env_vars": [],
       "id": "nocodb",
-      "image": "nocodb/nocodb:latest",
+      "image": "nocodb/nocodb:2026.08.2",
       "name": "NocoDB",
       "volumes": [
         "/usr/app/data"
@@ -764,7 +764,7 @@
         }
       ],
       "id": "bookstack",
-      "image": "lscr.io/linuxserver/bookstack:latest",
+      "image": "lscr.io/linuxserver/bookstack:26.05.4",
       "name": "BookStack",
       "volumes": [
         "/config"
@@ -934,7 +934,7 @@
         }
       ],
       "id": "photoprism",
-      "image": "photoprism/photoprism:latest",
+      "image": "photoprism/photoprism:260728",
       "name": "PhotoPrism",
       "volumes": [
         "/photoprism/storage",
@@ -1312,7 +1312,7 @@
         }
       ],
       "id": "ollama",
-      "image": "ollama/ollama:latest",
+      "image": "ollama/ollama:0.33.3",
       "name": "Ollama",
       "volumes": [
         "/root/.ollama"
@@ -1434,7 +1434,7 @@
       "default_port": 8182,
       "env_vars": [],
       "id": "stirling-pdf",
-      "image": "frooodle/s-pdf:latest",
+      "image": "frooodle/s-pdf:2.14.3",
       "name": "Stirling-PDF",
       "volumes": [
         "/usr/share/tessdata",
@@ -1448,7 +1448,7 @@
       "default_port": 5006,
       "env_vars": [],
       "id": "actual-budget",
-      "image": "actualbudget/actual-server:latest",
+      "image": "actualbudget/actual-server:26.9.0",
       "name": "Actual Budget",
       "volumes": [
         "/data"
@@ -1483,7 +1483,7 @@
         }
       ],
       "id": "hedgedoc",
-      "image": "quay.io/hedgedoc/hedgedoc:latest",
+      "image": "quay.io/hedgedoc/hedgedoc:1.12.0",
       "name": "HedgeDoc",
       "volumes": [
         "/hedgedoc/public/uploads"
@@ -1504,7 +1504,7 @@
         }
       ],
       "id": "vikunja",
-      "image": "vikunja/vikunja:latest",
+      "image": "vikunja/vikunja:2.6.0",
       "name": "Vikunja",
       "volumes": [
         "/app/vikunja/files"
@@ -1530,7 +1530,7 @@
       "default_port": 8383,
       "env_vars": [],
       "id": "trilium",
-      "image": "triliumnext/notes:latest",
+      "image": "triliumnext/notes:v0.95.0",
       "name": "Trilium Notes",
       "volumes": [
         "/home/node/trilium-data"
@@ -1543,7 +1543,7 @@
       "default_port": 3015,
       "env_vars": [],
       "id": "docuseal",
-      "image": "docuseal/docuseal:latest",
+      "image": "docuseal/docuseal:3.2.3",
       "name": "DocuSeal",
       "volumes": [
         "/data"
@@ -1556,7 +1556,7 @@
       "default_port": 4533,
       "env_vars": [],
       "id": "navidrome",
-      "image": "deluan/navidrome:latest",
+      "image": "deluan/navidrome:0.63.2",
       "name": "Navidrome",
       "volumes": [
         "/data",
@@ -1601,7 +1601,7 @@
         }
       ],
       "id": "calibre-web",
-      "image": "lscr.io/linuxserver/calibre-web:latest",
+      "image": "lscr.io/linuxserver/calibre-web:0.6.27",
       "name": "Calibre-Web",
       "volumes": [
         "/config",
@@ -1615,7 +1615,7 @@
       "default_port": 5001,
       "env_vars": [],
       "id": "kavita",
-      "image": "jvmilazz0/kavita:latest",
+      "image": "jvmilazz0/kavita:0.9.1",
       "name": "Kavita",
       "volumes": [
         "/kavita/config",
@@ -1651,7 +1651,7 @@
         }
       ],
       "id": "plex",
-      "image": "lscr.io/linuxserver/plex:latest",
+      "image": "lscr.io/linuxserver/plex:1.43.3",
       "name": "Plex",
       "volumes": [
         "/config",
@@ -1666,7 +1666,7 @@
       "default_port": 8284,
       "env_vars": [],
       "id": "freshrss",
-      "image": "freshrss/freshrss:latest",
+      "image": "freshrss/freshrss:1.29.1",
       "name": "FreshRSS",
       "volumes": [
         "/var/www/FreshRSS/data",
@@ -1702,7 +1702,7 @@
         }
       ],
       "id": "linkwarden",
-      "image": "ghcr.io/linkwarden/linkwarden:latest",
+      "image": "ghcr.io/linkwarden/linkwarden:v2.16.2",
       "name": "Linkwarden",
       "volumes": [
         "/data/data"
@@ -1743,7 +1743,7 @@
         }
       ],
       "id": "tandoor",
-      "image": "vabene1111/recipes:latest",
+      "image": "vabene1111/recipes:2.6.13",
       "name": "Tandoor Recipes",
       "volumes": [
         "/opt/recipes/mediafiles",
@@ -1765,7 +1765,7 @@
         }
       ],
       "id": "mealie",
-      "image": "ghcr.io/mealie-recipes/mealie:latest",
+      "image": "ghcr.io/mealie-recipes/mealie:v3.25.1",
       "name": "Mealie",
       "volumes": [
         "/app/data"
@@ -1780,7 +1780,7 @@
       "default_port": 8286,
       "env_vars": [],
       "id": "ntfy",
-      "image": "binwiederhier/ntfy:latest",
+      "image": "binwiederhier/ntfy:v2.28.0",
       "name": "ntfy",
       "volumes": [
         "/var/cache/ntfy",
@@ -1802,7 +1802,7 @@
         }
       ],
       "id": "gotify",
-      "image": "gotify/server:latest",
+      "image": "gotify/server:3.1.0",
       "name": "Gotify",
       "volumes": [
         "/app/data"
@@ -1815,7 +1815,7 @@
       "default_port": 3017,
       "env_vars": [],
       "id": "adguard-home",
-      "image": "adguard/adguardhome:latest",
+      "image": "adguard/adguardhome:v0.107.79",
       "name": "AdGuard Home",
       "volumes": [
         "/opt/adguardhome/work",
@@ -1829,7 +1829,7 @@
       "default_port": 5380,
       "env_vars": [],
       "id": "technitium-dns",
-      "image": "technitium/dns-server:latest",
+      "image": "technitium/dns-server:15.4.0",
       "name": "Technitium DNS",
       "volumes": [
         "/etc/dns"
@@ -1842,7 +1842,7 @@
       "default_port": 8181,
       "env_vars": [],
       "id": "nginx-proxy-manager",
-      "image": "jc21/nginx-proxy-manager:latest",
+      "image": "jc21/nginx-proxy-manager:2.15.1",
       "name": "Nginx Proxy Manager",
       "volumes": [
         "/data",
@@ -1885,7 +1885,7 @@
         }
       ],
       "id": "wireguard",
-      "image": "lscr.io/linuxserver/wireguard:latest",
+      "image": "lscr.io/linuxserver/wireguard:1.0.20260223",
       "name": "WireGuard",
       "volumes": [
         "/config"
@@ -1898,7 +1898,7 @@
       "default_port": 9999,
       "env_vars": [],
       "id": "dozzle",
-      "image": "amir20/dozzle:latest",
+      "image": "amir20/dozzle:v10.9.2",
       "name": "Dozzle",
       "volumes": []
     },
@@ -1943,7 +1943,7 @@
       "default_port": 8288,
       "env_vars": [],
       "id": "filebrowser",
-      "image": "filebrowser/filebrowser:latest",
+      "image": "filebrowser/filebrowser:v2.63.23",
       "name": "File Browser",
       "volumes": [
         "/srv",
@@ -1972,7 +1972,7 @@
         }
       ],
       "id": "syncthing",
-      "image": "lscr.io/linuxserver/syncthing:latest",
+      "image": "lscr.io/linuxserver/syncthing:2.1.3",
       "name": "Syncthing",
       "volumes": [
         "/config",
@@ -1986,7 +1986,7 @@
       "default_port": 8289,
       "env_vars": [],
       "id": "it-tools",
-      "image": "corentinth/it-tools:latest",
+      "image": "corentinth/it-tools:2024.10.22-7ca5933",
       "name": "IT-Tools",
       "volumes": []
     },
@@ -2010,7 +2010,7 @@
       "default_port": 8123,
       "env_vars": [],
       "id": "clickhouse",
-      "image": "clickhouse/clickhouse-server:latest",
+      "image": "clickhouse/clickhouse-server:26.8.2.7",
       "name": "ClickHouse",
       "volumes": [
         "/var/lib/clickhouse",
@@ -2114,7 +2114,7 @@
       "default_port": 6060,
       "env_vars": [],
       "id": "crowdsec",
-      "image": "crowdsecurity/crowdsec:latest",
+      "image": "crowdsecurity/crowdsec:v1.8.1",
       "name": "CrowdSec",
       "volumes": [
         "/etc/crowdsec",
@@ -2128,7 +2128,7 @@
       "default_port": 1880,
       "env_vars": [],
       "id": "node-red",
-      "image": "nodered/node-red:latest",
+      "image": "nodered/node-red:5.0.6",
       "name": "Node-RED",
       "volumes": [
         "/data"
@@ -2275,7 +2275,7 @@
         }
       ],
       "id": "listmonk",
-      "image": "listmonk/listmonk:latest",
+      "image": "listmonk/listmonk:v6.2.0",
       "name": "Listmonk",
       "volumes": [
         "/listmonk/uploads"
@@ -2303,7 +2303,7 @@
         }
       ],
       "id": "shynet",
-      "image": "milesmcc/shynet:latest",
+      "image": "milesmcc/shynet:v0.13.1",
       "name": "Shynet",
       "volumes": []
     },
@@ -2343,7 +2343,7 @@
       "default_port": 9091,
       "env_vars": [],
       "id": "authelia",
-      "image": "authelia/authelia:latest",
+      "image": "authelia/authelia:4.39.22",
       "name": "Authelia",
       "volumes": [
         "/config"
@@ -2387,7 +2387,7 @@
         }
       ],
       "id": "whisper",
-      "image": "onerahmet/openai-whisper-asr-webservice:latest",
+      "image": "onerahmet/openai-whisper-asr-webservice:v1.10.0",
       "name": "Whisper ASR",
       "volumes": []
     },
@@ -2453,7 +2453,7 @@
         }
       ],
       "id": "langflow",
-      "image": "langflowai/langflow:latest",
+      "image": "langflowai/langflow:1.12.0",
       "name": "Langflow",
       "volumes": [
         "/app/langflow"
@@ -2530,7 +2530,7 @@
         }
       ],
       "id": "vllm",
-      "image": "vllm/vllm-openai:latest",
+      "image": "vllm/vllm-openai:v0.28.0",
       "name": "vLLM",
       "volumes": [
         "/root/.cache/huggingface"
@@ -2558,7 +2558,7 @@
         }
       ],
       "id": "surrealdb",
-      "image": "surrealdb/surrealdb:latest",
+      "image": "surrealdb/surrealdb:v3.2.4",
       "name": "SurrealDB",
       "volumes": [
         "/data"
@@ -2571,7 +2571,7 @@
       "default_port": 9009,
       "env_vars": [],
       "id": "questdb",
-      "image": "questdb/questdb:latest",
+      "image": "questdb/questdb:10.0.1",
       "name": "QuestDB",
       "volumes": [
         "/var/lib/questdb"
@@ -2703,7 +2703,7 @@
       "default_port": 3030,
       "env_vars": [],
       "id": "gitness",
-      "image": "harness/gitness:latest",
+      "image": "harness/gitness:3.0.0-beta.11",
       "name": "Gitness",
       "volumes": [
         "/data"
@@ -2730,7 +2730,7 @@
       "default_port": 8320,
       "env_vars": [],
       "id": "nexus",
-      "image": "sonatype/nexus3:latest",
+      "image": "sonatype/nexus3:3.96.0",
       "name": "Nexus Repository",
       "volumes": [
         "/nexus-data"
@@ -2764,7 +2764,7 @@
       "default_port": 5055,
       "env_vars": [],
       "id": "jellyseerr",
-      "image": "fallenbagel/jellyseerr:latest",
+      "image": "fallenbagel/jellyseerr:2.7.3",
       "name": "Jellyseerr",
       "volumes": [
         "/app/config"
@@ -2792,7 +2792,7 @@
         }
       ],
       "id": "overseerr",
-      "image": "lscr.io/linuxserver/overseerr:latest",
+      "image": "lscr.io/linuxserver/overseerr:v1.35.0-ls158",
       "name": "Overseerr",
       "volumes": [
         "/config"
@@ -2820,7 +2820,7 @@
         }
       ],
       "id": "bazarr",
-      "image": "lscr.io/linuxserver/bazarr:latest",
+      "image": "lscr.io/linuxserver/bazarr:1.6.0",
       "name": "Bazarr",
       "volumes": [
         "/config",
@@ -2850,7 +2850,7 @@
         }
       ],
       "id": "prowlarr",
-      "image": "lscr.io/linuxserver/prowlarr:latest",
+      "image": "lscr.io/linuxserver/prowlarr:2.5.2",
       "name": "Prowlarr",
       "volumes": [
         "/config"
@@ -2878,7 +2878,7 @@
         }
       ],
       "id": "radarr",
-      "image": "lscr.io/linuxserver/radarr:latest",
+      "image": "lscr.io/linuxserver/radarr:6.3.0",
       "name": "Radarr",
       "volumes": [
         "/config",
@@ -2908,7 +2908,7 @@
         }
       ],
       "id": "sonarr",
-      "image": "lscr.io/linuxserver/sonarr:latest",
+      "image": "lscr.io/linuxserver/sonarr:4.0.19",
       "name": "Sonarr",
       "volumes": [
         "/config",
@@ -2938,7 +2938,7 @@
         }
       ],
       "id": "lidarr",
-      "image": "lscr.io/linuxserver/lidarr:latest",
+      "image": "lscr.io/linuxserver/lidarr:3.1.0",
       "name": "Lidarr",
       "volumes": [
         "/config",
@@ -2968,7 +2968,7 @@
         }
       ],
       "id": "tautulli",
-      "image": "lscr.io/linuxserver/tautulli:latest",
+      "image": "lscr.io/linuxserver/tautulli:2.18.1",
       "name": "Tautulli",
       "volumes": [
         "/config"
@@ -3101,7 +3101,7 @@
         }
       ],
       "id": "leantime",
-      "image": "leantime/leantime:latest",
+      "image": "leantime/leantime:3.9.8",
       "name": "Leantime",
       "volumes": [
         "/var/www/html/public/userfiles",
@@ -3178,7 +3178,7 @@
         }
       ],
       "id": "joplin-server",
-      "image": "joplin/server:latest",
+      "image": "joplin/server:3.7.1",
       "name": "Joplin Server",
       "volumes": []
     },
@@ -3189,7 +3189,7 @@
       "default_port": 8307,
       "env_vars": [],
       "id": "element-web",
-      "image": "vectorim/element-web:latest",
+      "image": "vectorim/element-web:v1.12.27",
       "name": "Element Web",
       "volumes": []
     },
@@ -3268,7 +3268,7 @@
         }
       ],
       "id": "cloudflared",
-      "image": "cloudflare/cloudflared:latest",
+      "image": "cloudflare/cloudflared:2026.8.3",
       "name": "Cloudflare Tunnel",
       "volumes": []
     },
@@ -3294,7 +3294,7 @@
         }
       ],
       "id": "tailscale",
-      "image": "tailscale/tailscale:latest",
+      "image": "tailscale/tailscale:v1.102.3",
       "name": "Tailscale",
       "volumes": [
         "/var/lib/tailscale"
@@ -3322,7 +3322,7 @@
       "default_port": 9333,
       "env_vars": [],
       "id": "seaweedfs",
-      "image": "chrislusf/seaweedfs:latest",
+      "image": "chrislusf/seaweedfs:4.45",
       "name": "SeaweedFS",
       "volumes": [
         "/data"
@@ -3355,7 +3355,7 @@
       "default_port": 8313,
       "env_vars": [],
       "id": "trivy",
-      "image": "aquasec/trivy:latest",
+      "image": "aquasec/trivy:0.74.0",
       "name": "Trivy Server",
       "volumes": [
         "/root/.cache"
@@ -3463,7 +3463,7 @@
         }
       ],
       "id": "temporal",
-      "image": "temporalio/auto-setup:latest",
+      "image": "temporalio/auto-setup:1.29.3",
       "name": "Temporal Server",
       "volumes": []
     },
@@ -3531,7 +3531,7 @@
         }
       ],
       "id": "redash",
-      "image": "redash/redash:latest",
+      "image": "redash/redash:8.0.0.b32245",
       "name": "Redash",
       "volumes": []
     },

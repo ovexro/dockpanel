@@ -1400,6 +1400,7 @@ pub fn router() -> Router<AppState> {
         // WordPress Toolkit
         .route("/api/wordpress/sites", get(wordpress::all_wp_sites))
         .route("/api/wordpress/bulk-update", post(wordpress::bulk_update))
+        .route("/api/wordpress/vuln-scan-settings", get(wordpress::get_scan_settings).put(wordpress::update_scan_settings))
         .route("/api/sites/{id}/wordpress/vuln-scan", post(wordpress::vuln_scan))
         .route("/api/sites/{id}/wordpress/security-check", get(wordpress::security_check))
         .route("/api/sites/{id}/wordpress/hardening-history", get(wordpress::hardening_history))

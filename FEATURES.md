@@ -1,6 +1,6 @@
 # DockPanel Feature Manifest
 
-> **Version**: v2.225.0 | **Total**: 60+ major features, ~285 capabilities
+> **Version**: v2.226.0 | **Total**: 60+ major features, ~285 capabilities
 >
 > This file is the single source of truth for what DockPanel offers.
 > Update it whenever features are added, changed, or removed.
@@ -26,7 +26,7 @@
 | **Cron Jobs** | Cron scheduling with manual execution and history | `routes/crons.rs` | `crons.rs` | `Crons.tsx` | (via agent crontab) |
 | **Docker Apps** | 147 templates across 14 categories, Compose stacks, container lifecycle, registry, image tag change, live resource limits, GPU passthrough | `routes/docker_apps.rs`, `stacks.rs` | `docker_apps.rs` | `Apps.tsx` | `docker_stacks` |
 | **Git Deploy** | Push-to-deploy, blue-green, Nixpacks (30+ langs), preview envs, one-time scheduled deploys, two-person deploy approval, HTTPS via Let's Encrypt or a registered certificate | `routes/git_deploys.rs` | `git_build.rs` | `GitDeploys.tsx` | `git_deploys`, `git_deploy_history`, `git_previews`, `deploy_approvals` |
-| **WordPress Toolkit** | Multi-site dashboard, vuln scanning (14 known), hardening (7 checks), bulk updates | `routes/wordpress.rs` | `wordpress.rs`, `wp_vulnerability.rs` | `WordPressToolkit.tsx`, `WordPress.tsx` | `wp_vuln_scans`, `wp_hardening` |
+| **WordPress Toolkit** | Multi-site dashboard, vuln scanning (14 known), hardening (7 checks), bulk updates, scheduled background rescans with critical/high alerting (direct peer of Image Vulnerability Scanning below). Defaults off. | `routes/wordpress.rs`, `services/wp_vuln_scanner.rs` | `wordpress.rs`, `wp_vulnerability.rs` | `WordPressToolkit.tsx`, `WordPress.tsx`, `Settings.tsx` (WpVulnScanSettings) | `wp_vuln_scans`, `wp_hardening` |
 | **Migration Wizard** | Import from cPanel/HestiaCP — sites and databases. Mail accounts are listed (cPanel only), not migrated. Plesk (beta) | `routes/migration.rs` | `migration.rs` | `Migration.tsx` | `migrations` |
 | **Staging** | Clone site to staging, sync to/from production | `routes/staging.rs` | `staging.rs` | (in SiteDetail) | `sites.parent_site_id` |
 
@@ -100,7 +100,7 @@
 | **OAuth/SSO** | Google, GitHub, GitLab OAuth 2.0 with auto-create | `routes/oauth.rs` | (in Login) |
 | **Branding** | Public `/api/branding` with panel name, logo, colors, OAuth providers | `routes/settings.rs` | `BrandingContext.tsx` |
 
-## Background Services (15 supervised)
+## Background Services (16 supervised)
 
 | Service | Interval | Purpose |
 |---------|----------|---------|
@@ -116,6 +116,7 @@
 | `backup_policy_executor` | per policy | Execute backup policies (retention, scheduling) |
 | `backup_verifier` | per policy | Verify backup integrity after creation |
 | `image_scan_sweeper` | 30min | Rescan every running app's image past the configured interval (opt-in) |
+| `wp_vuln_scanner` | 30min | Rescan every WordPress site's plugins past the configured interval, alert on critical/high (opt-in) |
 | `drill_scheduler` | per policy | Run scheduled restore drills against real backups |
 | `telemetry_collector` | daily | Collect anonymous usage telemetry (opt-in, off by default) |
 | `cleanup` | 3600s | Expire provision logs and their deploy-owner rows |
@@ -236,11 +237,11 @@ honest:
 | Panel services RAM (agent + API) | ~49 MB | measured | 2026-07-27 |
 | Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
 | App templates | 147 | derived | every commit |
-| HTTP routes | 840 (547 backend + 293 agent) | derived | every commit |
-| Regression-pin assertions | 4332 (130 suites) | derived | every commit |
+| HTTP routes | 841 (548 backend + 293 agent) | derived | every commit |
+| Regression-pin assertions | 4341 (130 suites) | derived | every commit |
 | Frontend pages | 53 | derived | every commit |
-| DB migrations | 130 | derived | every commit |
-| Supervised background services | 15 | derived | every commit |
+| DB migrations | 131 | derived | every commit |
+| Supervised background services | 16 | derived | every commit |
 
 Five of these were wrong when the register was built (s272), some by a factor of
 three, and one — the panel's own memory footprint, the headline claim of the

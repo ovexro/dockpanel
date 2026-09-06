@@ -833,6 +833,7 @@ pub const SUPPRESSIBLE_ALERT_TYPES: &[&str] = &[
     "ssl_renewal_failure",
     "security",
     "image_scan",
+    "wp_vuln_scan",
     "slow_response",
 ];
 

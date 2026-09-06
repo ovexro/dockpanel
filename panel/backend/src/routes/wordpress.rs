@@ -8,7 +8,174 @@ use uuid::Uuid;
 use crate::auth::{AuthUser, ServerScope};
 use crate::error::{internal_error, agent_error, err, require_admin, ApiError};
 use crate::services::activity;
+use crate::services::agent::AgentHandle;
+use crate::services::notifications;
 use crate::AppState;
+
+// ── Vulnerability-scan settings ────────────────────────────────────────────
+// Companion to image_scans' settings pair (read_settings/get_settings/
+// update_settings) — same shape, same "off by default" posture, distinct
+// keys because this schedule sweeps WordPress sites, not Docker images.
+
+#[derive(serde::Serialize)]
+pub struct WpScanSettings {
+    pub enabled: bool,
+    pub interval_hours: i32,
+}
+
+#[derive(serde::Deserialize)]
+pub struct UpdateWpScanSettings {
+    pub enabled: bool,
+    pub interval_hours: i32,
+}
+
+pub async fn read_wp_scan_settings(pool: &sqlx::PgPool) -> Result<(bool, i32), sqlx::Error> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key, value FROM settings WHERE key IN ('wp_vuln_scan_enabled', 'wp_vuln_scan_interval_hours')",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut enabled = false;
+    let mut hours = 24i32;
+    for (k, v) in rows {
+        match k.as_str() {
+            "wp_vuln_scan_enabled" => enabled = v == "true",
+            "wp_vuln_scan_interval_hours" => hours = v.parse().unwrap_or(24),
+            _ => {}
+        }
+    }
+    Ok((enabled, hours))
+}
+
+/// GET /api/wordpress/vuln-scan-settings
+pub async fn get_scan_settings(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<WpScanSettings>, ApiError> {
+    require_admin(&claims.role)?;
+    let (enabled, interval_hours) = read_wp_scan_settings(&state.db)
+        .await
+        .map_err(|e| internal_error("read wp scan settings", e))?;
+    Ok(Json(WpScanSettings { enabled, interval_hours }))
+}
+
+/// PUT /api/wordpress/vuln-scan-settings
+pub async fn update_scan_settings(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(body): Json<UpdateWpScanSettings>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&claims.role)?;
+
+    if !(1..=720).contains(&body.interval_hours) {
+        return Err(err(StatusCode::BAD_REQUEST, "interval_hours must be 1..=720"));
+    }
+
+    for (key, value) in [
+        ("wp_vuln_scan_enabled", if body.enabled { "true" } else { "false" }),
+        ("wp_vuln_scan_interval_hours", body.interval_hours.to_string().as_str()),
+    ] {
+        sqlx::query("INSERT INTO settings (key, value) VALUES ($1, $2) \
+                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value")
+            .bind(key)
+            .bind(value)
+            .execute(&state.db)
+            .await
+            .map_err(|e| internal_error("save wp scan setting", e))?;
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// The `state_key` a site's WordPress vulnerability alert fires and resolves
+/// under. Mirrors `image_scans::image_scan_state_key` — `alerts.state_key` is
+/// `VARCHAR(100)` and a domain, while normally well under that, is not a
+/// validated field, so the same truncate-then-hash shape applies rather than
+/// let a long domain silently fail the INSERT and swallow the alert.
+fn wp_vuln_state_key(domain: &str) -> String {
+    const MAX: usize = 100;
+    let readable = format!("wp_vuln:{domain}");
+    if readable.len() <= MAX {
+        return readable;
+    }
+    use sha2::{Digest, Sha256};
+    let digest = hex::encode(Sha256::digest(domain.as_bytes()));
+    let prefix = "wp_vuln:";
+    let budget = MAX - prefix.len() - 17;
+    let keep: String = domain.chars().take(budget).collect();
+    format!("{prefix}{keep}-{}", &digest[..16])
+}
+
+/// Run a WordPress vulnerability scan via the agent, persist it, and fire or
+/// resolve the alert it implies. Public so the manual endpoint below and the
+/// background sweep (`services::wp_vuln_scanner`) share one path — before
+/// this, only the manual button existed, so a critical CVE in a plugin nobody
+/// happened to click Scan on stayed invisible forever.
+pub async fn scan_and_store(
+    pool: &sqlx::PgPool,
+    site_id: Uuid,
+    user_id: Uuid,
+    domain: &str,
+    agent: &AgentHandle,
+) -> Result<serde_json::Value, ApiError> {
+    let result = agent
+        .post(&format!("/wordpress/{domain}/vuln-scan"), None::<serde_json::Value>)
+        .await
+        .map_err(|e| agent_error("Vulnerability scan", e))?;
+
+    let total = result.get("total_vulns").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let critical = result.get("critical_count").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let high = result.get("high_count").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+
+    sqlx::query(
+        "INSERT INTO wp_vuln_scans (site_id, domain, total_vulns, critical_count, high_count, scan_data) VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(site_id)
+    .bind(domain)
+    .bind(total)
+    .bind(critical)
+    .bind(high)
+    .bind(&result)
+    .execute(pool)
+    .await
+    .map_err(|e| { tracing::warn!("Failed to store scan result: {e}"); })
+    .ok();
+
+    // Resolve-then-fire, mirroring `image_scans::scan_and_store`: every scan
+    // of this site first clears whatever alert the LAST scan of it raised,
+    // then raises a new one only if THIS scan is still dirty. To the site's
+    // OWNER, not "every admin" — unlike a shared Docker image, a WordPress
+    // site belongs to one user, and `resolve_ssl_renewal_failure`'s own
+    // convention for a per-site alert is the site's `user_id`.
+    let state_key = wp_vuln_state_key(domain);
+    notifications::resolve_alert(
+        pool,
+        user_id,
+        None,
+        Some(site_id),
+        "wp_vuln_scan",
+        &state_key,
+        &format!("WordPress vulnerability alert resolved: {domain}"),
+        &format!(
+            "A later scan of {domain} found no critical or high severity plugin vulnerability — the earlier alert no longer applies."
+        ),
+    )
+    .await;
+    if critical > 0 || high > 0 {
+        let severity = if critical > 0 { "critical" } else { "warning" };
+        let title = format!("WordPress scan: {critical} critical, {high} high on {domain}");
+        let message = format!(
+            "A vulnerability scan of {domain} found {critical} critical, {high} high severity plugin issues. Review in the WordPress toolkit."
+        );
+        notifications::fire_alert(
+            pool, user_id, None, Some(site_id), "wp_vuln_scan", &state_key, severity, &title, &message,
+        )
+        .await;
+    }
+
+    Ok(result)
+}
 
 
 /// GET /api/sites/{id}/wordpress — Detect WP + get info + auto-update status.
@@ -354,38 +521,7 @@ pub async fn vuln_scan(
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Site not found"))?;
     let agent = crate::helpers::agent_for_site_server(&state, site.server_id, &site.domain).await?;
 
-    let result = agent
-        .post(&format!("/wordpress/{}/vuln-scan", site.domain), None)
-        .await
-        .map_err(|e| agent_error("Vulnerability scan", e))?;
-
-    let total = result
-        .get("total_vulns")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0) as i32;
-    let critical = result
-        .get("critical_count")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0) as i32;
-    let high = result
-        .get("high_count")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0) as i32;
-
-    // Store scan result
-    sqlx::query(
-        "INSERT INTO wp_vuln_scans (site_id, domain, total_vulns, critical_count, high_count, scan_data) VALUES ($1, $2, $3, $4, $5, $6)",
-    )
-    .bind(id)
-    .bind(&site.domain)
-    .bind(total)
-    .bind(critical)
-    .bind(high)
-    .bind(&result)
-    .execute(&state.db)
-    .await
-    .map_err(|e| { tracing::warn!("Failed to store scan result: {e}"); })
-    .ok();
+    let result = scan_and_store(&state.db, id, site.user_id, &site.domain, &agent).await?;
 
     crate::services::activity::log_activity(
         &state.db, claims.sub, &claims.email, "wordpress.vuln_scan",

@@ -37,13 +37,14 @@ HEALER=panel/backend/src/services/auto_healer.rs
 SCANNER=panel/backend/src/services/security_scanner.rs
 SEC_SCANS=panel/backend/src/routes/security_scans.rs
 IMG_SCANS=panel/backend/src/routes/image_scans.rs
+WP=panel/backend/src/routes/wordpress.rs
 RULES=panel/backend/src/routes/alerts.rs
 SETTINGS_RS=panel/backend/src/routes/settings.rs
 SETTINGS_TSX=panel/frontend/src/pages/Settings.tsx
 ALERTS_TSX=panel/frontend/src/pages/Alerts.tsx
 GUIDE=docs/guides/monitoring.md
 
-for f in "$NOTIF" "$ENGINE" "$HEALER" "$SCANNER" "$SEC_SCANS" "$IMG_SCANS" "$RULES" "$SETTINGS_RS" \
+for f in "$NOTIF" "$ENGINE" "$HEALER" "$SCANNER" "$SEC_SCANS" "$IMG_SCANS" "$WP" "$RULES" "$SETTINGS_RS" \
          "$SETTINGS_TSX" "$ALERTS_TSX" "$GUIDE"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
@@ -160,7 +161,9 @@ PRODUCED=$( { calls "$ENGINE" fire_alert_with_retry
               calls "$SEC_SCANS" 'notifications::fire_alert'
               calls "$SEC_SCANS" 'notifications::resolve_alert'
               calls "$IMG_SCANS" 'notifications::fire_alert'
-              calls "$IMG_SCANS" 'notifications::resolve_alert'; } 2>/dev/null \
+              calls "$IMG_SCANS" 'notifications::resolve_alert'
+              calls "$WP" 'notifications::fire_alert'
+              calls "$WP" 'notifications::resolve_alert'; } 2>/dev/null \
           | grep -oE '"[a-z][a-z_]{3,}"' | tr -d '"' \
           | grep -vE '^(critical|warning|info|all_channels)$' | sort -u )
 NPROD=$(grep -c . <<< "$PRODUCED")

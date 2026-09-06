@@ -740,6 +740,30 @@ pub struct DeployedApp {
     pub user_id: Option<String>,
 }
 
+// 79 of these entries pinned `:latest` — a deploy from the catalogue is not
+// reproducible across two operators, or across the same operator's redeploy a
+// month later, and the SSL/backup/scan machinery elsewhere in this project
+// treats a container's image tag as meaningful metadata. 59 were re-pinned
+// here to the SPECIFIC tag that resolves to the byte-identical manifest
+// `:latest` already pointed to (every real per-architecture platform digest
+// matched, attestation/SBOM sub-manifests excluded since those regenerate on
+// every push independent of image content) — a zero-behavior-change pin,
+// verified live against each registry, never guessed (see the DEAD-tags
+// lesson two lines below this comment block: a guessed version can be
+// unpullable). The remaining 20 stay on `:latest` because no equivalent tag
+// exists at all, checked live rather than assumed:
+//   - erpnext, posthog, synapse: the registry's `:latest` build matches only a
+//     branch/commit-hash tag (`develop`, `master`, a bare `sha-*`), never a
+//     numbered release — pinning to one of those would look like a version
+//     and mean nothing.
+//   - activepieces, dashy, dify, flowise, focalboard, keydb, superset: no tag
+//     in the registry (searched the 200 most-recently-pushed, or the full
+//     history for smaller repos) shares `:latest`'s digest at all.
+//   - audiobookshelf, changedetection, dragonflydb, homarr, homepage, huginn,
+//     paperless-ngx, zipline: same, on ghcr.io/dragonflydb's own registry.
+//   - curlimages/curl below (the network-probe helper, not a catalogue
+//     template) was deliberately left alone — a transient one-shot probe
+//     container is a different risk profile from a long-running deployed app.
 static TEMPLATES: &[AppTemplateDef] = &[
     // WordPress, Drupal, Joomla, PrestaShop moved to Sites (native PHP install)
     AppTemplateDef {
@@ -1088,7 +1112,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "MinIO",
         description: "High-performance S3-compatible object storage",
         category: "Storage",
-        image: "minio/minio:latest",
+        image: "minio/minio:RELEASE.2025-09-07T16-13-09Z",
         default_port: 9000,
         container_port: "9000/tcp",
         env_vars: &[
@@ -1140,7 +1164,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "NocoDB",
         description: "Open-source Airtable alternative — turn any database into a spreadsheet",
         category: "Tools",
-        image: "nocodb/nocodb:latest",
+        image: "nocodb/nocodb:2026.08.2",
         default_port: 8085,
         container_port: "8080/tcp",
         env_vars: &[],
@@ -1265,7 +1289,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "BookStack",
         description: "Simple, self-hosted platform for organizing and storing information",
         category: "Tools",
-        image: "lscr.io/linuxserver/bookstack:latest",
+        image: "lscr.io/linuxserver/bookstack:26.05.4",
         default_port: 6875,
         container_port: "80/tcp",
         env_vars: &[
@@ -1344,7 +1368,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "PhotoPrism",
         description: "AI-powered photo management app for browsing, organizing, and sharing",
         category: "Media",
-        image: "photoprism/photoprism:latest",
+        image: "photoprism/photoprism:260728",
         default_port: 2342,
         container_port: "2342/tcp",
         env_vars: &[
@@ -1519,7 +1543,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Ollama",
         description: "Run large language models locally (Llama, Mistral, Gemma, Phi)",
         category: "AI",
-        image: "ollama/ollama:latest",
+        image: "ollama/ollama:0.33.3",
         default_port: 11434,
         container_port: "11434/tcp",
         env_vars: &[
@@ -1609,7 +1633,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Stirling-PDF",
         description: "Self-hosted PDF manipulation tool with merge, split, convert, and OCR",
         category: "Tools",
-        image: "frooodle/s-pdf:latest",
+        image: "frooodle/s-pdf:2.14.3",
         default_port: 8182,
         container_port: "8080/tcp",
         env_vars: &[],
@@ -1620,7 +1644,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Actual Budget",
         description: "Privacy-focused local-first personal budgeting app",
         category: "Tools",
-        image: "actualbudget/actual-server:latest",
+        image: "actualbudget/actual-server:26.9.0",
         default_port: 5006,
         container_port: "5006/tcp",
         env_vars: &[],
@@ -1631,7 +1655,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "HedgeDoc",
         description: "Real-time collaborative Markdown editor for teams",
         category: "Tools",
-        image: "quay.io/hedgedoc/hedgedoc:latest",
+        image: "quay.io/hedgedoc/hedgedoc:1.12.0",
         default_port: 3014,
         container_port: "3000/tcp",
         env_vars: &[
@@ -1646,7 +1670,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Vikunja",
         description: "Open-source to-do and project management app (Todoist alternative)",
         category: "Tools",
-        image: "vikunja/vikunja:latest",
+        image: "vikunja/vikunja:2.6.0",
         default_port: 3456,
         container_port: "3456/tcp",
         env_vars: &[
@@ -1670,7 +1694,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Trilium Notes",
         description: "Hierarchical note-taking application with rich text, relations, and scripting",
         category: "Tools",
-        image: "triliumnext/notes:latest",
+        image: "triliumnext/notes:v0.95.0",
         default_port: 8383,
         container_port: "8080/tcp",
         env_vars: &[],
@@ -1681,7 +1705,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "DocuSeal",
         description: "Open-source document signing platform (DocuSign alternative)",
         category: "Tools",
-        image: "docuseal/docuseal:latest",
+        image: "docuseal/docuseal:3.2.3",
         default_port: 3015,
         container_port: "3000/tcp",
         env_vars: &[],
@@ -1693,7 +1717,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Navidrome",
         description: "Modern music server and streamer compatible with Subsonic/Airsonic clients",
         category: "Media",
-        image: "deluan/navidrome:latest",
+        image: "deluan/navidrome:0.63.2",
         default_port: 4533,
         container_port: "4533/tcp",
         env_vars: &[],
@@ -1715,7 +1739,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Calibre-Web",
         description: "Web-based e-book library manager with OPDS feed and reading interface",
         category: "Media",
-        image: "lscr.io/linuxserver/calibre-web:latest",
+        image: "lscr.io/linuxserver/calibre-web:0.6.27",
         default_port: 8283,
         container_port: "8083/tcp",
         env_vars: &[
@@ -1729,7 +1753,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Kavita",
         description: "Self-hosted digital library for manga, comics, and books",
         category: "Media",
-        image: "jvmilazz0/kavita:latest",
+        image: "jvmilazz0/kavita:0.9.1",
         default_port: 5001,
         container_port: "5000/tcp",
         env_vars: &[],
@@ -1740,7 +1764,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Plex",
         description: "Media server for organizing and streaming movies, TV, music, and photos",
         category: "Media",
-        image: "lscr.io/linuxserver/plex:latest",
+        image: "lscr.io/linuxserver/plex:1.43.3",
         default_port: 32400,
         container_port: "32400/tcp",
         env_vars: &[
@@ -1756,7 +1780,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "FreshRSS",
         description: "Self-hosted RSS feed aggregator with full-text search and mobile apps",
         category: "Tools",
-        image: "freshrss/freshrss:latest",
+        image: "freshrss/freshrss:1.29.1",
         default_port: 8284,
         container_port: "80/tcp",
         env_vars: &[],
@@ -1767,7 +1791,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Linkwarden",
         description: "Collaborative bookmark manager with archiving, tagging, and collections",
         category: "Tools",
-        image: "ghcr.io/linkwarden/linkwarden:latest",
+        image: "ghcr.io/linkwarden/linkwarden:v2.16.2",
         default_port: 3016,
         container_port: "3000/tcp",
         env_vars: &[
@@ -1794,7 +1818,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Tandoor Recipes",
         description: "Recipe management and meal planning application",
         category: "Tools",
-        image: "vabene1111/recipes:latest",
+        image: "vabene1111/recipes:2.6.13",
         default_port: 8285,
         container_port: "8080/tcp",
         env_vars: &[
@@ -1808,7 +1832,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Mealie",
         description: "Self-hosted recipe manager with meal planning, shopping lists, and API",
         category: "Tools",
-        image: "ghcr.io/mealie-recipes/mealie:latest",
+        image: "ghcr.io/mealie-recipes/mealie:v3.25.1",
         default_port: 9925,
         container_port: "9000/tcp",
         env_vars: &[
@@ -1822,7 +1846,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "ntfy",
         description: "Simple push notification service using HTTP PUT/POST (UnifiedPush compatible)",
         category: "Tools",
-        image: "binwiederhier/ntfy:latest",
+        image: "binwiederhier/ntfy:v2.28.0",
         default_port: 8286,
         container_port: "80/tcp",
         env_vars: &[],
@@ -1833,7 +1857,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Gotify",
         description: "Simple server for sending and receiving push notifications via REST API",
         category: "Tools",
-        image: "gotify/server:latest",
+        image: "gotify/server:3.1.0",
         default_port: 8287,
         container_port: "80/tcp",
         env_vars: &[
@@ -1847,7 +1871,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "AdGuard Home",
         description: "Network-wide ad and tracker blocking DNS server with HTTPS filtering",
         category: "Networking",
-        image: "adguard/adguardhome:latest",
+        image: "adguard/adguardhome:v0.107.79",
         default_port: 3017,
         container_port: "3000/tcp",
         env_vars: &[],
@@ -1858,7 +1882,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Technitium DNS",
         description: "Open-source authoritative and recursive DNS server with web admin panel",
         category: "Networking",
-        image: "technitium/dns-server:latest",
+        image: "technitium/dns-server:15.4.0",
         default_port: 5380,
         container_port: "5380/tcp",
         env_vars: &[],
@@ -1870,7 +1894,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Nginx Proxy Manager",
         description: "Easy-to-use reverse proxy with free SSL and web-based management",
         category: "Networking",
-        image: "jc21/nginx-proxy-manager:latest",
+        image: "jc21/nginx-proxy-manager:2.15.1",
         default_port: 8181,
         container_port: "81/tcp",
         env_vars: &[],
@@ -1881,7 +1905,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "WireGuard",
         description: "Modern, fast VPN tunnel with easy configuration",
         category: "Networking",
-        image: "lscr.io/linuxserver/wireguard:latest",
+        image: "lscr.io/linuxserver/wireguard:1.0.20260223",
         default_port: 51820,
         container_port: "51820/udp",
         env_vars: &[
@@ -1905,7 +1929,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Dozzle",
         description: "Real-time Docker container log viewer with a clean web interface",
         category: "Monitoring",
-        image: "amir20/dozzle:latest",
+        image: "amir20/dozzle:v10.9.2",
         default_port: 9999,
         container_port: "8080/tcp",
         env_vars: &[],
@@ -1941,7 +1965,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "File Browser",
         description: "Web-based file manager with sharing, users, and customization",
         category: "Storage",
-        image: "filebrowser/filebrowser:latest",
+        image: "filebrowser/filebrowser:v2.63.23",
         default_port: 8288,
         container_port: "80/tcp",
         env_vars: &[],
@@ -1962,7 +1986,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Syncthing",
         description: "Continuous file synchronization between devices (Dropbox alternative)",
         category: "Storage",
-        image: "lscr.io/linuxserver/syncthing:latest",
+        image: "lscr.io/linuxserver/syncthing:2.1.3",
         default_port: 8384,
         container_port: "8384/tcp",
         env_vars: &[
@@ -1977,7 +2001,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "IT-Tools",
         description: "Collection of handy developer tools (JSON formatter, UUID generator, hash, base64, etc.)",
         category: "Development",
-        image: "corentinth/it-tools:latest",
+        image: "corentinth/it-tools:2024.10.22-7ca5933",
         default_port: 8289,
         container_port: "80/tcp",
         env_vars: &[],
@@ -2001,7 +2025,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "ClickHouse",
         description: "Column-oriented OLAP database for real-time analytics on large datasets",
         category: "Database",
-        image: "clickhouse/clickhouse-server:latest",
+        image: "clickhouse/clickhouse-server:26.8.2.7",
         default_port: 8123,
         container_port: "8123/tcp",
         env_vars: &[],
@@ -2055,7 +2079,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "CrowdSec",
         description: "Collaborative security engine analyzing logs and sharing threat intelligence",
         category: "Security",
-        image: "crowdsecurity/crowdsec:latest",
+        image: "crowdsecurity/crowdsec:v1.8.1",
         default_port: 6060,
         container_port: "6060/tcp",
         env_vars: &[],
@@ -2067,7 +2091,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Node-RED",
         description: "Flow-based programming tool for wiring IoT, APIs, and online services",
         category: "Automation",
-        image: "nodered/node-red:latest",
+        image: "nodered/node-red:5.0.6",
         default_port: 1880,
         container_port: "1880/tcp",
         env_vars: &[],
@@ -2119,7 +2143,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Listmonk",
         description: "High-performance self-hosted newsletter and mailing list manager",
         category: "CMS",
-        image: "listmonk/listmonk:latest",
+        image: "listmonk/listmonk:v6.2.0",
         default_port: 9100,
         container_port: "9000/tcp",
         env_vars: &[
@@ -2138,7 +2162,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Shynet",
         description: "Privacy-friendly web analytics without cookies or JavaScript",
         category: "Analytics",
-        image: "milesmcc/shynet:latest",
+        image: "milesmcc/shynet:v0.13.1",
         default_port: 8295,
         container_port: "8080/tcp",
         env_vars: &[
@@ -2168,7 +2192,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Authelia",
         description: "Single Sign-On and 2FA portal for securing web applications",
         category: "Security",
-        image: "authelia/authelia:latest",
+        image: "authelia/authelia:4.39.22",
         default_port: 9091,
         container_port: "9091/tcp",
         env_vars: &[],
@@ -2194,7 +2218,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Whisper ASR",
         description: "OpenAI Whisper speech-to-text service with REST API",
         category: "AI",
-        image: "onerahmet/openai-whisper-asr-webservice:latest",
+        image: "onerahmet/openai-whisper-asr-webservice:v1.10.0",
         default_port: 9300,
         container_port: "9000/tcp",
         env_vars: &[
@@ -2234,7 +2258,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Langflow",
         description: "Visual framework for building multi-agent and RAG applications",
         category: "AI",
-        image: "langflowai/langflow:latest",
+        image: "langflowai/langflow:1.12.0",
         default_port: 7862,
         container_port: "7860/tcp",
         env_vars: &[
@@ -2264,7 +2288,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "vLLM",
         description: "High-throughput, memory-efficient LLM inference server with OpenAI-compatible API",
         category: "AI",
-        image: "vllm/vllm-openai:latest",
+        image: "vllm/vllm-openai:v0.28.0",
         default_port: 8000,
         container_port: "8000/tcp",
         env_vars: &[
@@ -2279,7 +2303,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "SurrealDB",
         description: "Multi-model database for web, mobile, serverless, and backend (SQL, graph, document)",
         category: "Database",
-        image: "surrealdb/surrealdb:latest",
+        image: "surrealdb/surrealdb:v3.2.4",
         default_port: 8300,
         container_port: "8000/tcp",
         env_vars: &[
@@ -2293,7 +2317,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "QuestDB",
         description: "High-performance time series database with SQL support and built-in web console",
         category: "Database",
-        image: "questdb/questdb:latest",
+        image: "questdb/questdb:10.0.1",
         default_port: 9009,
         container_port: "9000/tcp",
         env_vars: &[],
@@ -2380,7 +2404,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Gitness",
         description: "Open-source developer platform with Git hosting, pipelines, and code review (by Harness)",
         category: "Development",
-        image: "harness/gitness:latest",
+        image: "harness/gitness:3.0.0-beta.11",
         default_port: 3030,
         container_port: "3000/tcp",
         env_vars: &[],
@@ -2402,7 +2426,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Nexus Repository",
         description: "Universal artifact repository manager for Maven, npm, Docker, and more",
         category: "Development",
-        image: "sonatype/nexus3:latest",
+        image: "sonatype/nexus3:3.96.0",
         default_port: 8320,
         container_port: "8081/tcp",
         env_vars: &[],
@@ -2427,7 +2451,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Jellyseerr",
         description: "Media request management for Jellyfin, Emby, and Plex with auto-approval",
         category: "Media",
-        image: "fallenbagel/jellyseerr:latest",
+        image: "fallenbagel/jellyseerr:2.7.3",
         default_port: 5055,
         container_port: "5055/tcp",
         env_vars: &[],
@@ -2438,7 +2462,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Overseerr",
         description: "Media request management and discovery tool for Plex ecosystems",
         category: "Media",
-        image: "lscr.io/linuxserver/overseerr:latest",
+        image: "lscr.io/linuxserver/overseerr:v1.35.0-ls158",
         default_port: 5056,
         container_port: "5055/tcp",
         env_vars: &[
@@ -2452,7 +2476,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Bazarr",
         description: "Companion app for Sonarr and Radarr to manage and download subtitles",
         category: "Media",
-        image: "lscr.io/linuxserver/bazarr:latest",
+        image: "lscr.io/linuxserver/bazarr:1.6.0",
         default_port: 6767,
         container_port: "6767/tcp",
         env_vars: &[
@@ -2466,7 +2490,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Prowlarr",
         description: "Indexer manager and proxy for Sonarr, Radarr, Lidarr, and Readarr",
         category: "Media",
-        image: "lscr.io/linuxserver/prowlarr:latest",
+        image: "lscr.io/linuxserver/prowlarr:2.5.2",
         default_port: 9696,
         container_port: "9696/tcp",
         env_vars: &[
@@ -2480,7 +2504,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Radarr",
         description: "Movie collection manager with automatic downloading and organization",
         category: "Media",
-        image: "lscr.io/linuxserver/radarr:latest",
+        image: "lscr.io/linuxserver/radarr:6.3.0",
         default_port: 7878,
         container_port: "7878/tcp",
         env_vars: &[
@@ -2494,7 +2518,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Sonarr",
         description: "TV series collection manager with automatic downloading and organization",
         category: "Media",
-        image: "lscr.io/linuxserver/sonarr:latest",
+        image: "lscr.io/linuxserver/sonarr:4.0.19",
         default_port: 8989,
         container_port: "8989/tcp",
         env_vars: &[
@@ -2508,7 +2532,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Lidarr",
         description: "Music collection manager with automatic downloading and metadata management",
         category: "Media",
-        image: "lscr.io/linuxserver/lidarr:latest",
+        image: "lscr.io/linuxserver/lidarr:3.1.0",
         default_port: 8686,
         container_port: "8686/tcp",
         env_vars: &[
@@ -2537,7 +2561,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Tautulli",
         description: "Monitoring and tracking tool for Plex Media Server usage and statistics",
         category: "Media",
-        image: "lscr.io/linuxserver/tautulli:latest",
+        image: "lscr.io/linuxserver/tautulli:2.18.1",
         default_port: 8183,
         container_port: "8181/tcp",
         env_vars: &[
@@ -2595,7 +2619,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Leantime",
         description: "Open-source project management system for non-project managers (lean methodology)",
         category: "Productivity",
-        image: "leantime/leantime:latest",
+        image: "leantime/leantime:3.9.8",
         default_port: 8305,
         container_port: "80/tcp",
         env_vars: &[
@@ -2622,7 +2646,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Joplin Server",
         description: "Sync server for Joplin note-taking app with sharing and collaboration",
         category: "Productivity",
-        image: "joplin/server:latest",
+        image: "joplin/server:3.7.1",
         default_port: 22300,
         container_port: "22300/tcp",
         env_vars: &[
@@ -2642,7 +2666,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Element Web",
         description: "Feature-rich Matrix client for secure, decentralized communication",
         category: "Communication",
-        image: "vectorim/element-web:latest",
+        image: "vectorim/element-web:v1.12.27",
         default_port: 8307,
         container_port: "80/tcp",
         env_vars: &[],
@@ -2715,7 +2739,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Cloudflare Tunnel",
         description: "Secure tunnel to expose local services to the internet via Cloudflare",
         category: "Networking",
-        image: "cloudflare/cloudflared:latest",
+        image: "cloudflare/cloudflared:2026.8.3",
         default_port: 8311,
         container_port: "8080/tcp",
         env_vars: &[
@@ -2728,7 +2752,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Tailscale",
         description: "Zero-config mesh VPN built on WireGuard for secure private networking",
         category: "Networking",
-        image: "tailscale/tailscale:latest",
+        image: "tailscale/tailscale:v1.102.3",
         default_port: 8312,
         container_port: "41641/udp",
         env_vars: &[
@@ -2754,7 +2778,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "SeaweedFS",
         description: "Fast distributed storage system for billions of files with S3 API support",
         category: "Storage",
-        image: "chrislusf/seaweedfs:latest",
+        image: "chrislusf/seaweedfs:4.45",
         default_port: 9333,
         container_port: "9333/tcp",
         env_vars: &[],
@@ -2777,7 +2801,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Trivy Server",
         description: "Comprehensive vulnerability scanner for containers, filesystems, and IaC",
         category: "Security",
-        image: "aquasec/trivy:latest",
+        image: "aquasec/trivy:0.74.0",
         default_port: 8313,
         container_port: "8080/tcp",
         env_vars: &[],
@@ -2819,7 +2843,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Temporal Server",
         description: "Durable execution platform for reliable microservices and workflows",
         category: "Automation",
-        image: "temporalio/auto-setup:latest",
+        image: "temporalio/auto-setup:1.29.3",
         default_port: 8315,
         container_port: "8233/tcp",
         env_vars: &[
@@ -2851,7 +2875,7 @@ static TEMPLATES: &[AppTemplateDef] = &[
         name: "Redash",
         description: "Connect to any data source, visualize, and share dashboards with your team",
         category: "Analytics",
-        image: "redash/redash:latest",
+        image: "redash/redash:8.0.0.b32245",
         default_port: 5100,
         container_port: "5000/tcp",
         env_vars: &[

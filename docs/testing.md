@@ -1,6 +1,6 @@
 # How DockPanel Is Tested
 
-> **Reflects v2.225.0.** The version stamp, the template count and every
+> **Reflects v2.226.0.** The version stamp, the template count and every
 > assertion total on this page are checked against the source by
 > `tests/docs-claims-pin-e2e.sh`, so this page cannot quietly fall behind the
 > code it describes.
@@ -404,7 +404,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. One-hundred-thirty suites, **4332 assertions**, all green at the current commit:
+survivable. One-hundred-thirty suites, **4341 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -476,7 +476,7 @@ survivable. One-hundred-thirty suites, **4332 assertions**, all green at the cur
 | `expected-stop-pin-e2e.sh` | 58 |
 | `install-integrity-pin-e2e.sh` | 58 |
 | `ship-gate-pin-e2e.sh` | 19 |
-| `app-template-images-pin-e2e.sh` | 19 |
+| `app-template-images-pin-e2e.sh` | 20 |
 | `app-volume-ownership-pin-e2e.sh` | 38 |
 | `theme-contrast-pin-e2e.sh` | 27 |
 | `db-schema-browser-pin-e2e.sh` | 23 |
@@ -504,7 +504,7 @@ survivable. One-hundred-thirty suites, **4332 assertions**, all green at the cur
 | `oauth-csrf-pin-e2e.sh` | 11 |
 | `rhel-site-creation-pin-e2e.sh` | 27 |
 | `graceful-shutdown-timeout-pin-e2e.sh` | 7 |
-| `scan-alert-resolve-pin-e2e.sh` | 15 |
+| `scan-alert-resolve-pin-e2e.sh` | 23 |
 | `pdns-install-scope-pin-e2e.sh` | 10 |
 | `billing-webhook-plan-source-pin-e2e.sh` | 22 |
 | `git-deploy-pre-build-rce-pin-e2e.sh` | 35 |

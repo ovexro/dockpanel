@@ -300,5 +300,46 @@ else
 fi
 
 echo
+echo "§8 the 59 images re-pinned off :latest (s472) stay pinned"
+
+# Each was re-pinned to a tag verified LIVE to resolve to the byte-identical
+# manifest :latest already pointed to (real per-arch platform digests,
+# attestation sub-manifests excluded) — a zero-behavior-change pin, not a
+# guess. Checking the REPO string rather than the specific version means this
+# arm never goes stale as a future session bumps one of these to a newer
+# release; it only catches a regression back to the unpinned, non-reproducible
+# form. Fail-closed: an id here that lost its own catalogue entry (renamed,
+# withdrawn) would make `grep -qF "id:\"$id\""` fail to find a matching image
+# line at all, which is exactly what "still pinned" must mean for it.
+REPINNED_REPO=(
+  'minio/minio' 'nocodb/nocodb' 'photoprism/photoprism' 'ollama/ollama'
+  'frooodle/s-pdf' 'actualbudget/actual-server' 'quay.io/hedgedoc/hedgedoc'
+  'vikunja/vikunja' 'triliumnext/notes' 'docuseal/docuseal' 'deluan/navidrome'
+  'lscr.io/linuxserver/calibre-web' 'jvmilazz0/kavita' 'lscr.io/linuxserver/plex'
+  'freshrss/freshrss' 'ghcr.io/linkwarden/linkwarden' 'vabene1111/recipes'
+  'ghcr.io/mealie-recipes/mealie' 'binwiederhier/ntfy' 'gotify/server'
+  'adguard/adguardhome' 'technitium/dns-server' 'jc21/nginx-proxy-manager'
+  'lscr.io/linuxserver/wireguard' 'amir20/dozzle' 'filebrowser/filebrowser'
+  'lscr.io/linuxserver/syncthing' 'corentinth/it-tools' 'clickhouse/clickhouse-server'
+  'crowdsecurity/crowdsec' 'nodered/node-red' 'listmonk/listmonk' 'milesmcc/shynet'
+  'authelia/authelia' 'onerahmet/openai-whisper-asr-webservice' 'langflowai/langflow'
+  'vllm/vllm-openai' 'surrealdb/surrealdb' 'questdb/questdb' 'harness/gitness'
+  'sonatype/nexus3' 'fallenbagel/jellyseerr' 'lscr.io/linuxserver/overseerr'
+  'lscr.io/linuxserver/bazarr' 'lscr.io/linuxserver/prowlarr' 'lscr.io/linuxserver/radarr'
+  'lscr.io/linuxserver/sonarr' 'lscr.io/linuxserver/lidarr' 'lscr.io/linuxserver/tautulli'
+  'leantime/leantime' 'joplin/server' 'vectorim/element-web' 'cloudflare/cloudflared'
+  'tailscale/tailscale' 'chrislusf/seaweedfs' 'aquasec/trivy' 'temporalio/auto-setup'
+  'redash/redash' 'lscr.io/linuxserver/bookstack'
+)
+regressed=0
+for repo in "${REPINNED_REPO[@]}"; do
+  if grep -qF "image:\"$repo:latest\"" <<<"$FLAT"; then
+    bad "$repo is back on :latest — it was re-pinned to a verified digest-identical tag"
+    regressed=1
+  fi
+done
+[ "$regressed" -eq 0 ] && ok "none of the ${#REPINNED_REPO[@]} re-pinned images regressed back to :latest"
+
+echo
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

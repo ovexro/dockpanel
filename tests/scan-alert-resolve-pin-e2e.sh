@@ -19,6 +19,14 @@
 #       running container produced a row in image_scan_findings and nothing
 #       else: no page, no firing count, no bell. Found by dockpanel-fanout's
 #       convention-drift topic (s422).
+#   §C  wordpress::scan_and_store (s472) is image_scan's own direct peer for
+#       WordPress plugin CVEs — same resolve-then-fire shape, but PER-SITE-
+#       OWNER rather than per-admin, since a WordPress site belongs to one
+#       user and an image is a shared server-wide resource. Before this,
+#       `wordpress::vuln_scan` (the manual "Scan" button) stored a scan and
+#       raised NOTHING — no schedule, no page, no bell — the exact §B gap,
+#       just never closed for this scanner. wp_vuln_scanner.rs is the new
+#       30-minute background sweep, the WP-toolkit twin of image_scanner.rs.
 #
 # Pure source analysis: no box, no network, no build.
 #
@@ -35,8 +43,10 @@ bad() { FAIL=$((FAIL+1)); printf '  \033[31m✗\033[0m %s\n' "$1"; }
 
 SEC_SCANS=panel/backend/src/routes/security_scans.rs
 IMG_SCANS=panel/backend/src/routes/image_scans.rs
+WP=panel/backend/src/routes/wordpress.rs
+WP_SCANNER=panel/backend/src/services/wp_vuln_scanner.rs
 
-for f in "$SEC_SCANS" "$IMG_SCANS"; do
+for f in "$SEC_SCANS" "$IMG_SCANS" "$WP" "$WP_SCANNER"; do
   [ -f "$f" ] || bad "MISSING SUBJECT FILE: $f"
 done
 
@@ -208,6 +218,97 @@ if grep -qE "SELECT id FROM users WHERE role = 'admin'" <<< "$STORE"; then
   ok "B6 scan_and_store resolves its own admin recipients (no HTTP claims available to the background sweep)"
 else
   bad "B6 scan_and_store resolves its own admin recipients — the background sweep path has no caller identity to borrow"
+fi
+
+echo
+echo "== §C  a WordPress plugin vulnerability scan pages the site's owner, and clears when fixed =="
+
+# C1-control: body extraction. wordpress.rs also has an unrelated `vuln_scan`
+# HTTP handler — anchored on the fn signature this shares nothing with.
+WP_STORE=$(awk '/^pub async fn scan_and_store\(/{i=1} i{print} i && /^}$/{exit}' "$WP")
+NWPSTORE=$(grep -c . <<< "$WP_STORE")
+if [ "$NWPSTORE" -ge 30 ]; then
+  ok "C1-control wordpress::scan_and_store body extracted — $NWPSTORE lines"
+else
+  bad "C1-control wordpress::scan_and_store body extracted — only $NWPSTORE lines (the extractor broke)"
+fi
+
+# C2: both calls exist.
+if grep -qE 'notifications::resolve_alert\(' <<< "$WP_STORE"; then
+  ok "C2a wordpress::scan_and_store calls resolve_alert"
+else
+  bad "C2a wordpress::scan_and_store calls resolve_alert"
+fi
+if grep -qE 'notifications::fire_alert\(' <<< "$WP_STORE"; then
+  ok "C2b wordpress::scan_and_store calls fire_alert"
+else
+  bad "C2b wordpress::scan_and_store calls fire_alert — a critical/high plugin finding pages nobody"
+fi
+
+# C3: POSITIONAL — resolve before the conditional fire, same shape as A3/B3.
+C_RESOLVE_LINE=$(grep -n 'notifications::resolve_alert(' <<< "$WP_STORE" | head -1 | cut -d: -f1)
+C_FIRE_LINE=$(grep -n 'if critical > 0 || high > 0' <<< "$WP_STORE" | head -1 | cut -d: -f1)
+if [ -n "$C_RESOLVE_LINE" ] && [ -n "$C_FIRE_LINE" ] && [ "$C_RESOLVE_LINE" -lt "$C_FIRE_LINE" ]; then
+  ok "C3 the resolve (line $C_RESOLVE_LINE) runs unconditionally BEFORE the dirty-branch fire decision (line $C_FIRE_LINE)"
+else
+  bad "C3 the resolve must precede the fire decision — resolve=${C_RESOLVE_LINE:-none} fire=${C_FIRE_LINE:-none}"
+fi
+
+# C4: the alert_type is the dedicated 'wp_vuln_scan' vocabulary entry.
+WP_FIRE_CALL=$(perl -0777 -ne '
+  while (/notifications::fire_alert\s*(\((?:[^()]++|(?1))*\))/gs) {
+    my $c = $1; $c =~ s/\s+/ /g; print "$c\n";
+  }
+' <<< "$WP_STORE")
+if grep -qE '"wp_vuln_scan"' <<< "$WP_FIRE_CALL"; then
+  ok "C4 the fired alert uses the dedicated 'wp_vuln_scan' type"
+else
+  bad "C4 the fired alert uses the dedicated 'wp_vuln_scan' type — got: $WP_FIRE_CALL"
+fi
+
+# C5: state_key derived via the overflow-safe helper — same class of bug B5
+# guards against, ported to a domain instead of an image reference.
+WP_STORE_CALLS() {
+  perl -0777 -ne '
+    while (/\b\Q'"$1"'\E\s*(\((?:[^()]++|(?1))*\))/gs) {
+      my $c = $1; $c =~ s/\s+/ /g; print "$c\n";
+    }
+  ' <<< "$WP_STORE"
+}
+WP_FIRE_CALLS=$(WP_STORE_CALLS 'notifications::fire_alert')
+WP_RESOLVE_CALLS=$(WP_STORE_CALLS 'notifications::resolve_alert')
+if grep -qE 'let state_key = wp_vuln_state_key\(domain\);' <<< "$WP_STORE" \
+   && grep -qE '&state_key' <<< "$WP_FIRE_CALLS" \
+   && grep -qE '&state_key' <<< "$WP_RESOLVE_CALLS"; then
+  ok "C5 the fire/resolve state_key is derived from the domain via the overflow-safe helper"
+else
+  bad "C5 the fire/resolve state_key must be derived from the domain via wp_vuln_state_key — a raw domain could overflow alerts.state_key VARCHAR(100) and silently never fire"
+fi
+
+# C6: PER-SITE-OWNER, not per-admin — the deliberate divergence from image
+# scanning's B6. A WordPress site belongs to one user (sites.user_id); firing
+# to every admin the way a shared Docker image does would page people who do
+# not own the site and, more importantly, is not what this function does —
+# this pins the actual design so a future edit that copies B6's admin-fanout
+# pattern here (plausible, since the two functions sit side by side) is
+# caught rather than silently changing who gets paged.
+if grep -qE "SELECT id FROM users WHERE role = 'admin'" <<< "$WP_STORE"; then
+  bad "C6 wordpress::scan_and_store must notify the site's OWNER, not fan out to every admin — an admin-fanout query appeared in the body"
+elif grep -qE '&state_key' <<< "$WP_FIRE_CALLS" && grep -qE 'user_id,' <<< "$WP_FIRE_CALLS" \
+     && grep -qE 'user_id,' <<< "$WP_RESOLVE_CALLS"; then
+  ok "C6 the fire/resolve calls target the site's owner (the user_id parameter), not an admin fan-out"
+else
+  bad "C6 the fire/resolve calls must target the site's owner (the user_id parameter) — call was: $WP_FIRE_CALLS"
+fi
+
+# C7-control: the background sweep actually calls the shared function — the
+# structural wiring that makes this more than a manual-click-only path, the
+# same gap §B's own header calls out for image scanning ("NEITHER the
+# manual/deploy-triggered scan NOR the 30-minute background sweep").
+if grep -qE 'wordpress::scan_and_store\(' "$WP_SCANNER"; then
+  ok "C7 the 30-minute background sweep (wp_vuln_scanner) calls the shared scan_and_store"
+else
+  bad "C7 the background sweep must call wordpress::scan_and_store — a scan-only sweep with no shared alert path reproduces the original gap on a schedule"
 fi
 
 echo

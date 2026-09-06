@@ -102,6 +102,7 @@ const TYPE_LABELS: Record<string, string> = {
   backup_verification_failed: "Backup verification",
   security: "Security scan",
   image_scan: "Image scan",
+  wp_vuln_scan: "WordPress vuln scan",
   slow_response: "Slow response",
 };
 
