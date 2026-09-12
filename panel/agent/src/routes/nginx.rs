@@ -295,7 +295,7 @@ async fn put_site(
     // `services::nginx::vhost_target_between`.
     let target = services::nginx::vhost_target(&domain);
     let config_path = target.path().to_string();
-    let previous = std::fs::read_to_string(&config_path).ok();
+    let previous = services::nginx::capture_previous(&config_path, &domain);
     let tmp_path = format!("{config_path}.tmp");
     let write_result = std::fs::write(&tmp_path, &rendered)
         .and_then(|_| std::fs::rename(&tmp_path, &config_path));

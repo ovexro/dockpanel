@@ -965,6 +965,155 @@ pub async fn reload() -> Result<(), String> {
     }
 }
 
+
+// ── keeping the vhost a site write is about to replace ──────────────────────
+//
+// `restore_or_remove` above is an IN-PROCESS rollback: the writer holds the
+// previous body in a local and puts it back when `nginx -t` rejects whatever
+// replaced it. That covers the failure it was written for and nothing else. It
+// cannot help if the process dies between the rename and the test, and it does
+// not fire at all for the likelier loss — a replacement that is syntactically
+// valid, passes `nginx -t`, and is simply not what the operator meant. In both
+// cases the only copy of the old body was the local that went out of scope.
+//
+// So a site write that finds a vhost already at its path leaves a copy on disk
+// before replacing it. `put_site` is the one writer that does this today: it is
+// the path a domain arrives on, and therefore the one where the body being
+// replaced can belong to something nobody remembers putting there. The other
+// vhost writers (Docker apps, git deploys, rename) keep the in-process rollback
+// alone.
+
+/// Where superseded vhost bodies are kept.
+///
+/// Deliberately NOT under `/etc/nginx`: nginx loads `sites-enabled/*.conf` by
+/// glob, so a backup written beside the live file is a second `server` block
+/// for the same `server_name`. Nginx still starts, silently picks one of them,
+/// and warns about a conflicting server name into a log nobody reads.
+///
+/// Deliberately not `/var/backups/dockpanel/{domain}` either — that is already
+/// the site-archive namespace, and `backup_verify` and `backup_drill` enumerate
+/// it expecting restorable tarballs.
+///
+/// `/var/backups/dockpanel` IS in the agent unit's `ReadWritePaths`, and
+/// `services::backups::secure_backup_tree` re-chmods that whole tree to 0700 on
+/// every agent start, so this subtree inherits the root-only guarantee rather
+/// than restating it. The explicit 0700 below covers the window before the
+/// first such pass reaches a directory this created.
+const VHOST_BACKUP_DIR: &str = "/var/backups/dockpanel/nginx-vhosts";
+
+/// Superseded bodies kept per domain before the oldest is dropped.
+const VHOST_BACKUP_KEEP: usize = 10;
+
+// Indirected so the tests can run hermetically under a temp directory — the
+// same reason and the same shape as `services::backups::backups_root`. The
+// override exists only in `cfg(test)` builds; a release binary cannot relocate
+// this.
+#[cfg(not(test))]
+fn vhost_backup_root() -> std::path::PathBuf {
+    std::path::PathBuf::from(VHOST_BACKUP_DIR)
+}
+#[cfg(test)]
+fn vhost_backup_root() -> std::path::PathBuf {
+    std::env::temp_dir().join("dockpanel-vhost-backups")
+}
+
+/// Read the vhost a site write is about to replace, and keep a copy on disk.
+///
+/// Drop-in for the `std::fs::read_to_string(path).ok()` the writer opened with:
+/// it returns the same `Option<String>` that goes to `restore_or_remove`, so
+/// the in-process rollback is unchanged and this is purely additive.
+///
+/// **Never fails the caller.** A backup that cannot be written is logged and
+/// the write proceeds. Refusing to deploy a site because its backup directory
+/// is full would turn a safety net into an outage, which is the opposite of
+/// what this is for.
+pub fn capture_previous(config_path: &str, domain: &str) -> Option<String> {
+    let previous = std::fs::read_to_string(config_path).ok()?;
+    if let Err(e) = store_vhost_backup(domain, &previous) {
+        tracing::warn!(
+            "Could not back up the vhost for {domain} before replacing it \
+             ({} bytes); proceeding with the write: {e}",
+            previous.len()
+        );
+    }
+    Some(previous)
+}
+
+/// Write one superseded body under `{root}/{domain}/`, then prune the oldest.
+///
+/// `domain` becomes a path segment, so it is checked here rather than trusted.
+/// The caller reaches this through a route that already validated the domain,
+/// but a directory of backups is the wrong place to depend on that staying true.
+fn store_vhost_backup(domain: &str, body: &str) -> Result<(), String> {
+    if !domain_is_safe_segment(domain) {
+        return Err(format!("refusing to use {domain:?} as a directory name"));
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+    let dir = vhost_backup_root().join(domain);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok();
+
+    // Milliseconds, fixed width, leading — the prune below orders by filename,
+    // and two site writes inside one second are ordinary (enabling SSL re-renders
+    // the vhost immediately after the site that asked for it).
+    let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S.%3f");
+    let mut path = dir.join(format!("{stamp}.conf"));
+    let mut n = 1;
+    while path.exists() {
+        path = dir.join(format!("{stamp}-{n}.conf"));
+        n += 1;
+        if n > 100 {
+            return Err("more than 100 backups within one millisecond".into());
+        }
+    }
+
+    std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
+
+    prune_vhost_backups(&dir);
+    Ok(())
+}
+
+/// Is this safe to use as a single path segment?
+///
+/// Not a domain validator — `is_valid_domain` already guards the routes. This
+/// asks only the narrower question a directory name needs answered, and answers
+/// it without trusting the caller: no separators, no traversal, no absolute
+/// path, nothing that is not plainly a domain character.
+fn domain_is_safe_segment(domain: &str) -> bool {
+    !domain.is_empty()
+        && domain.len() <= 253
+        && !domain.starts_with('.')
+        && domain != ".."
+        && domain
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_')
+}
+
+/// Keep the newest `VHOST_BACKUP_KEEP` bodies for one domain, drop the rest.
+///
+/// Ordering is by filename, which is why the timestamp is fixed-width and
+/// leads: `read_dir` returns entries in whatever order the filesystem likes,
+/// and mtime is the wrong key for files whose content is older than they are.
+fn prune_vhost_backups(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut names: Vec<std::ffi::OsString> = entries
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .map(|e| e.file_name())
+        .filter(|n| n.to_string_lossy().ends_with(".conf"))
+        .collect();
+    if names.len() <= VHOST_BACKUP_KEEP {
+        return;
+    }
+    names.sort();
+    for old in &names[..names.len() - VHOST_BACKUP_KEEP] {
+        std::fs::remove_file(dir.join(old)).ok();
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1249,5 +1398,164 @@ mod tests {
         assert_eq!(sanitize_header_value("x\" always; location /p { }"), "x always; location /p  ");
         assert!(!sanitize_header_value("a\"b\\c{d}").contains('"'));
         assert!(!sanitize_header_value("a\"b\\c{d}").contains('\\'));
+    }
+
+    // ── vhost backups ───────────────────────────────────────────────────
+    //
+    // These run against the `cfg(test)` backup root, so they touch a temp
+    // directory rather than `/var/backups`. Each test owns a distinct domain
+    // so they stay independent under the parallel test runner.
+
+    fn backup_scratch(domain: &str) -> std::path::PathBuf {
+        let dir = vhost_backup_root().join(domain);
+        std::fs::remove_dir_all(&dir).ok();
+        dir
+    }
+
+    fn conf_scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("dockpanel-vhost-backup-src-{name}"));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    #[test]
+    fn the_body_a_write_replaces_is_kept_on_disk() {
+        let domain = "kept.example";
+        let backups = backup_scratch(domain);
+        let src = conf_scratch("kept");
+        let conf = src.join("kept.example.conf");
+        std::fs::write(&conf, "server { server_name kept.example; }").unwrap();
+
+        let previous = capture_previous(conf.to_str().unwrap(), domain);
+
+        // The caller still gets exactly what it got before, for restore_or_remove.
+        assert_eq!(
+            previous.as_deref(),
+            Some("server { server_name kept.example; }"),
+            "capture_previous must stay a drop-in for read_to_string(..).ok()"
+        );
+
+        let kept: Vec<_> = std::fs::read_dir(&backups).unwrap().flatten().collect();
+        assert_eq!(kept.len(), 1, "the replaced body should have been kept");
+        assert_eq!(
+            std::fs::read_to_string(kept[0].path()).unwrap(),
+            "server { server_name kept.example; }"
+        );
+
+        std::fs::remove_dir_all(&backups).ok();
+        std::fs::remove_dir_all(&src).ok();
+    }
+
+    #[test]
+    fn a_first_write_has_nothing_to_keep() {
+        let domain = "fresh.example";
+        let backups = backup_scratch(domain);
+        let src = conf_scratch("fresh");
+
+        let previous = capture_previous(src.join("fresh.example.conf").to_str().unwrap(), domain);
+
+        assert!(previous.is_none(), "nothing was there to replace");
+        assert!(
+            !backups.exists(),
+            "creating a site on a free domain must not leave an empty backup dir"
+        );
+        std::fs::remove_dir_all(&src).ok();
+    }
+
+    #[test]
+    fn successive_writes_each_keep_their_own_body() {
+        let domain = "successive.example";
+        let backups = backup_scratch(domain);
+        let src = conf_scratch("successive");
+        let conf = src.join("successive.example.conf");
+
+        // Two saves in a row: the first keeps what was there, the second keeps
+        // what the first wrote. Neither may overwrite the other's copy — a
+        // second save inside the same second is the ordinary case, not a rare one.
+        std::fs::write(&conf, "one").unwrap();
+        capture_previous(conf.to_str().unwrap(), domain);
+        std::fs::write(&conf, "two").unwrap();
+        capture_previous(conf.to_str().unwrap(), domain);
+
+        let mut bodies: Vec<String> = std::fs::read_dir(&backups)
+            .unwrap()
+            .flatten()
+            .map(|e| std::fs::read_to_string(e.path()).unwrap())
+            .collect();
+        bodies.sort();
+
+        assert_eq!(bodies, vec!["one".to_string(), "two".to_string()]);
+
+        std::fs::remove_dir_all(&backups).ok();
+        std::fs::remove_dir_all(&src).ok();
+    }
+
+    #[test]
+    fn retention_drops_the_oldest_and_keeps_the_newest() {
+        let domain = "pruned.example";
+        let dir = backup_scratch(domain);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Names are what the prune orders by, so write them directly rather
+        // than sleeping a real millisecond per file.
+        for i in 0..(VHOST_BACKUP_KEEP + 5) {
+            std::fs::write(dir.join(format!("20260101-000000.{i:03}.conf")), "x").unwrap();
+        }
+        // A stray non-backup file must survive: the prune owns *.conf, not the dir.
+        std::fs::write(dir.join("notes.txt"), "x").unwrap();
+
+        prune_vhost_backups(&dir);
+
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".conf"))
+            .collect();
+        left.sort();
+
+        assert_eq!(left.len(), VHOST_BACKUP_KEEP);
+        assert_eq!(
+            left[0], "20260101-000000.005.conf",
+            "the five oldest should be the ones dropped"
+        );
+        assert!(
+            dir.join("notes.txt").exists(),
+            "prune must not touch non-backups"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_backup_that_cannot_be_written_never_fails_the_write() {
+        let src = conf_scratch("unsafe-domain");
+        let conf = src.join("x.conf");
+        std::fs::write(&conf, "body").unwrap();
+
+        // A domain that would escape its directory is refused by the store...
+        assert!(store_vhost_backup("../../etc/nginx", "body").is_err());
+
+        // ...and the caller is still handed the previous body, because a failed
+        // backup must never be the reason a site does not deploy.
+        let previous = capture_previous(conf.to_str().unwrap(), "../../etc/nginx");
+        assert_eq!(previous.as_deref(), Some("body"));
+
+        std::fs::remove_dir_all(&src).ok();
+    }
+
+    #[test]
+    fn only_plain_domain_characters_may_name_a_directory() {
+        assert!(domain_is_safe_segment("example.com"));
+        assert!(domain_is_safe_segment("a-b_c.example.co.uk"));
+
+        assert!(!domain_is_safe_segment(""));
+        assert!(!domain_is_safe_segment(".."));
+        assert!(!domain_is_safe_segment(".hidden"));
+        assert!(!domain_is_safe_segment("a/b"));
+        assert!(!domain_is_safe_segment(r"a\b"));
+        assert!(!domain_is_safe_segment("/etc/nginx"));
+        assert!(!domain_is_safe_segment(&"a".repeat(254)));
     }
 }
