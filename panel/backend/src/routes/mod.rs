@@ -1366,6 +1366,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/logs/check-errors", post(logs::check_errors))
         // Settings (admin)
         .route("/api/settings", get(settings::list).put(settings::update))
+        // The one settings read that is NOT admin-only: an account asking which
+        // menu entries its own role is shown. Deliberately not under
+        // /api/settings/, so it cannot be mistaken for part of the admin surface.
+        .route("/api/menu-options", get(settings::menu_options))
         .route("/api/settings/export", get(settings::export_config))
         .route("/api/settings/import", post(settings::import_config))
         .route("/api/settings/recording-coverage", get(settings::recording_coverage))

@@ -5,6 +5,7 @@ import { useServer } from "../context/ServerContext";
 import { Icon } from "../data/icons";
 import CommandPalette from "./CommandPalette";
 import LayoutSwitcher from "./LayoutSwitcher";
+import { isMenuHidden } from "../data/menuOptions";
 
 export default function GlassLayout() {
   const {
@@ -23,8 +24,11 @@ export default function GlassLayout() {
     sidebarOpen,
     setSidebarOpen,
     visibleGroups,
+    hiddenMenu,
   } = useLayoutState();
   const isLight = theme === "clean" || theme === "arctic";
+  /** Has the operator switched this top-bar control off in Settings → Menu Options? */
+  const hide = (key: string) => isMenuHidden(key, hiddenMenu);
   const { servers, activeServer, setActiveServerId } = useServer();
 
   const [hovered, setHovered] = useState(false);
@@ -125,6 +129,7 @@ export default function GlassLayout() {
         </div>
 
         {/* ── Search shortcut (visible when expanded) ───────────── */}
+        {!hide("chrome:search") && (
         <div
           className={[
             "px-3 pt-3 pb-1 transition-opacity duration-200",
@@ -146,9 +151,10 @@ export default function GlassLayout() {
             </kbd>
           </button>
         </div>
+        )}
 
         {/* Server selector (expanded only) */}
-        {servers.length > 1 && (expanded || sidebarOpen) && (
+        {servers.length > 1 && (expanded || sidebarOpen) && !hide("chrome:serverSelector") && (
           <div className="px-3 pt-2">
             <select
               value={activeServer?.id || ""}
@@ -293,7 +299,7 @@ export default function GlassLayout() {
         {/* ── Footer ─────────────────────────────────────────────── */}
         <div className="px-2 py-3 border-t border-dark-600/30">
           {/* Collapsed: just the health dot centered — admins only. */}
-          {!expanded && !sidebarOpen && canSeeHealth && (
+          {!expanded && !sidebarOpen && canSeeHealth && !hide("chrome:health") && (
             <div className="flex flex-col items-center gap-3">
               <div
                 className={[
@@ -340,7 +346,7 @@ export default function GlassLayout() {
               {/* Health + layout + theme */}
               <div className="flex items-center justify-between px-3 mt-2">
                 <div className="flex items-center gap-2">
-                  {canSeeHealth && (
+                  {canSeeHealth && !hide("chrome:health") && (
                     <>
                       <div
                         className={[
@@ -359,6 +365,7 @@ export default function GlassLayout() {
                   )}
                 </div>
                 <div className="flex items-center gap-1">
+                {!hide("chrome:notifications") && (
                 <Link to="/notifications" className="relative p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded shrink-0" title={notifCount > 0 ? `${notifCount} unread notification${notifCount === 1 ? "" : "s"}` : "Notifications"} aria-label="Notifications">
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
@@ -369,7 +376,9 @@ export default function GlassLayout() {
                     </span>
                   )}
                 </Link>
-                <LayoutSwitcher variant={isLight ? "light" : "dark"} compact />
+                )}
+                {!hide("chrome:layoutSwitcher") && <LayoutSwitcher variant={isLight ? "light" : "dark"} compact />}
+                {!hide("chrome:themeToggle") && (
                 <button
                   onClick={cycleTheme}
                   className="p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded shrink-0"
@@ -390,6 +399,7 @@ export default function GlassLayout() {
                     />
                   </svg>
                 </button>
+                )}
                 </div>
               </div>
             </div>

@@ -5,6 +5,7 @@ import { useBranding } from "../context/BrandingContext";
 import { Icon } from "../data/icons";
 import CommandPalette from "./CommandPalette";
 import LayoutSwitcher from "./LayoutSwitcher";
+import { isMenuHidden } from "../data/menuOptions";
 import { useState, useRef, useEffect } from "react";
 
 function ServerSelector() {
@@ -58,6 +59,8 @@ export default function CommandLayout() {
   const state = useLayoutState();
   const branding = useBranding();
   const isLight = state.theme === "clean" || state.theme === "arctic";
+  /** Has the operator switched this top-bar control off in Settings → Menu Options? */
+  const hide = (key: string) => isMenuHidden(key, state.hiddenMenu);
 
   // Layout options (persisted in localStorage)
   const [showHeader, setShowHeader] = useState(() => localStorage.getItem("dp-show-header") === "true");
@@ -152,7 +155,7 @@ export default function CommandLayout() {
         </div>
 
         {/* Search shortcut (hide if header has search) */}
-        {!showHeader && (
+        {!showHeader && !hide("chrome:search") && (
           <div className="px-3 pt-3 pb-1">
             <button
               onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }))}
@@ -165,7 +168,7 @@ export default function CommandLayout() {
           </div>
         )}
 
-        <ServerSelector />
+        {!hide("chrome:serverSelector") && <ServerSelector />}
 
         {/* Nav */}
         <nav className="flex-1 px-3 pt-4 overflow-y-auto sidebar-scroll-fade">
@@ -307,7 +310,7 @@ export default function CommandLayout() {
             </div>
             <div className="flex items-center justify-between px-3 mt-2">
               <div className="flex items-center gap-2">
-                {state.canSeeHealth && (
+                {state.canSeeHealth && !hide("chrome:health") && (
                   <>
                     <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${state.apiHealthy === null ? "bg-dark-400" : state.apiHealthy ? "bg-rust-500" : "bg-danger-500 animate-pulse"}`} />
                     <span className="text-[10px] text-dark-400">{state.apiHealthy === null ? "Checking..." : state.apiHealthy ? "Connected" : "Disconnected"}</span>
@@ -315,6 +318,7 @@ export default function CommandLayout() {
                 )}
               </div>
               <div className="flex items-center gap-1">
+                {!hide("chrome:notifications") && (
                 <Link to="/notifications" className="relative p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded" title={state.notifCount > 0 ? `${state.notifCount} unread notification${state.notifCount === 1 ? "" : "s"}` : "Notifications"} aria-label="Notifications">
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
@@ -325,7 +329,9 @@ export default function CommandLayout() {
                     </span>
                   )}
                 </Link>
-                <LayoutSwitcher variant={isLight ? "light" : "dark"} />
+                )}
+                {!hide("chrome:layoutSwitcher") && <LayoutSwitcher variant={isLight ? "light" : "dark"} />}
+                {!hide("chrome:themeToggle") && (
                 <button
                   onClick={state.cycleTheme}
                   className="p-1.5 text-dark-400 hover:text-dark-200 transition-colors rounded"
@@ -336,13 +342,14 @@ export default function CommandLayout() {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4.098 19.902a3.75 3.75 0 0 0 5.304 0l6.401-6.402M6.75 21A3.75 3.75 0 0 1 3 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 0 0 3.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.88 2.88M6.75 17.25h.008v.008H6.75v-.008Z" />
                   </svg>
                 </button>
+                )}
               </div>
             </div>
           </div>
         )}
 
         {/* Minimal sidebar footer when header is shown */}
-        {showHeader && state.canSeeHealth && (
+        {showHeader && state.canSeeHealth && !hide("chrome:health") && (
           <div className="px-4 py-3 border-t border-dark-600/50">
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full shrink-0 ${state.apiHealthy === null ? "bg-dark-400" : state.apiHealthy ? "bg-rust-500" : "bg-danger-500 animate-pulse"}`} />
@@ -368,6 +375,7 @@ export default function CommandLayout() {
 
             {/* Search */}
             <div className="flex-1 flex items-center max-w-md">
+              {!hide("chrome:search") && (
               <button
                 onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }))}
                 className="w-full flex items-center gap-2 pl-3 pr-4 py-2 border rounded-lg text-sm transition-all bg-dark-950 border-dark-700 text-dark-400 hover:border-rust-500/50"
@@ -376,10 +384,12 @@ export default function CommandLayout() {
                 <span className="flex-1 text-left">Search...</span>
                 <kbd className="text-[10px] px-1.5 py-0.5 border rounded border-dark-700 bg-dark-800 text-dark-400">Ctrl K</kbd>
               </button>
+              )}
             </div>
 
             {/* Right side */}
             <div className="flex items-center gap-3">
+              {!hide("chrome:notifications") && (
               <Link to="/notifications" className="relative p-2 rounded-lg transition-colors text-dark-400 hover:text-dark-50 hover:bg-dark-800" title={state.notifCount > 0 ? `${state.notifCount} unread notification${state.notifCount === 1 ? "" : "s"}` : "Notifications"} aria-label="Notifications">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
@@ -390,6 +400,7 @@ export default function CommandLayout() {
                   </span>
                 )}
               </Link>
+              )}
               {/* This pill sat next to the notification bell drawing the SAME
                   bell glyph over a different number, so the header showed two
                   identical icons meaning unrelated things. A firing alert is not
@@ -405,12 +416,16 @@ export default function CommandLayout() {
                 </Link>
               )}
               <div className="h-6 w-px hidden sm:block bg-dark-700" />
+              {!hide("chrome:themeToggle") && (
               <button onClick={state.cycleTheme} className="p-2 rounded-lg transition-colors text-dark-400 hover:text-dark-50 hover:bg-dark-800" title={`Theme: ${state.theme}`}>
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4.098 19.902a3.75 3.75 0 0 0 5.304 0l6.401-6.402M6.75 21A3.75 3.75 0 0 1 3 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 0 0 3.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.88 2.88M6.75 17.25h.008v.008H6.75v-.008Z" />
                 </svg>
               </button>
-              <div className="hidden sm:block"><LayoutSwitcher variant={isLight ? "light" : "dark"} /></div>
+              )}
+              {!hide("chrome:layoutSwitcher") && (
+                <div className="hidden sm:block"><LayoutSwitcher variant={isLight ? "light" : "dark"} /></div>
+              )}
               <div className="hidden sm:flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full flex items-center justify-center font-semibold text-sm bg-rust-500/15 text-rust-400">
                   {state.user.email[0]?.toUpperCase()}
