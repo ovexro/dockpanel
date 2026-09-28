@@ -33,10 +33,104 @@ struct WriteBody {
     content: String,
 }
 
+#[derive(Deserialize)]
+struct CopyBody {
+    from: String,
+    to: String,
+}
+
+#[derive(Deserialize)]
+struct DuplicateBody {
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct BulkPathsBody {
+    paths: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct BulkTransferBody {
+    sources: Vec<String>,
+    target_dir: String,
+}
+
+#[derive(Deserialize)]
+struct ChmodBody {
+    path: String,
+    mode: u32,
+    #[serde(default)]
+    recursive: bool,
+}
+
+#[derive(Deserialize)]
+struct ChownBody {
+    path: String,
+    owner: String,
+    group: String,
+    #[serde(default)]
+    recursive: bool,
+}
+
+#[derive(Deserialize)]
+struct StatQuery {
+    path: Option<String>,
+    #[serde(default)]
+    checksum: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct CompressBody {
+    sources: Vec<String>,
+    archive_name: String,
+    #[serde(default)]
+    target_dir: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ExtractBody {
+    archive: String,
+    #[serde(default)]
+    target_dir: Option<String>,
+    #[serde(default)]
+    overwrite: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    #[serde(default)]
+    path: Option<String>,
+    query: Option<String>,
+    #[serde(default)]
+    in_content: Option<bool>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
 type ApiErr = (StatusCode, Json<serde_json::Value>);
 
 fn err(status: StatusCode, msg: &str) -> ApiErr {
     (status, Json(serde_json::json!({ "error": msg })))
+}
+
+fn file_status(e: String) -> ApiErr {
+    let status = if e.starts_with("File not found")
+        || e == "Source does not exist"
+        || e == "Path does not exist"
+        || e == "Archive does not exist"
+        || e == "Archive file does not exist"
+    {
+        StatusCode::NOT_FOUND
+    } else if e == "Path already exists" || e == "Destination already exists" || e == "Destination archive already exists" {
+        StatusCode::CONFLICT
+    } else if e == "File too large (max 5MB)" || e == "File too large (max 2MB)" {
+        StatusCode::PAYLOAD_TOO_LARGE
+    } else if e == "File is binary or not readable as text" {
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+    err(status, &e)
 }
 
 /// GET /files/{domain}/list?path=
@@ -60,35 +154,6 @@ async fn list_dir(
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
     Ok(Json(entries))
-}
-
-/// Status for a file-service error: a refusal the operator can act on, or a
-/// fault only an incident id should describe.
-///
-/// Every sentence below is a decision the service made deliberately — a size
-/// cap, a text-vs-binary test, a name that is already taken, a path that is
-/// already gone. The agent stat'd the file successfully and refused; nothing
-/// broke. As 5xx the panel replaced all of them with "Operation failed.
-/// Reference: {uuid}", so "New Folder" onto an existing name and a genuine agent
-/// outage were the same screen, and opening a .png in the editor looked like
-/// infrastructure failure. The path refusals four lines up were already 400 and
-/// already survived — these are the ones that did not.
-fn file_status(e: String) -> ApiErr {
-    let status = if e.starts_with("File not found")
-        || e == "Source does not exist"
-        || e == "Path does not exist"
-    {
-        StatusCode::NOT_FOUND
-    } else if e == "Path already exists" || e == "Destination already exists" {
-        StatusCode::CONFLICT
-    } else if e == "File too large (max 2MB)" {
-        StatusCode::PAYLOAD_TOO_LARGE
-    } else if e == "File is binary or not readable as text" {
-        StatusCode::UNSUPPORTED_MEDIA_TYPE
-    } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-    };
-    err(status, &e)
 }
 
 /// GET /files/{domain}/read?path=
@@ -167,6 +232,44 @@ async fn rename_entry(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+/// POST /files/{domain}/copy
+async fn copy_entry(
+    Path(domain): Path<String>,
+    Json(body): Json<CopyBody>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    let from = files::resolve_safe_path(&domain, &body.from)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+    let to = files::resolve_safe_path(&domain, &body.to)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+
+    files::copy_entry(&from, &to)
+        .await
+        .map_err(file_status)?;
+
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// POST /files/{domain}/duplicate
+async fn duplicate_entry(
+    Path(domain): Path<String>,
+    Json(body): Json<DuplicateBody>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    let safe = files::resolve_safe_child(&domain, &body.path)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+
+    let new_name = files::duplicate_entry(&safe)
+        .await
+        .map_err(file_status)?;
+
+    Ok(Json(serde_json::json!({ "success": true, "name": new_name })))
+}
+
 /// DELETE /files/{domain}/delete?path=
 async fn delete_entry(
     Path(domain): Path<String>,
@@ -186,17 +289,269 @@ async fn delete_entry(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
+/// POST /files/{domain}/bulk/delete
+async fn bulk_delete(
+    Path(domain): Path<String>,
+    Json(body): Json<BulkPathsBody>,
+) -> Result<Json<files::BulkResult>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for rel in &body.paths {
+        match files::resolve_safe_child(&domain, rel) {
+            Ok(safe) => match files::delete_entry(&safe).await {
+                Ok(_) => succeeded.push(rel.clone()),
+                Err(e) => failed.push(files::BulkFailure {
+                    path: rel.clone(),
+                    error: e,
+                }),
+            },
+            Err(e) => failed.push(files::BulkFailure {
+                path: rel.clone(),
+                error: e,
+            }),
+        }
+    }
+
+    Ok(Json(files::BulkResult { succeeded, failed }))
+}
+
+/// POST /files/{domain}/bulk/copy
+async fn bulk_copy(
+    Path(domain): Path<String>,
+    Json(body): Json<BulkTransferBody>,
+) -> Result<Json<files::BulkResult>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+
+    let target_dir = match files::resolve_safe_path(&domain, &body.target_dir) {
+        Ok(t) => t,
+        Err(e) => return Err(err(StatusCode::BAD_REQUEST, &e)),
+    };
+
+    if !target_dir.is_dir() {
+        return Err(err(StatusCode::BAD_REQUEST, "Target is not a directory"));
+    }
+
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for src_rel in &body.sources {
+        match files::resolve_safe_path(&domain, src_rel) {
+            Ok(src_path) => {
+                let file_name = src_path.file_name().unwrap_or_default();
+                let dst_path = target_dir.join(file_name);
+                match files::copy_entry(&src_path, &dst_path).await {
+                    Ok(_) => succeeded.push(src_rel.clone()),
+                    Err(e) => failed.push(files::BulkFailure {
+                        path: src_rel.clone(),
+                        error: e,
+                    }),
+                }
+            }
+            Err(e) => failed.push(files::BulkFailure {
+                path: src_rel.clone(),
+                error: e,
+            }),
+        }
+    }
+
+    Ok(Json(files::BulkResult { succeeded, failed }))
+}
+
+/// POST /files/{domain}/bulk/move
+async fn bulk_move(
+    Path(domain): Path<String>,
+    Json(body): Json<BulkTransferBody>,
+) -> Result<Json<files::BulkResult>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+
+    let target_dir = match files::resolve_safe_path(&domain, &body.target_dir) {
+        Ok(t) => t,
+        Err(e) => return Err(err(StatusCode::BAD_REQUEST, &e)),
+    };
+
+    if !target_dir.is_dir() {
+        return Err(err(StatusCode::BAD_REQUEST, "Target is not a directory"));
+    }
+
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for src_rel in &body.sources {
+        match files::resolve_safe_child(&domain, src_rel) {
+            Ok(src_path) => {
+                let file_name = src_path.file_name().unwrap_or_default();
+                let dst_path = target_dir.join(file_name);
+                match files::rename_entry(&src_path, &dst_path).await {
+                    Ok(_) => succeeded.push(src_rel.clone()),
+                    Err(e) => failed.push(files::BulkFailure {
+                        path: src_rel.clone(),
+                        error: e,
+                    }),
+                }
+            }
+            Err(e) => failed.push(files::BulkFailure {
+                path: src_rel.clone(),
+                error: e,
+            }),
+        }
+    }
+
+    Ok(Json(files::BulkResult { succeeded, failed }))
+}
+
+/// POST /files/{domain}/chmod
+async fn chmod_entry(
+    Path(domain): Path<String>,
+    Json(body): Json<ChmodBody>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    let safe = files::resolve_safe_path(&domain, &body.path)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+
+    files::chmod_entry(&safe, body.mode, body.recursive)
+        .await
+        .map_err(file_status)?;
+
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// POST /files/{domain}/chown
+async fn chown_entry(
+    Path(domain): Path<String>,
+    Json(body): Json<ChownBody>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    let safe = files::resolve_safe_path(&domain, &body.path)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+
+    files::chown_entry(&safe, &body.owner, &body.group, body.recursive)
+        .await
+        .map_err(file_status)?;
+
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// GET /files/{domain}/stat?path=&checksum=true
+async fn stat_entry(
+    Path(domain): Path<String>,
+    Query(q): Query<StatQuery>,
+) -> Result<Json<files::FileStat>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    let rel = q.path.as_deref().unwrap_or(".");
+    let safe = files::resolve_safe_path(&domain, rel)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+
+    let stat = files::stat_entry(&safe, rel, q.checksum.unwrap_or(false))
+        .await
+        .map_err(file_status)?;
+
+    Ok(Json(stat))
+}
+
+/// POST /files/{domain}/compress
+async fn compress_entries(
+    Path(domain): Path<String>,
+    Json(body): Json<CompressBody>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    let target_dir = body.target_dir.as_deref().unwrap_or(".");
+    let name = files::compress_entries(&domain, &body.sources, &body.archive_name, target_dir)
+        .await
+        .map_err(file_status)?;
+
+    Ok(Json(serde_json::json!({ "success": true, "archive": name })))
+}
+
+/// POST /files/{domain}/extract
+async fn extract_archive(
+    Path(domain): Path<String>,
+    Json(body): Json<ExtractBody>,
+) -> Result<Json<files::ExtractResult>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    let target_dir = body.target_dir.as_deref().unwrap_or(".");
+    let overwrite = body.overwrite.unwrap_or(true);
+
+    let res = files::extract_archive(&domain, &body.archive, target_dir, overwrite)
+        .await
+        .map_err(file_status)?;
+
+    Ok(Json(res))
+}
+
+/// GET /files/{domain}/inspect?path=
+async fn inspect_archive(
+    Path(domain): Path<String>,
+    Query(q): Query<PathQuery>,
+) -> Result<Json<Vec<files::ArchiveEntry>>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    let rel = q.path.as_deref().ok_or_else(|| err(StatusCode::BAD_REQUEST, "path required"))?;
+
+    let entries = files::inspect_archive(&domain, rel)
+        .await
+        .map_err(file_status)?;
+
+    Ok(Json(entries))
+}
+
+/// GET /files/{domain}/search?path=&query=&in_content=false&limit=100
+async fn search_files(
+    Path(domain): Path<String>,
+    Query(q): Query<SearchQuery>,
+) -> Result<Json<Vec<files::SearchResult>>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    let base_rel = q.path.as_deref().unwrap_or(".");
+    let query_str = q.query.as_deref().unwrap_or("");
+    let in_content = q.in_content.unwrap_or(false);
+    let limit = q.limit.unwrap_or(100);
+
+    let results = files::search_files(&domain, base_rel, query_str, in_content, limit)
+        .await
+        .map_err(file_status)?;
+
+    Ok(Json(results))
+}
+
+/// GET /files/{domain}/storage?path=
+async fn directory_storage(
+    Path(domain): Path<String>,
+    Query(q): Query<PathQuery>,
+) -> Result<Json<files::StorageStats>, ApiErr> {
+    if !is_valid_domain(&domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain format"));
+    }
+    let rel = q.path.as_deref().unwrap_or(".");
+
+    let stats = files::directory_storage(&domain, rel)
+        .await
+        .map_err(file_status)?;
+
+    Ok(Json(stats))
+}
+
 /// GET /files/{domain}/download?path= — Download a file as raw bytes.
-///
-/// Streamed, not read into memory whole: a site's own webroot routinely holds
-/// files well past the file manager's 2MB text-editor cap (DB dumps, logs,
-/// media) with no per-site disk quota (see `resolve_safe_path`'s own callers),
-/// and this handler is reachable by the site's own non-admin owner. The
-/// agent — the one process per box mediating deploys/backups/terminal/Docker
-/// for every tenant — runs under a 512MB `MemoryMax` cgroup
-/// (`dockpanel-agent.service`); `tokio::fs::read`-ing an arbitrarily large
-/// file into a `Vec<u8>` before sending a single response byte let an
-/// ordinary tenant OOM-kill it with one request.
 async fn download_file(
     Path(domain): Path<String>,
     Query(q): Query<PathQuery>,
@@ -209,7 +564,7 @@ async fn download_file(
         .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
 
     if safe.is_dir() {
-        return Err(err(StatusCode::BAD_REQUEST, "Cannot download a directory"));
+        return Err(err(StatusCode::BAD_REQUEST, "Cannot download a directory directly"));
     }
 
     let file = tokio::fs::File::open(&safe)
@@ -237,7 +592,7 @@ async fn download_file(
             ),
             (
                 axum::http::header::CONTENT_TYPE,
-                "application/octet-stream".to_string(),
+                files::mime_type_for_path(&safe).to_string(),
             ),
             (axum::http::header::CONTENT_LENGTH, len.to_string()),
         ],
@@ -253,5 +608,18 @@ pub fn router() -> Router<AppState> {
         .route("/files/{domain}/write", put(write_file))
         .route("/files/{domain}/create", post(create_entry))
         .route("/files/{domain}/rename", post(rename_entry))
+        .route("/files/{domain}/copy", post(copy_entry))
+        .route("/files/{domain}/duplicate", post(duplicate_entry))
         .route("/files/{domain}/delete", delete(delete_entry))
+        .route("/files/{domain}/bulk/delete", post(bulk_delete))
+        .route("/files/{domain}/bulk/copy", post(bulk_copy))
+        .route("/files/{domain}/bulk/move", post(bulk_move))
+        .route("/files/{domain}/chmod", post(chmod_entry))
+        .route("/files/{domain}/chown", post(chown_entry))
+        .route("/files/{domain}/stat", get(stat_entry))
+        .route("/files/{domain}/compress", post(compress_entries))
+        .route("/files/{domain}/extract", post(extract_archive))
+        .route("/files/{domain}/inspect", get(inspect_archive))
+        .route("/files/{domain}/search", get(search_files))
+        .route("/files/{domain}/storage", get(directory_storage))
 }

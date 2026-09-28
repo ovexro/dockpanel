@@ -57,14 +57,9 @@ current behaviour.
 disk, while saving pays JSON escaping on top of the same 2 MiB envelope. A
 quote-heavy file just under 2 MB can open and then fail to save.
 
-## There is no archive extraction
+## Archive extraction and compression
 
-The file manager cannot unzip or untar. It lists, reads, writes, creates,
-renames, deletes, downloads and uploads — that is the whole set. Uploading a
-`.zip` gets you a `.zip` sitting on disk.
-
-An administrator with a server shell can extract normally. A site-scoped shell
-is more restricted and should not be relied on for this.
+The file manager natively supports unzipping and untarring `.zip`, `.tar`, and `.tar.gz` archives, as well as inspecting archive file structures prior to unpacking and creating compressed archives. Static websites can also use the Static Website Upgrade Wizard to upload, unpack, and deploy a new build directly. See the [File Manager Guide](file-manager.md) for full details.
 
 ## Moving a real site: use rsync
 

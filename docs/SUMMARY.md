@@ -6,6 +6,7 @@
 - [How DockPanel is tested](testing.md)
 - [Guides]()
   - [Databases](guides/databases.md)
+  - [File Manager](guides/file-manager.md)
   - [Getting files onto a site](guides/file-uploads.md)
   - [WordPress](guides/wordpress.md)
   - [Git Deploy](guides/git-deploy.md)
