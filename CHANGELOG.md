@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.242.3]
+
 ### Fix: a new site's automatic certificate left it on HTTP only (#139)
 
 After a site was created, the background task that issues its certificate re-rendered the vhost from
