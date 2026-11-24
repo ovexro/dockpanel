@@ -267,7 +267,7 @@ dependencies = [
 
 [[package]]
 name = "dockpanel-mcp"
-version = "2.242.1"
+version = "2.242.2"
 dependencies = [
  "axum",
  "reqwest",

@@ -4,6 +4,24 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.242.2]
+
+### Security: clear every open dependency advisory (RustSec + npm)
+
+`cargo audit` reported 21 vulnerabilities in the API and 15 in the agent, and the npm audit gate
+failed on the frontend, the marketing site and its server. All are cleared with lockfile updates and
+one version bump; nothing in the panel's behaviour changes.
+
+- Rust: `lettre` (6 advisories), `quinn-proto` (5), `quinn-udp`, `rustls` (4), `rustls-webpki`,
+  `webpki-roots`, `tokio`, `url`. `p256` 0.13 -> 0.14 for `crypto-bigint` (RUSTSEC-2026-0387), the
+  passkey signature path; verified end to end with `tests/passkey-uv-enforcement-e2e.sh` (5/5)
+  against a live API.
+- `libsqlite3-sys` (RUSTSEC-2026-0459) is a lockfile-only entry that is never compiled (PostgreSQL
+  only); ignored narrowly in `panel/backend/.cargo/audit.toml`, the same way as the `rsa` entry.
+- npm: `dompurify` 3.5.0, `vite` 6.4.6, and on the marketing-site server `body-parser`,
+  `proxy-addr` (critical, IPv4-mapped IPv6 trust bypass) and `qs`.
+- Still open, not vulnerabilities: `chrono` and `unsafe-libyaml` are flagged unmaintained.
+
 ## [2.242.1]
 
 ### Fix: stack-owned databases had zero backup coverage

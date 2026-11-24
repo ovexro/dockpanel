@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "dockpanel"
-version = "2.242.1"
+version = "2.242.2"
 dependencies = [
  "clap",
  "clap_complete",
