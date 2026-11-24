@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fix: a new site's automatic certificate left it on HTTP only (#139)
+
+After a site was created, the background task that issues its certificate re-rendered the vhost from
+the site's database row *before* writing `ssl_enabled = true` to that row. The row still said "no
+SSL", so the rebuild replaced the agent's HTTPS vhost with an HTTP-only one: the certificate sat in
+`/etc/dockpanel/ssl/`, nginx had no `listen 443`, and the uptime monitor reported "invalid peer
+certificate". The rebuild now runs after the row is updated, like every other SSL door. Pinned in
+`tests/ssl-controls-pin-e2e.sh` §J (red on the old order).
+
+### Fix: Docker-app certificates deployed before the ownership table were never renewed (#138)
+
+An app deployed before `docker_app_domains` existed gets a reconciled row with no recorded TLS mode,
+and the renewal refused those forever ("redeploy the app"). The Diagnostics "Fix" button also said
+"No site, mail domain, Git deploy, Docker app or Compose stack claims that name" because its owner
+lookup never read `docker_app_domains`. Seven certificates expired that way for one operator who
+could not redeploy. A reconciled row is now settled by the certificate itself: a Let's Encrypt
+issuer proves DockPanel ordered it, so it is renewed in place (contact: the owner's validated
+address) and the row is then marked `acme`. A foreign or unreadable certificate still declines. The
+Fix button now names a Docker app as the owner. Pinned in §K.
+
+### Security: unmatched hostnames no longer fall through to the admin panel (#136)
+
+With a panel domain, the panel vhost was the only server block on its `:80`/`:443` sockets, so nginx
+sent every request no `server_name` matched to the admin login: a site with no HTTPS block yet, a
+subdomain that merely points at the box, a bare IP. `setup.sh` now writes
+`/etc/nginx/conf.d/00-dockpanel-default.conf` (port 80 closes the connection, port 443 refuses the
+TLS handshake with `ssl_reject_handshake`), and `update.sh` adds it to existing domain-mode panels.
+`nginx -t` rolls it back if an operator's own vhost already owns `default_server`. A panel with no
+domain is unchanged (the bare IP is its address). Pinned in `tests/nginx-listen-pin-e2e.sh` F7.
+
 ### Fix: a fresh Ubuntu server finished the install with no firewall
 
 Ubuntu ships `ufw` installed but disabled. `setup.sh` read "the ufw command exists" as "a firewall

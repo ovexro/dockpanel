@@ -1420,6 +1420,51 @@ generate_self_signed_panel_cert() {
 }
 
 # ── Nginx for Panel ──────────────────────────────────────────────────────
+# ── Default-server catch-all (#136) ─────────────────────────────────────
+# Removing the distro `default` vhost leaves the panel as the ONLY server block
+# on its :80/:443 sockets, and nginx sends every request no server_name matches
+# to the only/first block there. So `https://anything.example/` — a site that
+# has no `listen 443` yet, a subdomain that only points at the box, HSTS with
+# includeSubDomains forcing https before a certificate exists — landed on the
+# admin login. A dedicated default_server on the same sockets answers those
+# instead: port 80 drops the connection, port 443 refuses the TLS handshake
+# (ssl_reject_handshake, nginx >= 1.19.4: no certificate needed, nothing leaks).
+# Domain mode only: with no PANEL_DOMAIN the panel IS the intended answer for a
+# bare IP. `$1` is the interface IP the panel and every site vhost bind to
+# (empty = wildcard). Rolled back by `nginx -t`: a second default_server on the
+# same socket (an operator's own vhost) must never take nginx down.
+write_default_catchall() {
+    local bind_ip="${1:-}" conf="/etc/nginx/conf.d/00-dockpanel-default.conf" l80 l443
+    mkdir -p /etc/nginx/conf.d
+    if [ -n "$bind_ip" ]; then
+        l80="listen ${bind_ip}:80 default_server;"
+        l443="listen ${bind_ip}:443 ssl default_server;"
+    else
+        l80="listen 80 default_server;"
+        l443="listen 443 ssl default_server;"
+    fi
+    cat > "$conf" << CATCHEOF
+# Managed by DockPanel (setup.sh/update.sh). Answers every request that names no
+# real site, so unmatched hosts never fall through to the admin panel.
+server {
+    ${l80}
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}
+server {
+    ${l443}
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}
+CATCHEOF
+    if ! nginx -t > /dev/null 2>&1; then
+        rm -f "$conf"
+        warn "Could not add the default-server catch-all (another default_server exists?) — skipped"
+    fi
+}
+
 configure_nginx() {
     header "Configuring Nginx"
 
@@ -1649,6 +1694,11 @@ ${PANEL_TLS_BLOCK}
     add_header X-XSS-Protection "1; mode=block" always;
 }
 NGINXEOF
+
+    # Domain mode: nothing but the panel's own name may reach the panel (#136).
+    if [ -n "$PANEL_DOMAIN" ]; then
+        write_default_catchall "${BIND_IP:-}"
+    fi
 
     # Test and restart (full restart needed to release port bindings from removed default site)
     if nginx -t > /dev/null 2>&1; then

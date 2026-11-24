@@ -850,6 +850,45 @@ eq "I15 renewal still treats BOTH non-foreign states as permission to proceed" \
 eq "I16 foreign_cert_issuer delegates rather than keeping a second copy" \
    "$(occ "$(subj "$HELP")" 'matchcert_provenance(&status){')" "1"
 
+# §J  THE VHOST REBUILD THAT RAN BEFORE THE ROW SAID "SSL" (#139)
+# The auto-SSL task spawned by site creation re-renders the vhost from the site's
+# ROW after the agent issues a certificate. `build_nginx_body` emits ssl/ssl_cert/
+# ssl_key only when `ssl_enabled` is already true, so the rebuild must come AFTER
+# the UPDATE that sets it. Before, it came first and re-rendered the site
+# HTTP-only over the agent's HTTPS vhost: certificate on disk, no `listen 443`.
+# Offsets are measured on the comment-stripped subject (the prose above spells
+# both names).
+sites_s="$(subj "$SITES")"
+UPD_PAT='UPDATEsitesSETssl_enabled=true,ssl_cert_path=$1,ssl_key_path=$2,ssl_expiry=$3,ssl_profile=NULL,ssl_challenge='"'"'http-01'"'"
+REB_PAT='crate::routes::ssl::rebuild_vhost_for_site(&ssl_db,&ssl_agent,site_id).await'
+upd_at="${sites_s%%"$UPD_PAT"*}"
+reb_at="${sites_s%%"$REB_PAT"*}"
+eq "J1 the auto-SSL task rebuilds the vhost exactly once" "$(occ "$sites_s" "$REB_PAT")" "1"
+eq "J2 the auto-SSL UPDATE that sets ssl_enabled exists" "$(occ "$sites_s" "$UPD_PAT")" "1"
+[ "${#reb_at}" -gt "${#upd_at}" ] \
+  && ok "J3 the rebuild comes AFTER the UPDATE that sets ssl_enabled" \
+  || bad "J3 the rebuild comes AFTER the UPDATE that sets ssl_enabled" "rebuild at ${#reb_at}, update at ${#upd_at}"
+
+# §K  A DOCKER APP'S CERTIFICATE NOTHING WOULD RENEW (#138)
+# `reconcile_docker_app_domains` records apps deployed before the table existed
+# with a NULL tls_mode, and the renewal used to decline those forever ("redeploy
+# the app") while the Fix button blamed "a certificate DockPanel does not manage"
+# because its owner probe never read `docker_app_domains`. Seven certificates
+# expired that way. Now a NULL mode is settled by the certificate: a Let's
+# Encrypt issuer proves DockPanel ordered it. Anything else still declines.
+scan_s="$(subj "$SCAN")"
+sys_s="$(subj "$SYS")"
+eq "K1 an unrecorded TLS mode is adopted only on a proven Let's Encrypt issuer" \
+   "$(occ "$scan_s" 'crate::helpers::cert_provenance(&status)==crate::helpers::CertProvenance::DockPanelIssued')" "1"
+eq "K2 the old unconditional decline on a NULL mode is gone" \
+   "$(occ "$scan_s" 'iftls_mode.is_none(){tracing::info!("Auto-fix:notrenewing{domain}—Dockerapp{app_name}')" "0"
+eq "K3 an adopted row falls back to the owner's validated contact" \
+   "$(occ "$scan_s" 'crate::routes::ssl::resolve_acme_contact(pool,&e).await.ok()')" "1"
+eq "K4 an adopted row is confirmed only when its mode is still NULL" \
+   "$(occ "$scan_s" "WHEREid=\$1ANDtls_modeISNULL")" "1"
+eq "K5 the Fix button's owner probe reads docker_app_domains" \
+   "$(occ "$sys_s" "SELECT'Dockerapp'FROMdocker_app_domainsWHERElower(domain)=lower(\$1)")" "1"
+
 echo
 echo "── Result ───────────────────────────────────────────────────────────────────"
 printf 'passed: %d   failed: %d\n' "$PASS" "$FAIL"

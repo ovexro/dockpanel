@@ -1420,27 +1420,46 @@ async fn renew_docker_app_certificate(pool: &PgPool, member: &FleetMember, domai
 
     // 1b. THE RECONCILED-ROW GUARD — a NULL `tls_mode` can only come from
     //     `reconcile_docker_app_domains`; `deploy`'s own INSERT always binds a
-    //     real value. Falling through to `effective_tls_mode` below would read
-    //     this identically to a genuine `none`, whose message asserts "the app
-    //     serves its registered certificate from the registry" — false for a
-    //     row that was never actually deployed with that knowledge. Decline
-    //     the same way (never renew on unconfirmed ownership), but say why.
-    if tls_mode.is_none() {
-        tracing::info!(
-            "Auto-fix: not renewing {domain} — Docker app {app_name}'s TLS ownership was \
-             reconciled from an already-running container, and its certificate mode was never \
-             recorded at deploy time. Redeploy the app (or confirm ownership manually) to enable \
-             auto-renewal."
-        );
-        return true;
-    }
-
-    // 2. THE MODE GUARD — identical reasoning to the stack arm: a Docker app
-    //    deployed with `tls_mode = "provided"` serves an operator-registered
-    //    certificate, and ordering an ACME one here would silently leave a
-    //    second, unused certificate on disk under the same domain (or worse,
-    //    become the renew target itself in some future change).
-    let mode = crate::routes::stacks::effective_tls_mode(tls_mode.as_deref(), ssl_email.as_deref());
+    //     real value. The mode was never recorded, so it cannot be read as a
+    //     genuine `none`/`provided` either. It used to stop here and decline
+    //     forever ("redeploy the app"), which left every app deployed before
+    //     the table existed with a certificate nothing would ever renew — and
+    //     an operator who cannot redeploy (an image that no longer resolves)
+    //     with a certificate that simply expired (#138).
+    //
+    //     What settles it is the certificate itself, not a guess about the
+    //     container: the agent's ACME client is pinned to Let's Encrypt
+    //     production, so a Let's Encrypt issuer on the file under
+    //     /etc/dockpanel/ssl IS proof that DockPanel ordered it, and renewing
+    //     it in place re-uses the same paths the app's vhost already names.
+    //     Anything else (foreign issuer, no readable certificate) still
+    //     declines — never renew on unconfirmed ownership.
+    let adopted = tls_mode.is_none();
+    let mode = if adopted {
+        let proven = match member.agent.get(&format!("/ssl/status/{domain}")).await {
+            Ok(status) => {
+                crate::helpers::cert_provenance(&status) == crate::helpers::CertProvenance::DockPanelIssued
+            }
+            Err(_) => false,
+        };
+        if !proven {
+            tracing::info!(
+                "Auto-fix: not renewing {domain} — Docker app {app_name}'s TLS ownership was \
+                 reconciled from an already-running container, its certificate mode was never \
+                 recorded, and the installed certificate is not provably a Let's Encrypt one \
+                 DockPanel ordered. Redeploy the app to enable auto-renewal."
+            );
+            return true;
+        }
+        "acme"
+    } else {
+        // 2. THE MODE GUARD — identical reasoning to the stack arm: a Docker app
+        //    deployed with `tls_mode = "provided"` serves an operator-registered
+        //    certificate, and ordering an ACME one here would silently leave a
+        //    second, unused certificate on disk under the same domain (or worse,
+        //    become the renew target itself in some future change).
+        crate::routes::stacks::effective_tls_mode(tls_mode.as_deref(), ssl_email.as_deref())
+    };
     if mode != "acme" {
         tracing::info!(
             "Auto-fix: not renewing {domain} — Docker app {app_name}'s TLS mode is '{mode}', not \
@@ -1450,7 +1469,23 @@ async fn renew_docker_app_certificate(pool: &PgPool, member: &FleetMember, domai
         return true;
     }
 
-    let Some(contact) = ssl_email.as_deref().map(str::trim).filter(|e| !e.is_empty()) else {
+    // An adopted row carries no contact address: fall back to the owner's, with
+    // the same validation every other issuing door applies.
+    let owner_contact: Option<String> = if adopted && ssl_email.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        let email: Option<String> = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+        match email {
+            Some(e) => crate::routes::ssl::resolve_acme_contact(pool, &e).await.ok(),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let contact_src = owner_contact.as_deref().or(ssl_email.as_deref());
+    let Some(contact) = contact_src.map(str::trim).filter(|e| !e.is_empty()) else {
         tracing::warn!(
             "Auto-fix: cannot renew {domain} — Docker app {app_name} is in ACME mode with no \
              ssl_email, and the agent requires a contact address to place an order"
@@ -1560,6 +1595,20 @@ async fn renew_docker_app_certificate(pool: &PgPool, member: &FleetMember, domai
     match result {
         Ok(_) => {
             tracing::info!("Auto-fix: Docker app certificate renewed for {domain}");
+            // An adopted row is confirmed now: the order succeeded under this
+            // contact, so record what was proven instead of re-proving it weekly.
+            // `tls_mode IS NULL` keeps this from ever touching a deploy-time row.
+            if adopted {
+                let _ = sqlx::query(
+                    "UPDATE docker_app_domains SET tls_mode = 'acme', \
+                     ssl_email = COALESCE(NULLIF(ssl_email, ''), $2), updated_at = NOW() \
+                     WHERE id = $1 AND tls_mode IS NULL",
+                )
+                .bind(app_id)
+                .bind(contact)
+                .execute(pool)
+                .await;
+            }
             // No `ssl_expiry` write here, unlike the stack arm — the analogous
             // `docker_app_domains` has no such column either (Tier 2, same as
             // `docker_stacks` had until it grew one); this door records its

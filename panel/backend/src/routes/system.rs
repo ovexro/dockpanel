@@ -143,6 +143,7 @@ pub async fn diagnostics_fix(
                 "SELECT 'mail domain' FROM mail_domains WHERE domain = $1 \
                  UNION ALL SELECT 'Git deploy' FROM git_deploys WHERE domain = $1 \
                  UNION ALL SELECT 'Docker app' FROM container_sleep_config WHERE domain = $1 \
+                 UNION ALL SELECT 'Docker app' FROM docker_app_domains WHERE lower(domain) = lower($1) \
                  UNION ALL SELECT 'Compose stack' FROM docker_stacks WHERE lower(domain) = lower($1) \
                  LIMIT 1",
             )

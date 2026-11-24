@@ -97,8 +97,35 @@ echo
 echo "── F6: automatic renewal must resolve the ACME contact like issuance does ──"
 SS="$REPO/panel/backend/src/services/security_scanner.rs"
 AH="$REPO/panel/backend/src/services/auto_healer.rs"
-check "security_scanner renewal uses resolve_acme_contact" "$(grep -c 'resolve_acme_contact' "$SS")" "1"
+# Two doors: the site renewal, and (since #138) the Docker-app arm for an adopted
+# row that carries no contact of its own.
+check "security_scanner renewal doors use resolve_acme_contact" "$(grep -c 'resolve_acme_contact' "$SS")" "2"
 check "auto_healer renewal uses resolve_acme_contact"      "$(grep -c 'resolve_acme_contact' "$AH")" "1"
+
+echo
+echo "── F7: unmatched hosts must never reach the panel (#136) ──"
+# Both scripts write the same catch-all. Run setup.sh's REAL function against a
+# scratch dir (its path and `nginx -t` redirected), then compare update.sh's copy.
+FN=$(awk '/^write_default_catchall\(\) \{/{f=1} f{print} f&&/^CATCHEOF$/{d=1} f&&d&&/^\}$/{exit}' "$SETUP" \
+     | sed "s|/etc/nginx/conf.d|$TMP/conf.d|g")
+check "setup.sh defines write_default_catchall" "$(printf '%s' "$FN" | grep -c '^write_default_catchall()')" "1"
+( nginx() { return 0; }; warn() { :; }; eval "$FN"; write_default_catchall 203.0.113.7 )
+C="$TMP/conf.d/00-dockpanel-default.conf"
+check "port 80 drops unmatched hosts on the interface IP and on IPv6" \
+  "$(grep -cE 'listen (203\.0\.113\.7:80|\[::\]:80) default_server;|return 444;' "$C")" "3"
+check "port 443 refuses the TLS handshake instead of serving a certificate" \
+  "$(grep -cE 'listen (203\.0\.113\.7:443|\[::\]:443) ssl default_server;|ssl_reject_handshake on;' "$C")" "3"
+( nginx() { return 0; }; warn() { :; }; eval "$FN"; write_default_catchall "" )
+check "without an interface IP it falls back to the wildcard sockets" \
+  "$(grep -cE 'listen (80|443 ssl) default_server;' "$C")" "2"
+( nginx() { return 1; }; warn() { :; }; eval "$FN"; write_default_catchall 203.0.113.7 )
+check "a catch-all nginx rejects is removed, never left behind" "$([ -e "$C" ] && echo kept || echo gone)" "gone"
+check "configure_nginx calls it only in domain mode" \
+  "$(grep -B1 'write_default_catchall "\${BIND_IP:-}"' "$SETUP" | grep -c 'if \[ -n "\$PANEL_DOMAIN" \]')" "1"
+check "update.sh writes the same two server blocks" \
+  "$(grep -cE '^[[:space:]]+(return 444;|ssl_reject_handshake on;|listen \[::\]:(80|443)( ssl)? default_server;)$' "$UPDATE")" "4"
+check "update.sh leaves an existing file alone and skips a non-domain panel" \
+  "$(grep -cE '\[ ! -f "\$CATCH_CONF" \]|\[ "\$CATCH_DOMAIN" != "_" \]' "$UPDATE")" "2"
 
 echo
 echo "══ $PASS passed, $FAIL failed ══"

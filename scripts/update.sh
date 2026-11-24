@@ -984,6 +984,56 @@ for conf in /etc/nginx/sites-enabled/dockpanel-panel.conf /etc/nginx/conf.d/dock
     fi
 done
 
+# ── #136: default-server catch-all for panels installed with a domain ─────
+# Same file and contents as setup.sh's write_default_catchall (keep in step):
+# without it the panel vhost is the implicit default for every unmatched
+# name on its :80/:443 sockets, and https://<any-subdomain>/ shows the admin
+# login. Only for a domain-mode panel (server_name != _); `nginx -t` rolls it
+# back if an operator's own vhost already holds default_server.
+CATCH_CONF=/etc/nginx/conf.d/00-dockpanel-default.conf
+if [ ! -f "$CATCH_CONF" ] && [ -d /etc/nginx/conf.d ]; then
+    CATCH_DOMAIN=""
+    for conf in /etc/nginx/sites-enabled/dockpanel-panel.conf /etc/nginx/conf.d/dockpanel-panel.conf; do
+        if [ -f "$conf" ]; then
+            CATCH_DOMAIN=$(grep "server_name" "$conf" | head -1 | awk '{print $2}' | tr -d ';')
+            break
+        fi
+    done
+    if [ -n "$CATCH_DOMAIN" ] && [ "$CATCH_DOMAIN" != "_" ]; then
+        CATCH_IP=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K\S+' || true)
+        if [ -n "$CATCH_IP" ]; then
+            CATCH_L80="listen ${CATCH_IP}:80 default_server;"
+            CATCH_L443="listen ${CATCH_IP}:443 ssl default_server;"
+        else
+            CATCH_L80="listen 80 default_server;"
+            CATCH_L443="listen 443 ssl default_server;"
+        fi
+        cat > "$CATCH_CONF" << CATCHEOF
+# Managed by DockPanel (setup.sh/update.sh). Answers every request that names no
+# real site, so unmatched hosts never fall through to the admin panel.
+server {
+    ${CATCH_L80}
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}
+server {
+    ${CATCH_L443}
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}
+CATCHEOF
+        if nginx -t > /dev/null 2>&1; then
+            log "Added the default-server catch-all (unmatched hosts no longer reach the panel)"
+            NGINX_NEEDS_RELOAD=1
+        else
+            rm -f "$CATCH_CONF"
+            log "WARN: default-server catch-all rejected by nginx -t (another default_server?) — skipped"
+        fi
+    fi
+fi
+
 if [ "$NGINX_NEEDS_RELOAD" = "1" ] || [ "$NGINX_NEEDS_RESTART" = "1" ]; then
     if nginx -t > /dev/null 2>&1; then
         if [ "$NGINX_NEEDS_RESTART" = "1" ]; then
