@@ -324,6 +324,43 @@ APT_EOF
     fi
 }
 
+# Wait, visibly, for another apt/dpkg process to release the lock.
+#
+# DPkg::Lock::Timeout (written above) is per apt-get call and capped at 5 min.
+# A fresh Ubuntu 24.04 image starts unattended-upgrade at first boot and, measured
+# on a 2 vCPU/4 GB cloud VPS, it was still holding the lock after 13+ minutes:
+# the Node.js step waited its 5 minutes, then died with "Unable to acquire the
+# dpkg frontend lock" (exit 100) a third of the way through the install.
+#
+# The probe is an apt-get that needs the lock and has none to wait for
+# (Lock::Timeout=0): it fails instantly with "Could not get lock" while someone
+# holds it. pgrep cannot do this job: unattended-upgrades' always-running
+# shutdown helper has the same process name as the worker that holds the lock.
+# Any other failure (no network, broken sources) ends the wait so the step that
+# really hits it reports the real error instead of this loop hiding it.
+wait_for_apt_lock() {
+    [ "$PKG_MGR" = "apt" ] || return 0
+    local waited=0 limit=1800 out
+    while :; do
+        out=$(apt-get -o DPkg::Lock::Timeout=0 -qq install --no-install-recommends ca-certificates 2>&1) && return 0
+        case "$out" in
+            *"Could not get lock"*|*"Unable to acquire the dpkg"*) ;;
+            *) return 0 ;;
+        esac
+        if [ "$waited" -ge "$limit" ]; then
+            warn "Still waiting for another package process after $((limit / 60)) min; continuing (apt will report the lock if it is still held)"
+            return 0
+        fi
+        if [ "$waited" -eq 0 ]; then
+            info "The system is installing its own updates (unattended-upgrades); waiting for it to finish. A fresh server can take 10-15 minutes."
+        elif [ $((waited % 120)) -eq 0 ]; then
+            info "Still waiting for the system's automatic updates (${waited}s so far)..."
+        fi
+        sleep 10
+        waited=$((waited + 10))
+    done
+}
+
 # Plain installers — meant to be wrapped in `run`, which captures their full
 # output into $INSTALL_LOG (the old versions swallowed output, so failures
 # left nothing to debug with).
@@ -2117,6 +2154,7 @@ main() {
     export DEBIAN_FRONTEND=noninteractive
 
     detect_pkg_manager
+    wait_for_apt_lock
     detect_firewall
 
     # Auto-detect: if no source available, use release binaries

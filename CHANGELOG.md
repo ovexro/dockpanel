@@ -22,6 +22,27 @@ one version bump; nothing in the panel's behaviour changes.
   `proxy-addr` (critical, IPv4-mapped IPv6 trust bypass) and `qs`.
 - Still open, not vulnerabilities: `chrono` and `unsafe-libyaml` are flagged unmaintained.
 
+### Fix: the installer died on a fresh Ubuntu 24.04 while the system updated itself
+
+A fresh Ubuntu 24.04 starts `unattended-upgrade` at first boot, and on a 2 vCPU/4 GB cloud VPS it
+held the dpkg lock for 13+ minutes. `setup.sh` only told apt to wait `DPkg::Lock::Timeout "300"`
+(per call, five minutes), so the Node.js step waited its five minutes and then stopped the install
+a third of the way through with `E: Unable to acquire the dpkg frontend lock` (exit 100). Found by
+installing on a throwaway Ubuntu 24.04 VPS with the same command a user runs; the lock holder was
+still running when the failure was investigated, so the fix was re-tested against the real lock.
+
+`setup.sh` now calls `wait_for_apt_lock` right after choosing the package manager: it probes the
+lock itself (an `apt-get` with `DPkg::Lock::Timeout=0`, which fails instantly while someone holds
+it; `pgrep` cannot tell, because the always-running shutdown helper shares the worker's name),
+tells the operator why it is waiting, and gives up after 30 minutes. Any other apt failure ends the
+wait so the real step reports the real error. New `tests/apt-lock-wait-pin-e2e.sh` (8 assertions,
+red on the old script) runs the real function against a fake `apt-get`.
+
+Test-suite portability: `agent-sandbox-paths-pin-e2e.sh` used gawk-only `\<test\>` word boundaries
+(Debian's mawk never matched, so the unit-test module was not stripped and two attack-target paths
+counted as agent writes), and `backup-destinations-git-env-pin-e2e.sh` needed `bc`. Both now use
+portable constructs.
+
 ## [2.242.1]
 
 ### Fix: stack-owned databases had zero backup coverage
