@@ -7,4 +7,9 @@
 # pulled in by sqlx-macros-core which unconditionally depends on sqlx-mysql.
 # DockPanel only uses PostgreSQL. No fix available upstream.
 # Tracked: https://github.com/launchbadge/sqlx/issues/3505
-ignore = ["RUSTSEC-2023-0071"]
+#
+# RUSTSEC-2026-0459: libsqlite3-sys (C SQLite CVE). Same phantom: pulled in only
+# through sqlx-macros-core -> sqlx-sqlite in Cargo.lock. `cargo tree -i
+# libsqlite3-sys --target all` prints nothing, so it is never compiled or linked;
+# DockPanel only uses PostgreSQL. Drop when sqlx stops locking unused drivers.
+ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0459"]

@@ -34,12 +34,6 @@
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use p256::ecdsa::{signature::Signer, Signature, SigningKey, VerifyingKey};
-// `p256`'s `ecdsa` 0.16 pulls in `rand_core` 0.6 (its `CryptoRngCore` bound),
-// which is a DIFFERENT major version than the `rand = "0.9"` crate this
-// backend otherwise uses — `rand::rng()`'s `ThreadRng` does not implement the
-// 0.6 traits. Use p256's own re-exported RNG for key generation; `rand`'s
-// `RngCore` is still fine for filling plain credential-id bytes below.
-use p256::elliptic_curve::rand_core::OsRng as P256OsRng;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
@@ -79,7 +73,16 @@ struct VirtualAuthenticator {
 
 impl VirtualAuthenticator {
     fn new() -> Self {
-        let signing_key = SigningKey::random(&mut P256OsRng);
+        // p256 0.14 moved to rand_core 0.10, which `rand` 0.9 does not implement:
+        // draw 32 random bytes ourselves and retry until they are a valid scalar
+        // (all-zero or >= the curve order is rejected; astronomically rare).
+        let signing_key = loop {
+            let mut seed = [0u8; 32];
+            rand::rng().fill_bytes(&mut seed);
+            if let Ok(key) = SigningKey::from_slice(&seed) {
+                break key;
+            }
+        };
         let mut credential_id = vec![0u8; 16];
         rand::rng().fill_bytes(&mut credential_id);
         Self { signing_key, credential_id }
@@ -93,7 +96,7 @@ impl VirtualAuthenticator {
     /// crv=P-256(1), alg=ES256(-7), plus the x/y coordinates
     /// `parse_cose_p256_key` actually reads.
     fn cose_public_key(&self) -> Vec<u8> {
-        let point = VerifyingKey::from(&self.signing_key).to_encoded_point(false);
+        let point = VerifyingKey::from(&self.signing_key).to_sec1_point(false);
         let x = point.x().expect("uncompressed point has x").to_vec();
         let y = point.y().expect("uncompressed point has y").to_vec();
         let value = ciborium::Value::Map(vec![

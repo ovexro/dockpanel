@@ -51,7 +51,7 @@ regex = "1"
 tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
 # WebAuthn / Passkey support
 ciborium = "0.2"
-p256 = { version = "0.13", features = ["ecdsa"] }
+p256 = { version = "0.14", features = ["ecdsa"] }
 url = "2"
 serde_yaml_ng = "0.10"
 hkdf = "0.12"
