@@ -4,6 +4,25 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Add: Comprehensive File Manager Enhancements (GH #134)
+
+Complete overhaul of the site file manager across Agent, Backend, and Frontend, providing a dual-pane, desktop-grade site file management experience:
+
+- **Dual-Pane Navigation & Tree Explorer**: Collapsible folder tree sidebar with deep directory expansion, breadcrumbs path bar, and synchronized view transitions.
+- **Rich Multi-Select & Action Bar**: Shift-click range selection, Ctrl/Cmd-click multi-selection, select all (`Ctrl+A`), and a floating bottom action bar for bulk operations.
+- **Context Menus & Keyboard Shortcuts**: Context-sensitive right-click menus for files, folders, archives, and blank areas. Keyboard shortcuts for copy (`Ctrl+C`), cut (`Ctrl+X`), paste (`Ctrl+V`), rename (`F2`), delete (`Delete`), and selection reset (`Escape`).
+- **Archive Compression, Extraction & Inspection**: Native support for creating `.zip`, `.tar`, and `.tar.gz` archives, extracting archives in-place or into subdirectories, and inspecting archive structures without extracting.
+- **Visual Permissions (chmod) & Ownership (chown)**: 3x3 permission grid for Owner/Group/Public `rwx` bits, dynamic two-way octal calculator (`0755`, `0644`), and recursive directory toggles.
+- **File Properties & Checksums**: UNIX stat inspector (size, blocks, access/mod times, permissions) and on-demand SHA-256 cryptographic checksum calculation.
+- **Search & Grep**: Recursive filename glob search and in-file content grep with matched lines and snippets.
+- **Storage Breakdown**: Interactive directory tree size visualizer with percentage bars to identify disk heavy directories.
+- **Rich Preview Modal**: Inline previews for markdown (rendered via marked + DOMPurify), code, images, audio, video, PDF, and archive structures.
+- **Enhanced Code Editor**: Line numbers, search and replace (`Ctrl+F`), fullscreen toggle, word wrap, and keyboard shortcut save (`Ctrl+S`).
+- **Static Website Upgrade Wizard**: Step-by-step wizard to upload a `.zip` build archive, optionally purge existing assets in `/public`, and unpack/deploy with correct permissions.
+- **Security & Sandboxing**: Strict path traversal validation inside `/var/www/<domain>`, prevention of root deletion (`resolve_safe_child`), safe process execution (`env_clear`), and tenant isolation guards.
+
 ## [2.242.1]
 
 ### Fix: stack-owned databases had zero backup coverage

@@ -108,14 +108,27 @@ Delete site and all associated resources (database containers, nginx config, SSL
 
 | Method | Path | Body |
 |--------|------|------|
-| GET | `/api/sites/{id}/files?path=.` | List directory |
+| GET | `/api/sites/{id}/files?path=.` | List directory contents |
 | GET | `/api/sites/{id}/files/read?path=index.html` | Read file content |
 | PUT | `/api/sites/{id}/files/write` | `{ "path": "file.txt", "content": "..." }` |
 | POST | `/api/sites/{id}/files/create` | `{ "path": "dir", "is_dir": true }` |
 | POST | `/api/sites/{id}/files/rename` | `{ "from": "old.txt", "to": "new.txt" }` |
-| DELETE | `/api/sites/{id}/files?path=file.txt` | Delete file |
+| DELETE | `/api/sites/{id}/files?path=file.txt` | Delete single file or directory |
 | POST | `/api/sites/{id}/files/upload` | Upload a file — JSON body, `content` base64-encoded, 1.5 MB limit |
 | GET | `/api/sites/{id}/files/download?path=file.txt` | Download file |
+| POST | `/api/sites/{id}/files/copy` | `{ "from": "src.txt", "to": "dest.txt" }` |
+| POST | `/api/sites/{id}/files/duplicate` | `{ "path": "file.txt" }` |
+| POST | `/api/sites/{id}/files/bulk/delete` | `{ "paths": ["a.txt", "b.txt"] }` |
+| POST | `/api/sites/{id}/files/bulk/copy` | `{ "paths": ["a.txt"], "dest_dir": "target_folder" }` |
+| POST | `/api/sites/{id}/files/bulk/move` | `{ "paths": ["a.txt"], "dest_dir": "target_folder" }` |
+| POST | `/api/sites/{id}/files/chmod` | `{ "path": "file.txt", "mode": "0755", "recursive": false }` |
+| POST | `/api/sites/{id}/files/chown` | `{ "path": "file.txt", "user": "www-data", "group": "www-data", "recursive": false }` |
+| GET | `/api/sites/{id}/files/stat?path=file.txt` | File metadata, timestamps, permissions, and SHA-256 |
+| POST | `/api/sites/{id}/files/compress` | `{ "paths": ["src"], "archive_name": "backup.zip", "format": "zip" }` |
+| POST | `/api/sites/{id}/files/extract` | `{ "archive_path": "site.zip", "dest_dir": "public" }` |
+| GET | `/api/sites/{id}/files/inspect?path=site.zip` | List archive internal files and directories |
+| GET | `/api/sites/{id}/files/search?query=app&pattern=*.js` | Search file names and grep content |
+| GET | `/api/sites/{id}/files/storage?path=.` | Recursive directory size breakdown |
 
 ### Backups
 
