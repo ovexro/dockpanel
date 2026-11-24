@@ -394,6 +394,7 @@ export default function Apps() {
     ? window.location.hostname
     : activeServer.ip_address;
   const [templates, setTemplates] = useState<AppTemplate[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
   const [apps, setApps] = useState<DeployedApp[]>([]);
   const [loading, setLoading] = useState(true);
   const [deploying, setDeploying] = useState(false);
@@ -2260,9 +2261,23 @@ volumes:
       )}
 
       {/* Template Gallery */}
-      <h2 className="text-sm font-medium text-dark-200 uppercase font-mono tracking-widest mb-3">
-        App Templates
-      </h2>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+        <h2 className="text-sm font-medium text-dark-200 uppercase font-mono tracking-widest">
+          App Templates
+        </h2>
+        <div className="relative w-full sm:w-72">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search templates & apps..."
+            className="w-full px-3.5 py-1.5 pl-9 text-sm bg-dark-800 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:border-accent-500 transition-colors"
+          />
+          <svg className="w-4 h-4 text-dark-400 absolute left-3 top-2.5 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+        </div>
+      </div>
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {[...Array(8)].map((_, i) => (
@@ -2283,7 +2298,7 @@ volumes:
               <p className="text-dark-300 text-xs mt-1">Check that the agent is running and accessible</p>
             </div>
           )}
-          {templates.map((tmpl) => (
+          {templates.filter(t => !searchQuery || t.name.toLowerCase().includes(searchQuery.toLowerCase()) || t.description.toLowerCase().includes(searchQuery.toLowerCase()) || t.category.toLowerCase().includes(searchQuery.toLowerCase())).map((tmpl) => (
             <button
               key={tmpl.id}
               onClick={() => openDeploy(tmpl)}
