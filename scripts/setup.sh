@@ -108,6 +108,10 @@ run() {
     local label="$1"; shift
     plog "→ RUN: $label"
     plog "  \$ $*"
+    # The lock can be taken at ANY point of the first minutes of a fresh box (measured: Debian 13
+    # and Ubuntu 24.04 start unattended-upgrade 3-5 min after boot), not only before the install
+    # starts, so every step waits for it here, visibly, instead of burning apt's own timeout.
+    wait_for_apt_lock
     local rc=0
     if [ "$IS_TTY" = "1" ]; then
         "$@" >> "$INSTALL_LOG" 2>&1 &
@@ -310,8 +314,11 @@ detect_pkg_manager() {
         # unattended-upgrades is running in the background — common on fresh
         # Debian 13 boots, where the auto-update kicks off right after install.
         mkdir -p /etc/apt/apt.conf.d
+        # 1800 while the installer runs (a fresh box can hold the lock for 13+ min, and it can
+        # be taken between wait_for_apt_lock's probe and the apt call); print_summary puts the
+        # runtime value (300) back once the install is done.
         cat > /etc/apt/apt.conf.d/99-dockpanel-lock-wait.conf << 'APT_EOF'
-DPkg::Lock::Timeout "300";
+DPkg::Lock::Timeout "1800";
 APT_EOF
         dockpanel_needrestart_override
     elif command -v dnf &> /dev/null; then
@@ -339,7 +346,7 @@ APT_EOF
 # Any other failure (no network, broken sources) ends the wait so the step that
 # really hits it reports the real error instead of this loop hiding it.
 wait_for_apt_lock() {
-    [ "$PKG_MGR" = "apt" ] || return 0
+    [ "${PKG_MGR:-}" = "apt" ] || return 0
     local waited=0 limit=1800 out
     while :; do
         out=$(apt-get -o DPkg::Lock::Timeout=0 -qq install --no-install-recommends ca-certificates 2>&1) && return 0
@@ -394,6 +401,34 @@ detect_firewall() {
     else
         FW_MGR="none"
     fi
+}
+
+# TCP ports sshd is listening on (one per line), falling back to 22. Enabling a
+# firewall without these would cut off the very session running this installer
+# on any box whose sshd is not on 22.
+ssh_listen_ports() {
+    local ports
+    ports=$(ss -H -ltnp 2>/dev/null | awk '/"sshd"/ { n = split($4, a, ":"); print a[n] }' | sort -un)
+    [ -n "$ports" ] || ports=$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }' | sort -un)
+    [ -n "$ports" ] || ports=22
+    printf '%s\n' "$ports"
+}
+
+# Turn ufw on with default-deny inbound, keeping every sshd port open first.
+# Ubuntu ships ufw installed but INACTIVE, and "ufw is installed" used to be read
+# as "a firewall is enforcing": the installer logged "ports allowed", listed UFW
+# among the installed services, and the box had no firewall at all (found on a
+# fresh Ubuntu 24.04 VPS: `ufw status` = inactive after a clean install).
+ufw_enable_with_ssh() {
+    local p st
+    ufw default deny incoming > /dev/null 2>&1 || return 1
+    ufw default allow outgoing > /dev/null 2>&1 || return 1
+    for p in $(ssh_listen_ports); do
+        ufw allow "${p}/tcp" > /dev/null 2>&1 || return 1
+    done
+    ufw --force enable > /dev/null 2>&1 || return 1
+    st=$(ufw status 2>/dev/null | head -1)
+    [ "$st" = "Status: active" ]
 }
 
 # Allow a port, e.g. `fw_allow 443/tcp`. Returns non-zero when there is no
@@ -1832,18 +1867,31 @@ install_recommended_services() {
             svc_ok "firewalld"
             ;;
         ufw)
-            log "UFW already installed"
-            svc_ok "UFW"
+            ufw_state=$(ufw status 2>/dev/null | head -1)
+            if [ "$ufw_state" = "Status: inactive" ]; then
+                info "UFW is installed but not enabled (the Ubuntu default) — enabling it, keeping SSH open"
+                if ufw_enable_with_ssh; then
+                    log "UFW enabled (default deny incoming; SSH port(s) $(ssh_listen_ports | tr '\n' ' ')kept open)"
+                    svc_ok "UFW"
+                else
+                    warn "UFW is installed but could not be enabled — NO firewall is active. Run: ufw allow <your-ssh-port>/tcp && ufw enable"
+                    svc_fail "UFW"
+                fi
+            else
+                log "UFW already installed and active"
+                svc_ok "UFW"
+            fi
             ;;
         none)
             if run "Installing UFW firewall" pkg_install ufw; then
-                ufw default deny incoming > /dev/null 2>&1
-                ufw default allow outgoing > /dev/null 2>&1
-                ufw allow 22/tcp > /dev/null 2>&1
-                ufw --force enable > /dev/null 2>&1
                 FW_MGR="ufw"
-                log "UFW installed and enabled"
-                svc_ok "UFW"
+                if ufw_enable_with_ssh; then
+                    log "UFW installed and enabled"
+                    svc_ok "UFW"
+                else
+                    warn "UFW installed but could not be enabled — no firewall is active"
+                    svc_fail "UFW"
+                fi
             else
                 warn "UFW failed to install — no firewall is active"
                 svc_fail "UFW"
@@ -1983,6 +2031,11 @@ provision_panel_ssl() {
 }
 
 print_summary() {
+    # The long install-time apt lock wait must not stay: the panel's own apt operations
+    # (PHP, services, updates) should fail after five minutes, not hang a request for thirty.
+    if [ "${PKG_MGR:-}" = "apt" ] && [ -f /etc/apt/apt.conf.d/99-dockpanel-lock-wait.conf ]; then
+        printf 'DPkg::Lock::Timeout "300";\n' > /etc/apt/apt.conf.d/99-dockpanel-lock-wait.conf
+    fi
     INSTALL_DONE=1
 
     local SERVER_IP

@@ -4,6 +4,23 @@ All notable changes to DockPanel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fix: a fresh Ubuntu server finished the install with no firewall
+
+Ubuntu ships `ufw` installed but disabled. `setup.sh` read "the ufw command exists" as "a firewall
+is enforcing": it logged "UFW already installed" and "ports 80, 443, 8443 allowed", listed UFW among
+the installed services, and never enabled it (found on a fresh Ubuntu 24.04 VPS: `ufw status` was
+`inactive` after a clean install). Debian, which has no ufw, installed and enabled it, so the two
+distros ended up protected differently.
+
+An installed-but-inactive ufw is now enabled: default deny inbound, default allow outbound, and every
+port sshd is listening on opened first (`ssh_listen_ports`: the listening sockets, then `sshd -T`,
+then 22). The fresh-box path shares the same function; it used to open only port 22, which would
+have cut off the installer's own session on any box whose sshd listens elsewhere. If ufw cannot be
+enabled the installer says so instead of claiming success. New `tests/ufw-enable-ssh-pin-e2e.sh`
+(11 assertions, red on the old script).
+
 ## [2.242.2]
 
 ### Security: clear every open dependency advisory (RustSec + npm)

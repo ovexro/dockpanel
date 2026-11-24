@@ -86,7 +86,7 @@ check "forever locked -> rc 0, 181 probes, 15 notices, one warning" "$(run_case 
 
 echo "§5 wiring: the wait runs after the package manager is chosen and before anything installs"
 L_DET=$(grep -n '^    detect_pkg_manager$' "$SETUP" | head -1 | cut -d: -f1 || true)
-L_WAIT=$(grep -n '^    wait_for_apt_lock$' "$SETUP" | head -1 | cut -d: -f1 || true)
+L_WAIT=$(grep -n '^    wait_for_apt_lock$' "$SETUP" | cut -d: -f1 | awk -v d="${L_DET:-0}" '$1 > d { print; exit }' || true)
 L_FW=$(grep -n '^    detect_firewall$' "$SETUP" | head -1 | cut -d: -f1 || true)
 if [ -n "$L_DET" ] && [ -n "$L_WAIT" ] && [ -n "$L_FW" ] && [ "$L_DET" -lt "$L_WAIT" ] && [ "$L_WAIT" -lt "$L_FW" ]; then
   ok "main() calls wait_for_apt_lock between detect_pkg_manager and detect_firewall"
@@ -98,6 +98,13 @@ echo "§6 the probe is the lock itself, never a process name"
 check "function does not use pgrep (the shutdown helper shares the worker's name)" \
   "$(printf '%s\n' "$FN" | grep -c 'pgrep' || true)" "0"
 check "probe uses DPkg::Lock::Timeout=0" "$(printf '%s\n' "$FN" | grep -c 'DPkg::Lock::Timeout=0' || true)" "1"
+
+echo "§7 the whole install is covered, not only its start (Debian 13 lost the race the first fix left)"
+RUN_BODY=$(awk '/^run\(\) \{/,/^\}/' "$SETUP")
+check "run() waits for the lock before every step" "$(printf '%s\n' "$RUN_BODY" | grep -c 'wait_for_apt_lock' || true)" "1"
+check "installer writes a 1800s apt lock timeout" "$(grep -c 'DPkg::Lock::Timeout \"1800\"' "$SETUP" || true)" "1"
+SUMMARY_BODY=$(awk '/^print_summary\(\) \{/,/^\}/' "$SETUP")
+check "print_summary restores the 300s runtime timeout" "$(printf '%s\n' "$SUMMARY_BODY" | grep -c 'Timeout \"300\"' || true)" "1"
 
 echo
 echo "══ $PASS passed, $FAIL failed ══"
