@@ -1475,6 +1475,19 @@ pub(crate) fn validate_acme_contact(email: &str) -> Result<(), String> {
             "\"{email}\" has no valid public domain — Let's Encrypt will reject it as a contact address"
         ));
     }
+    // RFC 2606 reserves these names themselves (not just a TLD), and Let's Encrypt
+    // refuses them with `contact email has forbidden domain "example.com"`. The
+    // panel used to accept them, so a test install registered as admin@example.com
+    // failed every issuance with an error the operator never saw.
+    let lowered_domain = domain.to_ascii_lowercase();
+    if ["example.com", "example.net", "example.org"]
+        .iter()
+        .any(|r| lowered_domain == *r || lowered_domain.ends_with(&format!(".{r}")))
+    {
+        return Err(format!(
+            "\"{email}\" uses a domain reserved for documentation (RFC 2606), which Let's Encrypt rejects as a contact address"
+        ));
+    }
     if NON_PUBLIC_TLDS.contains(&tld.as_str()) {
         return Err(format!(
             "\"{email}\" uses the reserved .{tld} domain, which Let's Encrypt rejects as a contact address"
@@ -1563,6 +1576,17 @@ mod acme_contact_tests {
         assert!(e.contains(".test"), "error must name the offending TLD: {e}");
     }
 
+    /// Found on a fresh VPS test: Let's Encrypt answered `contact email has
+    /// forbidden domain "example.com"` while the panel had accepted it.
+    #[test]
+    fn rejects_the_rfc2606_documentation_domains() {
+        for addr in ["admin@example.com", "a@EXAMPLE.org", "a@mail.example.net"] {
+            assert!(validate_acme_contact(addr).is_err(), "{addr} must be rejected");
+        }
+        assert!(validate_acme_contact("ops@notexample.com").is_ok());
+        assert!(validate_acme_contact("ops@dockpanel.dev").is_ok());
+    }
+
     #[test]
     fn rejects_the_other_reserved_tlds() {
         for addr in [
@@ -1595,14 +1619,15 @@ mod acme_contact_tests {
     }
 
     /// The guard must not be stricter than the CA — these all issue fine today.
+    /// (`example.com` was in this list until a live order showed the CA refuses it.)
     #[test]
     fn accepts_real_addresses() {
         for addr in [
-            "admin@example.com",
+            "admin@dockpanel.dev",
             "admin@example.dev",
             "someone+le@example.co.uk",
             "a.b-c_d@sub.domain.io",
-            "  spaced@example.com  ",
+            "  spaced@dockpanel.dev  ",
         ] {
             assert!(validate_acme_contact(addr).is_ok(), "{addr} must be accepted");
         }

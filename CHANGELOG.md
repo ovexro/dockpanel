@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fix: the panel accepted `example.com` as a certificate contact, Let's Encrypt does not
+
+Found on a fresh VPS test: a panel registered as `admin@example.com` had every certificate order refused
+with `contact email has forbidden domain "example.com"`, and the operator never saw why. The contact
+check already rejected reserved TLDs (`.test`, `.local`, ...); it now also rejects the RFC 2606
+documentation domains themselves (`example.com`, `example.net`, `example.org` and their subdomains)
+with a message that names the problem. A unit test that listed `admin@example.com` as "accepted by the
+CA" was wrong and is corrected.
+
 ## [2.242.3]
 
 ### Fix: a new site's automatic certificate left it on HTTP only (#139)
