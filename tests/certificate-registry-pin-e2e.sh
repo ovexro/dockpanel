@@ -237,8 +237,8 @@ has "F2 a provided intent needs a well-formed alias" "$FFRQ" 'Some(alias)ifssl::
 has "F2 a provided intent is refused through Traefik before any container exists" "$FFRQ" 'Some(alias)ifuse_traefik=>Err(format!('
 EXP=$(body "$D" expose_domain 150); FEXP=$(flat "$EXP")
 before "F3 the provided arm runs BEFORE the HTTP-first write" "$FEXP" 'ssl::registry_paths(alias)' 'letsite_config=proxy_site_config(port);'
-eq "F4 the per-domain enabler is called once — by the ACME arm" "$(occ "$FEXP" 'enable_ssl_for_site(')" "1"
-before "F4 …and only after the HTTP-first write, so the provided arm never reaches it" "$FEXP" 'letsite_config=proxy_site_config(port);' 'enable_ssl_for_site('
+eq "F4 the per-domain enabler is called once — by the ACME arm" "$(occ "$FEXP" 'enable_ssl_for_site_locked(')" "1"
+before "F4 …and only after the HTTP-first write, so the provided arm never reaches it" "$FEXP" 'letsite_config=proxy_site_config(port);' 'enable_ssl_for_site_locked('
 before "F5 the provided arm re-asks coverage before it writes" "$FEXP" 'ssl::cert_covers_domain(&pem,domain)' 'std::fs::write(&tmp_path'
 before "F6 a missing certificate refuses before anything is written" "$FEXP" '"tls_refused"' 'std::fs::write(&tmp_path'
 # The provided slice: from the registry lookup to the HTTP-first write.

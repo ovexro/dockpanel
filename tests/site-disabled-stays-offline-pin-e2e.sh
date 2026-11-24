@@ -215,7 +215,7 @@ b_writer() {
 }
 
 b_writer "B2" "$NGX_RT_S"   'async fn put_site'              "$NGX_RT"
-b_writer "B3" "$SSL_SVC_S"  'async fn enable_ssl_for_site'   "$SSL_SVC"
+b_writer "B3" "$SSL_SVC_S"  'async fn enable_ssl_for_site_locked'   "$SSL_SVC"
 b_writer "B4" "$GIT_SVC_S"  'async fn setup_nginx_proxy'     "$GIT_SVC"
 b_writer "B5" "$DAPPS_RT_S" 'async fn expose_domain'         "$DAPPS_RT"
 
@@ -241,7 +241,7 @@ c_order() {
 }
 
 c_order "C1" "$NGX_RT_S"  'async fn put_site'            "$NGX_RT"
-c_order "C2" "$SSL_SVC_S" 'async fn enable_ssl_for_site' "$SSL_SVC"
+c_order "C2" "$SSL_SVC_S" 'async fn enable_ssl_for_site_locked' "$SSL_SVC"
 c_order "C3" "$GIT_SVC_S" 'async fn setup_nginx_proxy'   "$GIT_SVC"
 
 echo "§D  what comes back when a site is enabled is the site as it is now"

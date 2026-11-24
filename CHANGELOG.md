@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.242.4]
+
 ### Fix: deleting a Git Deploy that used a docker-compose.yml left its containers running (#123, item 4)
 
 The delete path only addressed `dockpanel-git-{name}`, which is not what the compose engine created: the
