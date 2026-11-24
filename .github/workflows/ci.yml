@@ -351,6 +351,17 @@ jobs:
       - name: A backup the panel calls off-site must actually be off-site
         run: bash tests/backup-lands-pin-e2e.sh
 
+  dns-zone-owner:
+    name: A DNS Zone Belongs To The Admin Who Added It
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. A zone carries its owner's Cloudflare credential;
+      # an unscoped get_zone/list_zones let a second admin act through it.
+      - name: Every DNS zone lookup is scoped to the caller
+        run: bash tests/dns-zone-owner-pin-e2e.sh
+
   migration-analyze-async:
     name: Migration Analysis Is Accepted, Not Performed
     runs-on: ubuntu-latest

@@ -218,6 +218,11 @@ Still administrator-only, and correctly so: containers, DNS, CDN, the server
 shell, and everything under the Admin group. Mail is now partly a client's — the
 mailboxes on a domain it owns a site for; the mail domain itself is not.
 
+DNS zones are administrator-only and also owner-scoped: an administrator sees
+and manages only the zones they added themselves, because a zone carries that
+administrator's stored Cloudflare credential. A second administrator does not
+see them, and asking for one by id answers "DNS zone not found".
+
 ## Every account owns its own security (v2.83.0)
 
 **My Account** is the one navigation entry every role carries. It holds

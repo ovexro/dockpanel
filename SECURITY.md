@@ -73,7 +73,7 @@ DockPanel is designed with defense in depth. Key security properties include:
 - **Content Security Policy** — CSP headers are set on the frontend nginx configuration to mitigate XSS and data injection attacks.
 - **Safe command execution** — All child processes are spawned with `env_clear()` to prevent LD_PRELOAD, PATH hijacking, and other environment-based attacks.
 - **Rate limiting** — All authentication endpoints are rate-limited to prevent brute-force attacks.
-- **IDOR protection** — All resource endpoints verify ownership before granting access.
+- **IDOR protection** — Resource endpoints verify ownership before granting access; a DNS zone (which carries its owner's Cloudflare credential) is visible and manageable only by the administrator who added it.
 - **Input sanitization** — All user-supplied data is validated and sanitized before being passed to system commands.
 - **Systemd hardening** — Generated service units apply systemd security directives to limit the blast radius of any compromise.
 - **Terminal sandboxing** — Terminal sessions run with `PR_SET_NO_NEW_PRIVS`, restricted bash shells, and a command blocklist to prevent privilege escalation and dangerous operations.

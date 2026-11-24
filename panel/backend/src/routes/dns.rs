@@ -59,15 +59,17 @@ pub struct UpdateRecordRequest {
     pub priority: Option<u16>,
 }
 
-/// Helper: load a zone by id. DNS management is admin-only (every handler calls
-/// `require_admin`), so any admin may manage any zone — we no longer scope by
-/// `user_id` (that scoping made the admin-gated read endpoints unusable on a zone
-/// created by a different admin).
-async fn get_zone(state: &AppState, zone_id: Uuid) -> Result<DnsZone, ApiError> {
+/// Helper: load a zone by id, only if `owner_id` owns it. Every handler is
+/// admin-gated AND owner-scoped: a zone carries its owner's stored Cloudflare
+/// credential, so one admin must not be able to read, change or delete another
+/// admin's zone (and act through that admin's token). A zone that is not yours
+/// answers 404, the same as one that does not exist.
+async fn get_zone(state: &AppState, zone_id: Uuid, owner_id: Uuid) -> Result<DnsZone, ApiError> {
     sqlx::query_as::<_, DnsZone>(
-        "SELECT * FROM dns_zones WHERE id = $1",
+        "SELECT * FROM dns_zones WHERE id = $1 AND user_id = $2",
     )
     .bind(zone_id)
+    .bind(owner_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| internal_error("unknown", e))?
@@ -239,8 +241,9 @@ pub async fn list_zones(
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     require_admin(&claims.role)?;
     let zones: Vec<DnsZone> = sqlx::query_as(
-        "SELECT * FROM dns_zones ORDER BY domain LIMIT 500",
+        "SELECT * FROM dns_zones WHERE user_id = $1 ORDER BY domain LIMIT 500",
     )
+    .bind(claims.sub)
     .fetch_all(&state.db)
     .await
     .map_err(|e| internal_error("list zones", e))?;
@@ -422,7 +425,7 @@ pub async fn delete_zone(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let zone = get_zone(&state, id).await?;
+    let zone = get_zone(&state, id, claims.sub).await?;
 
     // If PowerDNS, delete the zone from the authoritative server FIRST and fail closed:
     // only drop our tracking row once the zone is actually gone, so a transient PowerDNS
@@ -464,7 +467,7 @@ pub async fn list_records(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let zone = get_zone(&state, id).await?;
+    let zone = get_zone(&state, id, claims.sub).await?;
 
     match zone.provider.as_str() {
         "cloudflare" => {
@@ -541,7 +544,7 @@ pub async fn create_record(
     Json(body): Json<CreateRecordRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_admin(&claims.role)?;
-    let zone = get_zone(&state, id).await?;
+    let zone = get_zone(&state, id, claims.sub).await?;
 
     let allowed_types = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA"];
     if !allowed_types.contains(&body.rtype.as_str()) {
@@ -696,7 +699,7 @@ pub async fn update_record(
     Json(body): Json<UpdateRecordRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let zone = get_zone(&state, id).await?;
+    let zone = get_zone(&state, id, claims.sub).await?;
 
     if record_id.is_empty() || record_id.len() > 256 {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid record ID"));
@@ -926,7 +929,7 @@ pub async fn delete_record(
     req_headers: axum::http::HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let zone = get_zone(&state, id).await?;
+    let zone = get_zone(&state, id, claims.sub).await?;
     let ip = crate::routes::client_ip(&req_headers);
 
     if record_id.is_empty() || record_id.len() > 256 {
@@ -1240,7 +1243,7 @@ pub async fn dnssec_status(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let zone = get_zone(&state, id).await?;
+    let zone = get_zone(&state, id, claims.sub).await?;
 
     if zone.provider != "cloudflare" {
         return Ok(Json(serde_json::json!({
@@ -1291,7 +1294,7 @@ pub async fn dns_changelog(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let zone = get_zone(&state, id).await?;
+    let zone = get_zone(&state, id, claims.sub).await?;
 
     let entries: Vec<(String, String, Option<String>, chrono::DateTime<chrono::Utc>)> =
         sqlx::query_as(
@@ -1327,7 +1330,7 @@ pub async fn dns_analytics(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let zone = get_zone(&state, id).await?;
+    let zone = get_zone(&state, id, claims.sub).await?;
 
     if zone.provider != "cloudflare" {
         return Ok(Json(serde_json::json!({
@@ -1426,7 +1429,7 @@ pub async fn cf_zone_settings(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let zone = get_zone(&state, id).await?;
+    let zone = get_zone(&state, id, claims.sub).await?;
 
     if zone.provider != "cloudflare" {
         return Ok(Json(serde_json::json!({
@@ -1478,7 +1481,7 @@ pub async fn cf_update_setting(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let zone = get_zone(&state, id).await?;
+    let zone = get_zone(&state, id, claims.sub).await?;
     let ip = crate::routes::client_ip(&req_headers);
 
     if zone.provider != "cloudflare" {
@@ -1590,7 +1593,7 @@ pub async fn cf_purge_cache(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&claims.role)?;
-    let zone = get_zone(&state, id).await?;
+    let zone = get_zone(&state, id, claims.sub).await?;
 
     if zone.provider != "cloudflare" {
         return Err(err(StatusCode::BAD_REQUEST, "Cache purge only available for Cloudflare zones"));
