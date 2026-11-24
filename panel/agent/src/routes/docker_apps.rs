@@ -2338,6 +2338,24 @@ async fn resolve_pid_to_container(pid: u64) -> Option<String> {
 mod tls_intent_tests {
     use super::TlsIntent;
 
+    /// `expose_domain` holds `lock_site(domain)` for its whole run, and
+    /// `tokio::sync::Mutex` is not reentrant. Calling the LOCKING
+    /// `ssl::enable_ssl_for_site` from inside it waits on itself forever: the
+    /// certificate is issued, the request never returns, the vhost stays
+    /// HTTP-only and the domain's lock is never released (#123 VPS test).
+    #[test]
+    fn expose_domain_never_calls_the_locking_enable_ssl() {
+        let src = include_str!("docker_apps.rs");
+        let start = src.find("async fn expose_domain(").expect("expose_domain exists");
+        let end = start + src[start..].find("async fn unexpose_domain(").expect("unexpose_domain follows");
+        let body = &src[start..end];
+        assert!(
+            !body.contains("ssl::enable_ssl_for_site("),
+            "expose_domain must call ssl::enable_ssl_for_site_locked: it already holds the domain lock"
+        );
+        assert!(body.contains("ssl::enable_ssl_for_site_locked("));
+    }
+
     #[test]
     fn an_older_panel_that_sends_no_mode_keeps_the_address_rule() {
         // Presence, not content: exactly what the inference did before.
