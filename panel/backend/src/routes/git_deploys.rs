@@ -1319,6 +1319,28 @@ pub async fn remove(
         standing.push(name.clone());
     }
 
+    // A compose-backed deploy (#123 item 4) is not what `/git/cleanup` addresses:
+    // that call names `dockpanel-git-{name}`, while the compose engine named every
+    // container, the stack network and the vhost after the stack id (this row's
+    // id). Without this the row and the domain claim went away and the containers
+    // kept running, holding their ports, with nothing in the panel able to find
+    // them. The agent proves ownership of the vhost before removing it. "No
+    // containers found" is the normal answer for every non-compose deploy, so it
+    // is not a failure; anything else is, and blocks the delete like the calls
+    // above, so the row stays until the server confirms.
+    if let Err(e) = agent
+        .post(
+            "/apps/stack/action",
+            Some(compose_teardown_body(id, domain.as_deref())),
+        )
+        .await
+    {
+        if !is_no_stack_containers(&e) {
+            tracing::warn!("Failed to tear down compose stack of git deploy {name}: {e}");
+            standing.push(format!("{name} (compose stack)"));
+        }
+    }
+
     // REFUSE, and name what is still up. The cascade below is the last moment
     // anything knows these containers exist: `git_previews` rows go with the
     // parent, so deleting anyway leaves containers running, holding their ports
@@ -3280,6 +3302,25 @@ fn compose_deploy_body(
     body
 }
 
+/// Body for the agent's `POST /apps/stack/action` that removes the compose
+/// stack a Git Deploy created. The stack id is the deploy's own id (what
+/// `/apps/compose/deploy` was given as `stack_id`), and the domain lets the agent
+/// take the vhost and certificates down with it.
+fn compose_teardown_body(id: Uuid, domain: Option<&str>) -> serde_json::Value {
+    let mut body = serde_json::json!({ "stack_id": id.to_string(), "action": "remove" });
+    if let Some(d) = domain.filter(|d| !d.trim().is_empty()) {
+        body["domain"] = serde_json::json!(d);
+    }
+    body
+}
+
+/// The agent's answer when no container carries the stack id: a deploy that never
+/// ran (or never was) compose. Matched on the agent's own wording AND the 404, so
+/// an agent too old to have the route (also a 404) still counts as a failure.
+fn is_no_stack_containers(e: &crate::services::agent::AgentError) -> bool {
+    matches!(e, crate::services::agent::AgentError::Status(404, m) if m.contains("No containers found for this stack"))
+}
+
 /// The agent's note that the domain could not be put in front of the stack
 /// (no running service, certificate refused). The stack itself is up, so this
 /// is a warning, not a failed deploy.
@@ -4868,9 +4909,30 @@ pub async fn reject_deploy(
 #[cfg(test)]
 mod tests {
     use super::{
-        compose_deploy_body, DeployBody, blank_to_none, build_deploy_body, env_object, is_valid_cron,
+        compose_deploy_body, compose_teardown_body, is_no_stack_containers, DeployBody, blank_to_none, build_deploy_body, env_object, is_valid_cron,
         mask_repo_credentials, preview_cleanup_target, strip_container_prefix,
     };
+
+    #[test]
+    fn deleting_a_compose_git_deploy_addresses_the_stack_by_its_id() {
+        let id = uuid::Uuid::nil();
+        let b = compose_teardown_body(id, Some("app.example.org"));
+        assert_eq!(b["stack_id"], id.to_string());
+        assert_eq!(b["action"], "remove");
+        assert_eq!(b["domain"], "app.example.org");
+        assert!(compose_teardown_body(id, Some(" ")).get("domain").is_none());
+        assert!(compose_teardown_body(id, None).get("domain").is_none());
+    }
+
+    #[test]
+    fn only_the_agents_no_containers_answer_counts_as_nothing_to_remove() {
+        use crate::services::agent::AgentError;
+        assert!(is_no_stack_containers(&AgentError::Status(404, "{\"error\":\"No containers found for this stack\"}".into())));
+        // an agent without the route, a timeout and a 500 are all real failures
+        assert!(!is_no_stack_containers(&AgentError::Status(404, "Not Found".into())));
+        assert!(!is_no_stack_containers(&AgentError::Status(500, "No containers found for this stack".into())));
+        assert!(!is_no_stack_containers(&AgentError::Request("timed out".into())));
+    }
 
     #[test]
     fn compose_deploy_carries_the_domain_and_tls_the_operator_typed() {

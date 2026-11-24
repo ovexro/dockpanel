@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fix: deleting a Git Deploy that used a docker-compose.yml left its containers running (#123, item 4)
+
+The delete path only addressed `dockpanel-git-{name}`, which is not what the compose engine created: the
+row and the domain claim were removed while the stack's containers, its network and its vhost kept
+running with nothing in the panel able to find them. Delete now also asks the agent to remove the stack
+(keyed by the deploy's id) together with its domain, vhost and certificates. "No containers for this
+stack" is the normal answer for every other deploy and is ignored; any other failure keeps the row and
+reports what is still up, like the existing teardown calls. Still open from #123: removing the previous
+containers on redeploy, and rollback.
+
 ### Fix: a Docker app or compose stack with a domain and Let's Encrypt never finished deploying
 
 Found on a VPS test of #123. The agent's `expose_domain` holds the domain's lock for its whole run and,
