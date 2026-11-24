@@ -1,0 +1,17 @@
+# Cloudflare Pages: the same headers the old nginx.conf set (this file replaces it on Pages).
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+/index.html
+  Cache-Control: no-cache
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# The installer is piped into bash: never serve a stale copy, and say it is plain text.
+/install.sh
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: no-cache

@@ -1,0 +1,6 @@
+# Cloudflare Pages headers for docs.<domain> (mdBook output).
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
