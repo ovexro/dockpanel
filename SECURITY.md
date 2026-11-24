@@ -17,7 +17,7 @@ If you discover a security vulnerability in DockPanel, please report it responsi
 
 ### How to Report
 
-Send an email to **security@dockpanel.dev** with the following information:
+Send an email to **security@dockpanel.dev** (we answer through a private GitHub security advisory, so your reply never depends on a mailbox) with the following information:
 
 - A clear description of the vulnerability
 - Step-by-step reproduction instructions
