@@ -983,12 +983,27 @@ pub async fn enable_ssl_for_site(
     domain: &str,
     site_config: &SiteConfig,
 ) -> Result<crate::services::wordpress::CanonicalUrlOutcome, String> {
-    // Every caller (provision, upload_cert, renew, DNS-01, Docker-app auto-SSL,
-    // git-deploy auto-SSL) funnels through here — locking once here, rather than
-    // in each of the 6 callers, is what makes them all mutually exclusive on the
-    // same domain. See site_lock's module doc.
+    // Every caller (provision, upload_cert, renew, DNS-01, git-deploy auto-SSL)
+    // funnels through here — locking once here, rather than in each caller, is
+    // what makes them all mutually exclusive on the same domain. See
+    // site_lock's module doc.
     let _guard = crate::site_lock::lock_site(domain).await;
+    enable_ssl_for_site_locked(templates, domain, site_config).await
+}
 
+/// [`enable_ssl_for_site`] for a caller that ALREADY holds `lock_site(domain)`.
+///
+/// `tokio::sync::Mutex` is not reentrant: `routes::docker_apps::expose_domain`
+/// holds the domain's lock for its whole run and used to call the locking
+/// variant from inside it, which waited on itself forever. The certificate was
+/// issued, then the request never returned: no HTTPS vhost, the deploy stuck in
+/// "building", and the domain's lock held for good (#123 VPS test, 2026-11-24).
+/// Only a caller that holds the lock may use this one.
+pub(crate) async fn enable_ssl_for_site_locked(
+    templates: &Tera,
+    domain: &str,
+    site_config: &SiteConfig,
+) -> Result<crate::services::wordpress::CanonicalUrlOutcome, String> {
     let ssl_config = SiteConfig {
         runtime: site_config.runtime.clone(),
         root: site_config.root.clone(),

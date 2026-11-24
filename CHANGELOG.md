@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fix: a Docker app or compose stack with a domain and Let's Encrypt never finished deploying
+
+Found on a VPS test of #123. The agent's `expose_domain` holds the domain's lock for its whole run and,
+after the certificate was issued, called `enable_ssl_for_site`, which takes the same lock. The lock is
+not reentrant, so the request waited on itself: the certificate was issued, the vhost stayed on HTTP only
+(no `listen 443`), the deploy sat in "building" until the panel gave up after 11 minutes, and the
+domain's lock was never released until the agent restarted. The auto-SSL leg now calls a variant that
+expects the lock to be held (`enable_ssl_for_site_locked`); the public function is a thin wrapper. The
+bug dates from the lock audit in v2.231.0 and affected any Docker app or stack deployed with a domain
+and an SSL email. Verified on a fresh VPS: vhost with 443, trusted certificate, HTTP redirects to HTTPS,
+HTTPS 200, history "success".
+
 ### Fix: a Git Deploy with a docker-compose.yml ignored its Domain and SSL email (#123, item 1)
 
 The compose branch of a Git Deploy sent only the YAML to the agent, so the domain you typed was stored

@@ -598,7 +598,9 @@ async fn expose_domain(
     match ssl::load_or_create_account(email).await {
         Ok(account) => match ssl::provision_cert(&account, domain, None).await {
             Ok(_cert_info) => {
-                match ssl::enable_ssl_for_site(templates, domain, &site_config).await {
+                // `expose_domain` holds `lock_site(domain)` (top of this fn), so the
+                // locking `enable_ssl_for_site` would wait on itself forever.
+                match ssl::enable_ssl_for_site_locked(templates, domain, &site_config).await {
                     Ok(_) => {
                         response["ssl"] = serde_json::json!(true);
                         tracing::info!("Auto-SSL: certificate provisioned for {domain}");
