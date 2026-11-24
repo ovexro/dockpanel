@@ -2605,7 +2605,7 @@ fn spawn_deploy_task(
                 config.tls_certificate.as_deref(),
             )), 660).await
                 .map_err(|e| format!("{e}"))
-                .and_then(|r| { let w = compose_proxy_warning(&r); compose_outcome(r).map(|()| w) })
+                .and_then(compose_outcome)
             {
                 Ok(proxy_warning) => {
                     if let Some(w) = proxy_warning {
@@ -3361,7 +3361,8 @@ fn compose_proxy_warning(result: &serde_json::Value) -> Option<String> {
 /// services at all is indistinguishable from one too old to report them, and an
 /// empty observation is the one reading that cannot tell "nothing came up" from
 /// "I cannot see". Only `total > 0 && running == 0` is a fact.
-fn compose_outcome(deploy_result: serde_json::Value) -> Result<(), String> {
+fn compose_outcome(deploy_result: serde_json::Value) -> Result<Option<String>, String> {
+    let proxy_warning = compose_proxy_warning(&deploy_result);
     let (running, total, errors) = crate::routes::stacks::deployed_service_states(&deploy_result);
     if total > 0 && running == 0 {
         let detail = if errors.is_empty() {
@@ -3373,7 +3374,7 @@ fn compose_outcome(deploy_result: serde_json::Value) -> Result<(), String> {
             "no service in the compose file stayed running — {detail}"
         ));
     }
-    Ok(())
+    Ok(proxy_warning)
 }
 
 /// Refuse a compose file whose services name no image, rather than deploying
@@ -3782,7 +3783,7 @@ pub async fn trigger_deploy_task(
                 config.tls_certificate.as_deref(),
             )), 660).await
                 .map_err(|e| format!("{e}"))
-                .and_then(|r| { let w = compose_proxy_warning(&r); compose_outcome(r).map(|()| w) })
+                .and_then(compose_outcome)
             {
                 Ok(proxy_warning) => {
                     if let Some(w) = proxy_warning {
