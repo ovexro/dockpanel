@@ -76,7 +76,12 @@ is_exempt() {
 # files.rs guards its module with `#[cfg(all(test, unix))]`, and a pattern that
 # knows only one spelling silently lets that whole module back in — which is how
 # the three attack-target paths above reached this pin's output on its first run.
-code_of() { awk '/^#\[cfg\(.*\<test\>.*\)\]/ { exit } { print }' "$1"; }
+#
+# No `\<test\>` word boundaries: those are gawk-only. mawk (Debian's default awk)
+# reads them as literals, never matches, and the test module is never stripped,
+# so this pin failed on every Debian box and passed only where gawk happened to
+# be installed. Spell the boundary as a portable ERE instead.
+code_of() { awk '/^#\[cfg\((.*[^A-Za-z0-9_])?test([^A-Za-z0-9_].*)?\)\]/ { exit } { print }' "$1"; }
 
 echo "§1 the unit still declares a sandbox at all"
 

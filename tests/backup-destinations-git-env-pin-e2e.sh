@@ -219,7 +219,7 @@ DECRYPT_CALLERS=$(
   { countre "$BD_RS"    'agent_destination_payload\('
     countre "$BSCHED_RS" 'agent_destination_payload\('
     countre "$BPOL_RS"   'agent_destination_payload\('
-  } | paste -sd+ | bc
+  } | awk '{ s += $1 } END { print s + 0 }'
 )
 
 if [ "$DECRYPT_CALLERS" -ge 3 ]; then
