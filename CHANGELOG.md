@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.242.5]
+
+### Security: a DNS zone belongs to the administrator who added it
+
+Reported privately by a security researcher. Since v2.16.0 every DNS handler checked only that the
+caller was an administrator, and the zone lookup (`get_zone`) and the zone list no longer filtered on the
+owner. A second administrator could therefore list, read, change and delete another administrator's zones,
+and for a Cloudflare zone act through that administrator's stored API token. Every zone lookup now filters
+on the caller, and a zone that is not yours answers "DNS zone not found". On a single-administrator install
+nothing changes. SECURITY.md and the roles-and-ownership guide now state the rule instead of a blanket
+"all endpoints verify ownership", and a regression pin (`dns-zone-owner-pin-e2e.sh`) keeps every lookup scoped.
+
 ## [2.242.4]
 
 ### Fix: deleting a Git Deploy that used a docker-compose.yml left its containers running (#123, item 4)
