@@ -2574,14 +2574,24 @@ fn spawn_deploy_task(
                 return;
             }
 
-            match agent.post_long("/apps/compose/deploy", Some(serde_json::json!({
-                "yaml": yaml,
-                "stack_id": config.id.to_string(),
-            })), 660).await
+            match agent.post_long("/apps/compose/deploy", Some(compose_deploy_body(
+                yaml,
+                &config.id.to_string(),
+                config.domain.as_deref(),
+                effective_mode,
+                config.ssl_email.as_deref(),
+                config.tls_certificate.as_deref(),
+            )), 660).await
                 .map_err(|e| format!("{e}"))
-                .and_then(compose_outcome)
+                .and_then(|r| { let w = compose_proxy_warning(&r); compose_outcome(r).map(|()| w) })
             {
-                Ok(()) => {
+                Ok(proxy_warning) => {
+                    if let Some(w) = proxy_warning {
+                        tracing::warn!("Git deploy {deploy_name}: compose domain not fully served: {w}");
+                        notifications::notify_panel(&db, Some(user_id),
+                            &format!("Deploy warning: {} domain not fully served", deploy_name),
+                            &w, "warning", "deploy", Some("/git-deploys")).await;
+                    }
                     emit("compose", "Docker Compose deployed", "done", None);
                     emit("complete", "Deploy complete (Compose)", "done", None);
 
@@ -3242,6 +3252,41 @@ fn spawn_deploy_task(
     });
 }
 
+/// Body for the agent's `POST /apps/compose/deploy` from a Git Deploy (#123
+/// item 1). The compose branch used to send only `yaml` + `stack_id`, so the
+/// Domain and SSL-email the operator typed were stored, displayed and inert:
+/// no vhost, no certificate. Same blank-is-absent and mode rules as
+/// [`build_deploy_body`]; the agent picks the port (first published one) and
+/// refuses a stack that publishes none before any container runs.
+fn compose_deploy_body(
+    yaml: &str,
+    stack_id: &str,
+    domain: Option<&str>,
+    effective_mode: &str,
+    ssl_email: Option<&str>,
+    tls_certificate: Option<&str>,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({ "yaml": yaml, "stack_id": stack_id });
+    if let Some(d) = domain.filter(|d| !d.trim().is_empty()) {
+        body["domain"] = serde_json::json!(d);
+        body["tls_mode"] = serde_json::json!(effective_mode);
+        if let Some(e) = deploy_tls_email(effective_mode, ssl_email).filter(|e| !e.trim().is_empty()) {
+            body["ssl_email"] = serde_json::json!(e);
+        }
+        if let Some(a) = tls_certificate {
+            body["tls_certificate"] = serde_json::json!(a);
+        }
+    }
+    body
+}
+
+/// The agent's note that the domain could not be put in front of the stack
+/// (no running service, certificate refused). The stack itself is up, so this
+/// is a warning, not a failed deploy.
+fn compose_proxy_warning(result: &serde_json::Value) -> Option<String> {
+    result.get("proxy_warning").and_then(|v| v.as_str()).map(str::to_string)
+}
+
 /// Mask github_token in API responses — show "●●●●●●●●" if set.
 /// Everything a Compose document must satisfy before a git deploy hands it to
 /// an agent, in one place because there are two callers and they had neither.
@@ -3687,13 +3732,24 @@ pub async fn trigger_deploy_task(
                 }
                 return;
             }
-            match agent.post_long("/apps/compose/deploy", Some(serde_json::json!({
-                "yaml": yaml, "stack_id": config.id.to_string(),
-            })), 660).await
+            match agent.post_long("/apps/compose/deploy", Some(compose_deploy_body(
+                yaml,
+                &config.id.to_string(),
+                config.domain.as_deref(),
+                effective_mode,
+                config.ssl_email.as_deref(),
+                config.tls_certificate.as_deref(),
+            )), 660).await
                 .map_err(|e| format!("{e}"))
-                .and_then(compose_outcome)
+                .and_then(|r| { let w = compose_proxy_warning(&r); compose_outcome(r).map(|()| w) })
             {
-                Ok(()) => {
+                Ok(proxy_warning) => {
+                    if let Some(w) = proxy_warning {
+                        tracing::warn!("Deploy (compose/{}): {}: domain not fully served: {w}", triggered_by, config.name);
+                        notifications::notify_panel(&db, Some(user_id),
+                            &format!("Deploy warning: {} domain not fully served", config.name),
+                            &w, "warning", "deploy", Some("/git-deploys")).await;
+                    }
                     let duration_ms = started.elapsed().as_millis() as i32;
                     if let Err(db_err) = sqlx::query("INSERT INTO git_deploy_history (git_deploy_id, commit_hash, commit_message, image_tag, status, output, triggered_by, duration_ms) VALUES ($1, $2, $3, 'compose', 'success', 'Deployed via Docker Compose', $4, $5)")
                         .bind(git_deploy_id).bind(&commit_hash).bind(&commit_message).bind(&triggered_by).bind(duration_ms)
@@ -4812,9 +4868,26 @@ pub async fn reject_deploy(
 #[cfg(test)]
 mod tests {
     use super::{
-        DeployBody, blank_to_none, build_deploy_body, env_object, is_valid_cron,
+        compose_deploy_body, DeployBody, blank_to_none, build_deploy_body, env_object, is_valid_cron,
         mask_repo_credentials, preview_cleanup_target, strip_container_prefix,
     };
+
+    #[test]
+    fn compose_deploy_carries_the_domain_and_tls_the_operator_typed() {
+        let b = compose_deploy_body("y", "id1", Some("app.example.org"), "acme", Some("a@b.org"), None);
+        assert_eq!(b["domain"], "app.example.org");
+        assert_eq!(b["tls_mode"], "acme");
+        assert_eq!(b["ssl_email"], "a@b.org");
+        // provided mode never forwards the ACME address, and names the alias
+        let p = compose_deploy_body("y", "id1", Some("app.example.org"), "provided", Some("a@b.org"), Some("wild"));
+        assert!(p.get("ssl_email").is_none());
+        assert_eq!(p["tls_certificate"], "wild");
+        // no domain, or a blank one: exactly the old body
+        for d in [None, Some(""), Some("  ")] {
+            let n = compose_deploy_body("y", "id1", d, "none", Some("a@b.org"), None);
+            assert!(n.get("domain").is_none() && n.get("tls_mode").is_none() && n.get("ssl_email").is_none());
+        }
+    }
 
     #[test]
     fn an_embedded_credential_never_reaches_a_reader_who_does_not_own_it() {

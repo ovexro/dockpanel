@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fix: a Git Deploy with a docker-compose.yml ignored its Domain and SSL email (#123, item 1)
+
+The compose branch of a Git Deploy sent only the YAML to the agent, so the domain you typed was stored
+and shown but never served: no nginx vhost, no certificate. It now sends the domain and the TLS mode
+(Let's Encrypt, registered certificate or none) the same way the single-container path does, on
+manual, webhook and scheduled deploys. The agent proxies to the first published port and refuses a
+stack that publishes none before any container starts. If the stack runs but the domain could not be
+put in front of it, you get a panel notification instead of silence. Still open from #123: removing the
+previous containers on redeploy, rollback, and cleanup when such a deploy is deleted.
+
 ### Fix: the panel accepted `example.com` as a certificate contact, Let's Encrypt does not
 
 Found on a fresh VPS test: a panel registered as `admin@example.com` had every certificate order refused
