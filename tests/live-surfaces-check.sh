@@ -532,7 +532,9 @@ echo "── 7. Class C — the docs site serves this version's evidence page �
 # and the docs site has no deploy step at all, so "correct in source" and "live"
 # are entirely independent facts.
 VERSION=$(grep -m1 '^version = ' panel/backend/Cargo.toml | sed -e 's/.*"\(.*\)".*/\1/')
-if page=$("${CURL[@]}" "$DOCS/testing.html" 2>/dev/null); then
+# -L: the docs host answers /testing.html with a 308 to /testing (clean URLs).
+# Without it the 308 body is empty and a STALE page was reported as "stamp lost".
+if page=$("${CURL[@]}" -L "$DOCS/testing.html" 2>/dev/null); then
   live_stamp=$(grep -oE 'Reflects v[0-9]+\.[0-9]+\.[0-9]+' <<<"$page" | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
   if [ -z "$live_stamp" ]; then
     bad "$DOCS/testing.html carries no 'Reflects vX.Y.Z' stamp — the published page lost the marker this check reads"
