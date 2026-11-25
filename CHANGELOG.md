@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.242.6]
+
 ### Git Deploys: extra nginx directives and an upload limit per domain (#132)
 
 A Git Deploy now has "Upload limit (MB)" and "Extra nginx directives" next to its other settings. They
