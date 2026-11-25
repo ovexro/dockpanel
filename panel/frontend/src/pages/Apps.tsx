@@ -1451,6 +1451,12 @@ volumes:
   const standaloneApps = apps.filter(a => !a.stack_id);
   const filteredApps = standaloneApps.filter(a => !tagFilter || appTags[a.container_id] === tagFilter);
 
+  // Template gallery search (name, description, category)
+  const templateNeedle = searchQuery.trim().toLowerCase();
+  const visibleTemplates = templateNeedle
+    ? templates.filter(t => [t.name, t.description, t.category].some(v => v.toLowerCase().includes(templateNeedle)))
+    : templates;
+
   // Crashed apps detection (Feature #10)
   //
   // A container the panel itself stopped is not a crash. Calling it one was
@@ -2267,10 +2273,11 @@ volumes:
         </h2>
         <div className="relative w-full sm:w-72">
           <input
-            type="text"
+            type="search"
+            aria-label="Search app templates"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search templates & apps..."
+            placeholder="Search templates..."
             className="w-full px-3.5 py-1.5 pl-9 text-sm bg-dark-800 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:border-accent-500 transition-colors"
           />
           <svg className="w-4 h-4 text-dark-400 absolute left-3 top-2.5 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -2298,7 +2305,15 @@ volumes:
               <p className="text-dark-300 text-xs mt-1">Check that the agent is running and accessible</p>
             </div>
           )}
-          {templates.filter(t => !searchQuery || t.name.toLowerCase().includes(searchQuery.toLowerCase()) || t.description.toLowerCase().includes(searchQuery.toLowerCase()) || t.category.toLowerCase().includes(searchQuery.toLowerCase())).map((tmpl) => (
+          {templates.length > 0 && visibleTemplates.length === 0 && (
+            <div className="col-span-full py-12 text-center">
+              <p className="text-dark-300 font-medium">No templates match "{searchQuery.trim()}"</p>
+              <button type="button" onClick={() => setSearchQuery("")} className="text-accent-400 text-xs mt-2 hover:underline">
+                Clear search
+              </button>
+            </div>
+          )}
+          {visibleTemplates.map((tmpl) => (
             <button
               key={tmpl.id}
               onClick={() => openDeploy(tmpl)}

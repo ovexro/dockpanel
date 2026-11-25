@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Docker Apps: search the template catalog (#141)
+
+The App Templates gallery on the Docker Apps page has a search box that filters by name, description
+and category as you type. Contributed by @bliyscom.
+
 ## [2.242.6]
 
 ### Git Deploys: extra nginx directives and an upload limit per domain (#132)
