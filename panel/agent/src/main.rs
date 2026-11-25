@@ -74,6 +74,7 @@ async fn main() {
     std::fs::create_dir_all("/var/backups/dockpanel").ok();
     std::fs::create_dir_all("/var/backups/dockpanel/databases").ok();
     std::fs::create_dir_all("/var/backups/dockpanel/volumes").ok();
+    std::fs::create_dir_all("/var/backups/dockpanel/nginx-vhosts").ok();
 
     // The backup tree is root-only, and this repairs what is already on disk.
     // `create_dir_all` above made these 0755 and every writer's redirect made
