@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Git Deploys: extra nginx directives and an upload limit per domain (#132)
+
+A Git Deploy now has "Upload limit (MB)" and "Extra nginx directives" next to its other settings. They
+are applied to the live vhost the moment you save (`nginx -t` first; if nginx refuses them the previous
+vhost is restored and nothing is saved) and are kept across every later rewrite of that vhost:
+certificate renewal, switching TLS mode, a redeploy, a blue-green update or a rollback. They are stored
+beside the vhost on the server and removed together with it. Directives go through the same checks as a
+site's custom directives; `client_max_body_size` is set with the upload limit instead. Pin:
+`tests/git-deploy-custom-nginx-pin-e2e.sh`.
+
 ### Git Deploys: deploy history can be limited (#132)
 
 Every Git Deploy kept its whole deploy history for ever; nothing deleted it. A Git Deploy now has a

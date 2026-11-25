@@ -714,6 +714,198 @@ fn is_safe_php_socket(socket: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "/-_.".contains(c))
 }
 
+/// Per-domain additions a Git Deploy keeps across every re-render of its vhost
+/// (#132): extra nginx directives and an upload limit.
+///
+/// A Git Deploy's vhost is rewritten from many places that know nothing about
+/// these fields (certificate renewal, a TLS switch, a recreate, a rollback), and
+/// a blue-green update only swaps the port in the live file. Keeping the values
+/// beside the vhost, keyed by domain, is what lets all of them preserve the
+/// operator's choice without each call site having to carry it.
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct VhostExtras {
+    #[serde(default)]
+    pub custom_nginx: Option<String>,
+    #[serde(default)]
+    pub max_upload_mb: Option<u32>,
+}
+
+impl VhostExtras {
+    fn normalised(self) -> Self {
+        VhostExtras {
+            custom_nginx: self.custom_nginx.filter(|c| !c.trim().is_empty()),
+            max_upload_mb: self.max_upload_mb,
+        }
+    }
+    fn is_empty(&self) -> bool {
+        self.custom_nginx.is_none() && self.max_upload_mb.is_none()
+    }
+}
+
+const EXTRAS_DIR: &str = "/etc/dockpanel/vhost-extras";
+
+fn extras_path(domain: &str) -> Option<String> {
+    // The domain becomes a file name: refuse anything that is not one.
+    let ok = !domain.is_empty()
+        && domain.len() <= 253
+        && !domain.contains("..")
+        && domain.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    ok.then(|| format!("{EXTRAS_DIR}/{domain}.json"))
+}
+
+pub fn load_extras(domain: &str) -> VhostExtras {
+    extras_path(domain)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<VhostExtras>(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Validate and store (or, when empty, remove) a domain's extras.
+pub fn save_extras(domain: &str, extras: VhostExtras) -> Result<VhostExtras, String> {
+    let extras = extras.normalised();
+    if let Some(ref c) = extras.custom_nginx {
+        validate_custom_nginx(c)?;
+    }
+    if let Some(mb) = extras.max_upload_mb {
+        if !(1..=10_240).contains(&mb) {
+            return Err("Upload limit must be between 1 and 10240 MB".into());
+        }
+    }
+    let path = extras_path(domain).ok_or("Invalid domain")?;
+    if extras.is_empty() {
+        std::fs::remove_file(&path).ok();
+        return Ok(extras);
+    }
+    std::fs::create_dir_all(EXTRAS_DIR).map_err(|e| format!("Failed to create {EXTRAS_DIR}: {e}"))?;
+    let tmp = format!("{path}.tmp");
+    let body = serde_json::to_string(&extras).map_err(|e| e.to_string())?;
+    std::fs::write(&tmp, body)
+        .and_then(|_| std::fs::rename(&tmp, &path))
+        .map_err(|e| {
+            std::fs::remove_file(&tmp).ok();
+            format!("Failed to store vhost extras: {e}")
+        })?;
+    Ok(extras)
+}
+
+pub fn remove_extras(domain: &str) {
+    if let Some(p) = extras_path(domain) {
+        std::fs::remove_file(p).ok();
+    }
+}
+
+const CUSTOM_BEGIN: &str = "    # Custom directives";
+const CUSTOM_END: &str = "    # End custom directives";
+
+/// `body` with `extras` applied in place: the upload limit rewritten, and the
+/// custom block replaced (or removed, or inserted above the access log).
+/// `None` when the body is not a vhost this can patch.
+pub fn patch_vhost_extras(body: &str, domain: &str, extras: &VhostExtras) -> Option<String> {
+    let access = format!("    access_log /var/log/nginx/{domain}.access.log;");
+    let lines: Vec<&str> = body.lines().collect();
+    let acc_idx = lines.iter().rposition(|l| l.trim_end() == access)?;
+
+    // Drop an existing custom block (markers, or the older marker-less form
+    // that ran up to the blank line before the access log).
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 8);
+    let mut i = 0;
+    while i < lines.len() {
+        if i < acc_idx && lines[i].trim_end() == CUSTOM_BEGIN {
+            let mut j = i + 1;
+            while j < acc_idx && lines[j].trim_end() != CUSTOM_END {
+                j += 1;
+            }
+            i = if j < acc_idx { j + 1 } else { acc_idx };
+            // the blank separator that followed the block goes with it
+            if i < acc_idx && lines[i].trim().is_empty() {
+                i += 1;
+            }
+            continue;
+        }
+        if i == acc_idx {
+            if let Some(ref c) = extras.custom_nginx {
+                out.push(CUSTOM_BEGIN.to_string());
+                for l in c.lines() {
+                    out.push(l.to_string());
+                }
+                out.push(CUSTOM_END.to_string());
+                out.push(String::new());
+            }
+        }
+        out.push(lines[i].to_string());
+        i += 1;
+    }
+    let mut text = out.join("\n");
+    if body.ends_with('\n') {
+        text.push('\n');
+    }
+
+    {
+        // Cleared means back to the template default, not "leave whatever the
+        // last save wrote" (proved on a VPS: 700m stayed after clearing).
+        let want = format!("client_max_body_size {}m;", extras.max_upload_mb.unwrap_or(64));
+        text = text
+            .lines()
+            .map(|l| {
+                if l.trim_start().starts_with("client_max_body_size ") {
+                    let indent = &l[..l.len() - l.trim_start().len()];
+                    format!("{indent}{want}")
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + if body.ends_with('\n') { "\n" } else { "" };
+    }
+    Some(text)
+}
+
+/// Apply a domain's stored extras to its LIVE vhost: patch in place, `nginx -t`,
+/// reload; restore the previous file when the test fails. A site the operator
+/// took offline gets its parked body patched and nginx left alone.
+pub async fn apply_vhost_extras(domain: &str) -> Result<(), String> {
+    let _guard = crate::site_lock::lock_site(domain).await;
+    let extras = load_extras(domain);
+    let target = vhost_target(domain);
+    let config_path = target.path().to_string();
+    let previous = std::fs::read_to_string(&config_path)
+        .map_err(|_| format!("No nginx configuration for {domain} yet"))?;
+    let patched = patch_vhost_extras(&previous, domain, &extras)
+        .ok_or_else(|| format!("The nginx configuration for {domain} cannot be patched"))?;
+    if patched == previous {
+        return Ok(());
+    }
+    let tmp = format!("{config_path}.tmp");
+    std::fs::write(&tmp, &patched)
+        .and_then(|_| std::fs::rename(&tmp, &config_path))
+        .map_err(|e| {
+            std::fs::remove_file(&tmp).ok();
+            format!("Failed to write nginx config: {e}")
+        })?;
+    if !target.is_live() {
+        return Ok(());
+    }
+    match test_config().await {
+        Ok(out) if out.success => {
+            reload().await.map_err(|e| format!("nginx reload failed: {e}"))?;
+            Ok(())
+        }
+        Ok(out) => {
+            let restored = restore_or_remove(&config_path, Some(&previous));
+            Err(format!(
+                "nginx rejected the new directives: {}{}",
+                out.stderr.trim(),
+                restore_note(restored)
+            ))
+        }
+        Err(e) => {
+            let restored = restore_or_remove(&config_path, Some(&previous));
+            Err(format!("nginx test failed: {e}{}", restore_note(restored)))
+        }
+    }
+}
+
 /// Render the appropriate nginx config for a site.
 pub fn render_site_config(
     templates: &Tera,
@@ -751,14 +943,18 @@ pub fn render_site_config(
     // Resource limits
     let rate_limit = config.rate_limit.unwrap_or(0);
     ctx.insert("rate_limit", &rate_limit);
-    let max_upload_mb = config.max_upload_mb.unwrap_or(64);
+    // A Git Deploy's stored additions fill in what the caller did not name, so
+    // every re-render of its vhost keeps them (see `VhostExtras`).
+    let extras = load_extras(domain);
+    let max_upload_mb = config.max_upload_mb.or(extras.max_upload_mb).unwrap_or(64);
     ctx.insert("max_upload_mb", &max_upload_mb);
 
     // Custom nginx directives — validate before inserting
-    if let Some(ref custom) = config.custom_nginx {
+    let custom_nginx = config.custom_nginx.clone().or(extras.custom_nginx);
+    if let Some(ref custom) = custom_nginx {
         validate_custom_nginx(custom).map_err(tera::Error::msg)?;
     }
-    ctx.insert("custom_nginx", &config.custom_nginx.as_deref().unwrap_or(""));
+    ctx.insert("custom_nginx", &custom_nginx.as_deref().unwrap_or(""));
 
     // FastCGI cache (PHP sites only)
     let fastcgi_cache = config.fastcgi_cache.unwrap_or(false) && config.runtime == "php";
@@ -1181,6 +1377,76 @@ mod tests {
         // A proxy vhost has no static index line; nothing to key on, nothing to do.
         let proxy = "server {\n    location / {\n        proxy_pass http://127.0.0.1:3000;\n    }\n}\n";
         assert!(patch_static_vhost(proxy).is_none());
+    }
+
+    // ── Git Deploy vhost extras (#132) ──────────────────────────────────
+
+    const VHOST: &str = "server {\n    server_name a.example.com;\n    client_max_body_size 64m;\n\n    gzip on;\n\n{BLOCK}    access_log /var/log/nginx/a.example.com.access.log;\n    error_log /var/log/nginx/a.example.com.error.log;\n}\n";
+
+    fn vhost(block: &str) -> String {
+        VHOST.replace("{BLOCK}", block)
+    }
+
+    #[test]
+    fn extras_insert_replace_remove_roundtrip() {
+        let none = VhostExtras::default();
+        let base = vhost("");
+        assert_eq!(patch_vhost_extras(&base, "a.example.com", &none).unwrap(), base);
+
+        let with = VhostExtras {
+            custom_nginx: Some("proxy_read_timeout 120s;\nadd_header X-A 1;".into()),
+            max_upload_mb: Some(512),
+        };
+        let p1 = patch_vhost_extras(&base, "a.example.com", &with).unwrap();
+        assert!(p1.contains("    # Custom directives\nproxy_read_timeout 120s;\nadd_header X-A 1;\n    # End custom directives\n"));
+        assert!(p1.contains("client_max_body_size 512m;"));
+        assert!(!p1.contains("client_max_body_size 64m;"));
+        // idempotent
+        assert_eq!(patch_vhost_extras(&p1, "a.example.com", &with).unwrap(), p1);
+        // replace
+        let other = VhostExtras { custom_nginx: Some("expires 1d;".into()), max_upload_mb: Some(512) };
+        let p2 = patch_vhost_extras(&p1, "a.example.com", &other).unwrap();
+        assert!(p2.contains("expires 1d;") && !p2.contains("proxy_read_timeout"));
+        assert_eq!(p2.matches("# Custom directives").count(), 1);
+        // remove: custom gone, the upload limit back to the template default
+        let off = VhostExtras { custom_nginx: None, max_upload_mb: None };
+        let p3 = patch_vhost_extras(&p2, "a.example.com", &off).unwrap();
+        assert!(!p3.contains("Custom directives") && !p3.contains("expires 1d"));
+        assert!(p3.contains("client_max_body_size 64m;") && !p3.contains("512m"));
+        assert_eq!(p3, base);
+        assert!(p3.contains("access_log /var/log/nginx/a.example.com.access.log;"));
+    }
+
+    #[test]
+    fn extras_patch_handles_the_marker_less_block_older_vhosts_carry() {
+        let old = vhost("    # Custom directives\nexpires 1d;\n\n");
+        let off = patch_vhost_extras(&old, "a.example.com", &VhostExtras::default()).unwrap();
+        assert!(!off.contains("expires 1d") && !off.contains("Custom directives"));
+        let on = VhostExtras { custom_nginx: Some("expires 2d;".into()), max_upload_mb: None };
+        let p = patch_vhost_extras(&old, "a.example.com", &on).unwrap();
+        assert!(p.contains("expires 2d;") && !p.contains("expires 1d"));
+        assert!(p.contains("client_max_body_size 64m;"));
+    }
+
+    #[test]
+    fn extras_patch_refuses_a_body_without_the_access_log() {
+        assert!(patch_vhost_extras("server {}\n", "a.example.com", &VhostExtras::default()).is_none());
+    }
+
+    #[test]
+    fn extras_path_refuses_anything_but_a_domain() {
+        assert!(extras_path("a.example.com").is_some());
+        assert!(extras_path("../etc/passwd").is_none());
+        assert!(extras_path("a/b").is_none());
+        assert!(extras_path("").is_none());
+    }
+
+    #[test]
+    fn extras_validation_is_the_sites_validation() {
+        let bad = VhostExtras { custom_nginx: Some("return 301 /x;".into()), max_upload_mb: None };
+        assert!(save_extras("a.example.com", bad).is_err());
+        let big = VhostExtras { custom_nginx: None, max_upload_mb: Some(0) };
+        assert!(save_extras("a.example.com", big).is_err());
     }
 
     // ── custom_nginx per-statement validation — s241 C2 ─────────────────

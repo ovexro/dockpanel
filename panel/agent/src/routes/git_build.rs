@@ -207,6 +207,24 @@ struct DeployRequest {
     /// `#[serde(default)]` here — an old panel simply never declares volumes.
     #[serde(default)]
     volumes: Vec<String>,
+    /// Extra nginx directives and an upload limit for this deploy's vhost (#132).
+    /// Stored beside the vhost (`nginx::VhostExtras`) so every later re-render
+    /// keeps them. Absent = none, which also clears what an earlier deploy stored.
+    #[serde(default)]
+    custom_nginx: Option<String>,
+    #[serde(default)]
+    max_upload_mb: Option<u32>,
+}
+
+/// POST /git/vhost-extras — store a deploy's nginx additions and apply them to
+/// the live vhost now, without a redeploy.
+#[derive(Deserialize)]
+struct VhostExtrasRequest {
+    domain: String,
+    #[serde(default)]
+    custom_nginx: Option<String>,
+    #[serde(default)]
+    max_upload_mb: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -374,6 +392,22 @@ async fn deploy_container(
         ));
     }
 
+    // Validated and stored BEFORE anything runs, so a refused directive fails the
+    // request with nothing done. Deployments only: a preview's domain is derived
+    // from a branch name and carries none of the operator's additions.
+    let extras_domain = body
+        .domain
+        .as_deref()
+        .filter(|d| !d.is_empty() && scope == ownership::GitScope::Deploy);
+    if let Some(d) = extras_domain {
+        let extras = crate::services::nginx::VhostExtras {
+            custom_nginx: body.custom_nginx.clone(),
+            max_upload_mb: body.max_upload_mb,
+        };
+        crate::services::nginx::save_extras(d, extras)
+            .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+    }
+
     let name = scope.scoped(&body.name);
 
     // Decide the TLS shape BEFORE anything runs — mirrors
@@ -413,6 +447,14 @@ async fn deploy_container(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
 
+    // A blue-green update swaps the port in the live file without rendering it,
+    // so the stored additions are applied to the vhost explicitly. Idempotent:
+    // nothing is written when the vhost already carries them.
+    let extras_warning = match extras_domain {
+        Some(d) => crate::services::nginx::apply_vhost_extras(d).await.err(),
+        None => None,
+    };
+
     let mut response = serde_json::json!({
         "container_id": result.container_id,
         "blue_green": result.blue_green,
@@ -434,6 +476,9 @@ async fn deploy_container(
     if let Some(ref alias) = result.tls_certificate {
         response["tls_certificate"] = serde_json::json!(alias);
     }
+    if let Some(ref w) = extras_warning {
+        response["proxy_warning"] = serde_json::json!(w);
+    }
     if let Some(ref warning) = result.tls_warning {
         response["proxy_warning"] = serde_json::json!(warning);
         // Only a refused REGISTERED certificate is the outage this feature
@@ -447,6 +492,36 @@ async fn deploy_container(
     }
 
     Ok(Json(response))
+}
+
+/// POST /git/vhost-extras — see [`VhostExtrasRequest`].
+async fn vhost_extras(
+    Json(body): Json<VhostExtrasRequest>,
+) -> Result<Json<serde_json::Value>, ApiErr> {
+    if body.domain.is_empty() || !is_safe_nginx_domain(&body.domain) {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid domain"));
+    }
+    let before = crate::services::nginx::load_extras(&body.domain);
+    crate::services::nginx::save_extras(
+        &body.domain,
+        crate::services::nginx::VhostExtras {
+            custom_nginx: body.custom_nginx,
+            max_upload_mb: body.max_upload_mb,
+        },
+    )
+    .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
+    // Nothing deployed under this name yet: the stored values wait for the first
+    // render, which reads them.
+    let vhost = format!("{}/{}.conf", crate::services::nginx::sites_dir(), body.domain);
+    if std::path::Path::new(&vhost).exists() {
+        if let Err(e) = crate::services::nginx::apply_vhost_extras(&body.domain).await {
+            // The vhost kept its previous body; the stored values must agree
+            // with it or the next re-render would reintroduce the refused ones.
+            crate::services::nginx::save_extras(&body.domain, before).ok();
+            return Err(err(StatusCode::BAD_REQUEST, &e));
+        }
+    }
+    Ok(Json(serde_json::json!({ "success": true })))
 }
 
 /// POST /git/keygen — Generate SSH deploy key.
@@ -772,6 +847,7 @@ pub fn router() -> Router<AppState> {
         .route("/git/keygen", post(keygen))
         .route("/git/cleanup", post(cleanup))
         .route("/git/release-domain", post(release_domain))
+        .route("/git/vhost-extras", post(vhost_extras))
         .route("/git/prune", post(prune))
         .route("/git/stop", post(stop_container))
         .route("/git/start", post(start_container))

@@ -46,7 +46,7 @@ const GIT_DEPLOY_SELECT: &str = "SELECT d.id, d.user_id, d.server_id, d.name, d.
     d.container_id, d.image_tag, d.status, d.memory_mb, d.cpu_percent, d.ssl_email, \
     d.pre_build_cmd, d.post_deploy_cmd, d.build_args, d.build_context, d.last_deploy, \
     d.last_commit, d.created_at, d.updated_at, d.github_token, d.deploy_cron, \
-    d.deploy_protected, d.build_method, d.preview_ttl_hours, d.history_retention, d.scheduled_deploy_at, \
+    d.deploy_protected, d.build_method, d.preview_ttl_hours, d.history_retention, d.custom_nginx, d.max_upload_mb, d.scheduled_deploy_at, \
     d.tls_mode, d.tls_certificate_id, d.volumes, c.alias AS tls_certificate \
     FROM git_deploys d LEFT JOIN tls_certificates c ON c.id = d.tls_certificate_id";
 
@@ -206,6 +206,10 @@ pub struct GitDeploy {
     pub preview_ttl_hours: i32,
     /// Deploy-history rows kept for this deploy; 0 keeps everything.
     pub history_retention: i32,
+    /// Extra nginx directives for this deploy's vhost; None = none.
+    pub custom_nginx: Option<String>,
+    /// Upload limit in MB; None = the panel default.
+    pub max_upload_mb: Option<i32>,
     pub scheduled_deploy_at: Option<chrono::DateTime<chrono::Utc>>,
     /// How the domain is served, as stored. NULL on a row an older binary
     /// wrote; read through `effective_tls_mode`, never directly.
@@ -270,6 +274,10 @@ pub(crate) struct DeployBody<'a> {
     /// are withheld there too, and the agent's `deploy_container` route refuses
     /// a non-empty list for any scope but `"deploy"` as the actual boundary.
     pub volumes: &'a [String],
+    /// Stored beside the vhost by the agent so every re-render keeps them (#132).
+    /// Always None for a preview.
+    pub custom_nginx: Option<&'a str>,
+    pub max_upload_mb: Option<i32>,
 }
 
 /// The address the agent is handed for THIS deploy. Only an ACME order needs
@@ -416,6 +424,12 @@ pub(crate) fn build_deploy_body(b: DeployBody<'_>) -> serde_json::Value {
     if let Some(email) = b.ssl_email.filter(|e| !e.trim().is_empty()) {
         body["ssl_email"] = serde_json::json!(email);
     }
+    if let Some(c) = b.custom_nginx.filter(|c| !c.trim().is_empty()) {
+        body["custom_nginx"] = serde_json::json!(c);
+    }
+    if let Some(mb) = b.max_upload_mb.filter(|mb| *mb > 0) {
+        body["max_upload_mb"] = serde_json::json!(mb);
+    }
     if let Some(mode) = b.tls_mode {
         body["tls_mode"] = serde_json::json!(mode);
     }
@@ -466,6 +480,8 @@ pub struct CreateRequest {
     pub deploy_protected: Option<bool>,
     pub preview_ttl_hours: Option<i32>,
     pub history_retention: Option<i32>,
+    pub custom_nginx: Option<String>,
+    pub max_upload_mb: Option<i32>,
     pub volumes: Option<Vec<String>>,
 }
 
@@ -495,6 +511,10 @@ pub struct UpdateRequest {
     pub deploy_protected: Option<bool>,
     pub preview_ttl_hours: Option<i32>,
     pub history_retention: Option<i32>,
+    /// Absent keeps the stored value; "" clears it.
+    pub custom_nginx: Option<String>,
+    /// Absent keeps the stored value; 0 clears it.
+    pub max_upload_mb: Option<i32>,
     /// Absent means keep the stored list. The frontend always sends the full
     /// current list (including `[]` to clear it), so in practice this is only
     /// ever `None` for a caller that omits the key entirely — matching how
@@ -604,6 +624,8 @@ pub async fn create(
 
     let preview_ttl = body.preview_ttl_hours.unwrap_or(24);
     let history_retention = validate_history_retention(body.history_retention.unwrap_or(0))?;
+    let custom_nginx = validate_custom_nginx(body.custom_nginx.as_deref())?;
+    let max_upload_mb = validate_max_upload(body.max_upload_mb.unwrap_or(0))?;
 
     // Validate pre_build_cmd and post_deploy_cmd for command injection
     if let Some(ref cmd) = body.pre_build_cmd {
@@ -720,8 +742,8 @@ pub async fn create(
         };
 
     let mut deploy: GitDeploy = sqlx::query_as(
-        "INSERT INTO git_deploys (user_id, server_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron, deploy_protected, preview_ttl_hours, tls_mode, tls_certificate_id, volumes, history_retention) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27) \
+        "INSERT INTO git_deploys (user_id, server_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron, deploy_protected, preview_ttl_hours, tls_mode, tls_certificate_id, volumes, history_retention, custom_nginx, max_upload_mb) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29) \
          RETURNING *",
     )
     .bind(claims.sub)
@@ -756,6 +778,8 @@ pub async fn create(
     .bind(tls_certificate_id)
     .bind(&volumes_json)
     .bind(history_retention)
+    .bind(custom_nginx.as_deref())
+    .bind(max_upload_mb)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -822,6 +846,28 @@ pub async fn get_one(
     Ok(Json(deploy))
 }
 
+/// The extra-directives text, normalised: blank is none. Same rule as a site's
+/// field (`is_safe_nginx_config`), and the agent applies its own on top.
+fn validate_custom_nginx(c: Option<&str>) -> Result<Option<String>, ApiError> {
+    match c.map(str::trim).filter(|c| !c.is_empty()) {
+        None => Ok(None),
+        Some(c) => {
+            crate::routes::is_safe_nginx_config(c).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+            Ok(Some(c.to_string()))
+        }
+    }
+}
+
+/// 0 = the panel default (stored as NULL). `client_max_body_size` is refused in
+/// the directives box because the template already sets it, so this is the way.
+fn validate_max_upload(n: i32) -> Result<Option<i32>, ApiError> {
+    match n {
+        0 => Ok(None),
+        1..=10_240 => Ok(Some(n)),
+        _ => Err(err(StatusCode::BAD_REQUEST, "Upload limit must be 0 (default) or between 1 and 10240 MB")),
+    }
+}
+
 /// 0 keeps every history row. Anything else must leave room for a rollback
 /// target (the previous successful deploy), so the floor is 5.
 fn validate_history_retention(n: i32) -> Result<i32, ApiError> {
@@ -843,6 +889,13 @@ pub async fn update(
     require_admin(&claims.role)?;
 
     let history_retention = body.history_retention.map(validate_history_retention).transpose()?;
+    // Absent keeps the stored value; "" / 0 clears it. Validated up front so a
+    // refused directive fails the save before anything is touched.
+    let custom_nginx_in = match body.custom_nginx.as_deref() {
+        Some(c) => Some(validate_custom_nginx(Some(c))?.unwrap_or_default()),
+        None => None,
+    };
+    let max_upload_in = body.max_upload_mb.map(validate_max_upload).transpose()?.map(|m| m.unwrap_or(0));
 
     // Verify ownership + fetch current domain/cron so we only validate values
     // that actually CHANGE (grandfather rows that predate these guards — e.g. a
@@ -1073,6 +1126,62 @@ pub async fn update(
     // `domain` is deliberately NOT in this list — see the refusal above; and
     // `github_token` is not either, because the GET masks it and the box is blank
     // on every ordinary edit.
+    // Changed directives go to the box BEFORE the row is written: it stores them
+    // beside the vhost (so every later re-render keeps them), applies them to the
+    // live vhost, and `nginx -t`s the result. A refusal comes back to the
+    // operator and nothing is saved, so the row never holds a value nginx
+    // rejected. A rename skips this: the next deploy sends them for the new name.
+    if custom_nginx_in.is_some() || max_upload_in.is_some() {
+        if let Some(d) = cur_domain.as_deref().filter(|d| !d.trim().is_empty()) {
+            if domain.as_deref().map_or(true, |nd| nd == d) {
+                let (stored_c, stored_m): (Option<String>, Option<i32>) = sqlx::query_as(
+                    "SELECT custom_nginx, max_upload_mb FROM git_deploys WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&state.db)
+                .await
+                .map_err(|e| internal_error("read git_deploys extras", e))?;
+                let final_c = match custom_nginx_in.as_deref() {
+                    Some("") => None,
+                    Some(c) => Some(c.to_string()),
+                    None => stored_c,
+                };
+                let final_m = match max_upload_in {
+                    Some(0) => None,
+                    Some(m) => Some(m),
+                    None => stored_m,
+                };
+                let agent = crate::helpers::agent_for_site_server(&state, Some(deploy_server_id), d).await?;
+                agent
+                    .post(
+                        "/git/vhost-extras",
+                        Some(serde_json::json!({
+                            "domain": d,
+                            "custom_nginx": final_c,
+                            "max_upload_mb": final_m,
+                        })),
+                    )
+                    .await
+                    .map_err(|e| match e {
+                        // The agent's own sentence (a refused directive, or what
+                        // `nginx -t` said): an admin-only screen, and the only
+                        // way the operator learns which line to fix.
+                        crate::services::agent::AgentError::Status(400, msg) => {
+                            let reason = serde_json::from_str::<serde_json::Value>(&msg)
+                                .ok()
+                                .and_then(|v| v["error"].as_str().map(str::to_string))
+                                .unwrap_or(msg);
+                            err(StatusCode::BAD_REQUEST, &format!("{reason}; nothing was saved"))
+                        }
+                        other => {
+                            tracing::warn!("git deploy {id}: vhost extras not applied: {other:?}");
+                            err(StatusCode::BAD_GATEWAY, "The server could not apply the nginx directives; nothing was saved")
+                        }
+                    })?;
+            }
+        }
+    }
+
     let mut deploy: GitDeploy = sqlx::query_as(
         "UPDATE git_deploys SET \
          repo_url = COALESCE($1, repo_url), \
@@ -1097,8 +1206,10 @@ pub async fn update(
          tls_certificate_id = $20, \
          volumes = COALESCE($21, volumes), \
          history_retention = COALESCE($22, history_retention), \
+         custom_nginx = CASE WHEN $23 = '' THEN NULL ELSE COALESCE($23, custom_nginx) END, \
+         max_upload_mb = CASE WHEN $24 = 0 THEN NULL ELSE COALESCE($24, max_upload_mb) END, \
          updated_at = NOW() \
-         WHERE id = $23 AND user_id = $24 \
+         WHERE id = $25 AND user_id = $26 \
          RETURNING *",
     )
     .bind(body.repo_url.as_deref())
@@ -1123,6 +1234,8 @@ pub async fn update(
     .bind(tls_certificate_id)
     .bind(volumes)
     .bind(history_retention)
+    .bind(custom_nginx_in.as_deref())
+    .bind(max_upload_in)
     .bind(id)
     .bind(claims.sub)
     .fetch_one(&state.db)
@@ -1860,6 +1973,8 @@ pub async fn rollback(
             tls_certificate: config.tls_certificate.as_deref(),
             scope: "deploy",
             volumes: &volumes_vec(&config.volumes),
+            custom_nginx: config.custom_nginx.as_deref(),
+            max_upload_mb: config.max_upload_mb,
         });
 
         match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
@@ -2900,6 +3015,8 @@ fn spawn_deploy_task(
             tls_certificate: config.tls_certificate.as_deref(),
             scope: "deploy",
             volumes: &volumes_vec(&config.volumes),
+            custom_nginx: config.custom_nginx.as_deref(),
+            max_upload_mb: config.max_upload_mb,
         });
 
         match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
@@ -3148,6 +3265,8 @@ fn spawn_deploy_task(
                                             tls_certificate: monitor_config_tls_certificate.as_deref(),
                                             scope: "deploy",
                                             volumes: &monitor_config_volumes,
+                                            custom_nginx: config.custom_nginx.as_deref(),
+                                            max_upload_mb: config.max_upload_mb,
                                         });
 
                                         if monitor_agent.post_long("/git/deploy", Some(rollback_body), 120).await.is_ok() {
@@ -3986,6 +4105,8 @@ pub async fn trigger_deploy_task(
         tls_certificate: config.tls_certificate.as_deref(),
         scope: "deploy",
         volumes: &volumes_vec(&config.volumes),
+        custom_nginx: config.custom_nginx.as_deref(),
+        max_upload_mb: config.max_upload_mb,
     });
 
     match agent.post_long("/git/deploy", Some(deploy_body), 120).await {
@@ -4411,6 +4532,8 @@ async fn handle_preview_deploy(
             tls_certificate: tls_certificate.as_deref(),
             scope: "preview",
             volumes: &[],
+            custom_nginx: None,
+            max_upload_mb: None,
         });
 
         // Same refusal `spawn_deploy_task`/`trigger_deploy_task` apply: an
@@ -5071,6 +5194,8 @@ mod tests {
             tls_certificate: None,
             scope: "deploy",
             volumes: &[],
+            custom_nginx: None,
+            max_upload_mb: None,
         })
     }
 
@@ -5113,6 +5238,8 @@ mod tests {
             tls_certificate: None,
             scope: "deploy",
             volumes: &["/data".to_string(), "/app/uploads".to_string()],
+            custom_nginx: None,
+            max_upload_mb: None,
         });
         assert_eq!(body["volumes"], serde_json::json!(["/data", "/app/uploads"]));
     }
@@ -5139,10 +5266,52 @@ mod tests {
             tls_certificate: Some("wildcard-2026"),
             scope: "deploy",
             volumes: &[],
+            custom_nginx: None,
+            max_upload_mb: None,
         });
         assert_eq!(body["tls_mode"], "provided");
         assert_eq!(body["tls_certificate"], "wildcard-2026");
         assert!(body.get("ssl_email").is_none(), "provided mode must not also send an ACME address");
+    }
+
+    #[test]
+    fn vhost_extras_ride_the_deploy_body_only_when_set() {
+        let mk = |c: Option<&'static str>, m: Option<i32>| {
+            build_deploy_body(DeployBody {
+                name: "app",
+                image_tag: "dockpanel-git-app:abc",
+                container_port: 3000,
+                host_port: 30001,
+                env_vars: &serde_json::json!({}),
+                domain: Some("app.example.com"),
+                memory_mb: None,
+                cpu_percent: None,
+                ssl_email: None,
+                tls_mode: None,
+                tls_certificate: None,
+                scope: "deploy",
+                volumes: &[],
+                custom_nginx: c,
+                max_upload_mb: m,
+            })
+        };
+        let none = mk(None, None);
+        assert!(none.get("custom_nginx").is_none() && none.get("max_upload_mb").is_none());
+        let blank = mk(Some("  "), Some(0));
+        assert!(blank.get("custom_nginx").is_none() && blank.get("max_upload_mb").is_none());
+        let set = mk(Some("expires 1d;"), Some(512));
+        assert_eq!(set["custom_nginx"], "expires 1d;");
+        assert_eq!(set["max_upload_mb"], 512);
+    }
+
+    #[test]
+    fn max_upload_validation_bounds() {
+        assert_eq!(super::validate_max_upload(0).unwrap(), None);
+        assert_eq!(super::validate_max_upload(512).unwrap(), Some(512));
+        assert!(super::validate_max_upload(-1).is_err());
+        assert!(super::validate_max_upload(10_241).is_err());
+        assert!(super::validate_custom_nginx(Some("access_log /x;")).is_err());
+        assert_eq!(super::validate_custom_nginx(Some("  ")).unwrap(), None);
     }
 
     #[test]
@@ -5161,6 +5330,8 @@ mod tests {
             tls_certificate: None,
             scope: "deploy",
             volumes: &[],
+            custom_nginx: None,
+            max_upload_mb: None,
         });
         assert_eq!(body["tls_mode"], "acme");
         assert_eq!(body["ssl_email"], "ops@example.com");

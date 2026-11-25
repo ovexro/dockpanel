@@ -68,6 +68,8 @@ interface GitDeploy {
   build_method: string;
   preview_ttl_hours: number;
   history_retention: number;
+  custom_nginx: string | null;
+  max_upload_mb: number | null;
   // Container paths bind-mounted durably under GIT_DATA_DIR/{name} on the agent
   // (#118) — the host side is never operator-supplied. Always empty for
   // anything the panel deploys as a preview.
@@ -177,6 +179,8 @@ export default function GitDeploys() {
   const [formProtected, setFormProtected] = useState(false);
   const [formPreviewTtl, setFormPreviewTtl] = useState(24);
   const [formHistoryRetention, setFormHistoryRetention] = useState(0);
+  const [formCustomNginx, setFormCustomNginx] = useState("");
+  const [formMaxUpload, setFormMaxUpload] = useState(0);
   const [formVolumes, setFormVolumes] = useState<string[]>([]);
 
   const loadDeploys = async () => {
@@ -280,6 +284,8 @@ export default function GitDeploys() {
     setFormProtected(selected.deploy_protected || false);
     setFormPreviewTtl(selected.preview_ttl_hours ?? 24);
     setFormHistoryRetention(selected.history_retention ?? 0);
+    setFormCustomNginx(selected.custom_nginx || "");
+    setFormMaxUpload(selected.max_upload_mb ?? 0);
     setFormVolumes(selected.volumes || []);
     setEditing(true);
     setShowModal(true);
@@ -331,6 +337,9 @@ export default function GitDeploys() {
       deploy_protected: formProtected,
       preview_ttl_hours: formPreviewTtl,
       history_retention: formHistoryRetention,
+      // Sent in full every time, empty included: "" and 0 clear the stored value.
+      custom_nginx: formCustomNginx.trim(),
+      max_upload_mb: formMaxUpload,
       // Takes effect on the NEXT deploy, not this save — the field only
       // changes what a future container's HostConfig binds, and this request
       // never talks to the agent. Sent in full every time, empty included, so
@@ -1532,6 +1541,32 @@ export default function GitDeploys() {
                   className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-dark-100 text-sm focus:border-accent-500 focus:outline-none"
                 />
                 <p className="text-xs text-dark-300 mt-1">Older entries are deleted automatically (0 = keep everything, otherwise at least 5 so a rollback target always remains)</p>
+              </div>
+
+              {/* Upload limit + extra nginx directives (#132) */}
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">Upload limit (MB)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={10240}
+                  value={formMaxUpload}
+                  onChange={(e) => setFormMaxUpload(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-dark-100 text-sm focus:border-accent-500 focus:outline-none"
+                />
+                <p className="text-xs text-dark-300 mt-1">Largest request body nginx accepts for this domain (0 = default, 64 MB). Applied as soon as you save.</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">Extra nginx directives</label>
+                <textarea
+                  value={formCustomNginx}
+                  onChange={(e) => setFormCustomNginx(e.target.value)}
+                  rows={4}
+                  placeholder={"proxy_read_timeout 300s;\nadd_header X-Frame-Options SAMEORIGIN;"}
+                  className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-dark-100 text-sm font-mono focus:border-accent-500 focus:outline-none"
+                />
+                <p className="text-xs text-dark-300 mt-1">One directive per line, ending in ;. Kept across certificate renewals and redeploys; applied as soon as you save, and refused (nothing saved) if nginx rejects them. Set the upload size with the field above, not here.</p>
               </div>
 
               {/* Pre-build Command */}

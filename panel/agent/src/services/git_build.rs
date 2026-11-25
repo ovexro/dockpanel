@@ -997,6 +997,9 @@ pub async fn release_domain_artifacts(domain: &str, host_port: Option<u16>) {
         if crate::services::ownership::app_vhost(&config_path, host_port).may_delete() {
             std::fs::remove_file(&config_path).ok();
             tracing::info!("Removed nginx config: {config_path}");
+            // The additions belonged to that vhost; left behind they would be
+            // applied to whatever next renders a vhost under this name.
+            crate::services::nginx::remove_extras(domain);
 
             match crate::services::nginx::test_config().await {
                 Ok(output) if output.success => {
