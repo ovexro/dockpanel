@@ -2,7 +2,7 @@
 
 ## Overview
 
-DockPanel lets you manage unlimited remote servers from a single panel. One server runs the full panel (API + frontend + database), and remote servers run only the lightweight agent binary (~22MB, ~35MB RAM). All communication between the panel and remote agents uses HTTPS with token-based authentication.
+DockPanel lets you manage unlimited remote servers from a single panel. One server runs the full panel (API + frontend + database), and remote servers run only the lightweight agent binary (~22MB, ~29MB RAM). All communication between the panel and remote agents uses HTTPS with token-based authentication.
 
 ## Architecture
 

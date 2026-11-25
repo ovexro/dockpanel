@@ -237,10 +237,10 @@ honest:
 | CLI binary | 3.9 MB | release | v2.222.0 |
 | MCP binary | 6.1 MB | release | v2.240.0 |
 | Panel binaries, all four | 57 MB | release | v2.240.0 |
-| API RAM (RSS) | ~14 MB | measured | 2026-07-27 |
-| Agent RAM (RSS) | ~35 MB | measured | 2026-07-27 |
-| Panel services RAM (agent + API) | ~49 MB | measured | 2026-07-27 |
-| Full-stack RAM (with bundled PostgreSQL) | ~109 MB | measured | 2026-07-27 |
+| API RAM (RSS) | ~20 MB | measured | 2026-11-25 |
+| Agent RAM (RSS) | ~29 MB | measured | 2026-11-25 |
+| Panel services RAM (agent + API) | ~49 MB | measured | 2026-11-25 |
+| Full-stack RAM (with bundled PostgreSQL) | ~120 MB | measured | 2026-11-25 |
 | App templates | 147 | derived | every commit |
 | HTTP routes | 841 (545 backend + 296 agent) | derived | every commit |
 | Regression-pin assertions | 4625 (142 suites) | derived | every commit |
@@ -272,8 +272,8 @@ we no longer know.
 |-------|-------|---------------|---------------|
 | Competitor RAM: cPanel 800 MB, Plesk 512 MB, HestiaCP 512 MB, CloudPanel 250 MB | COMPARISON.md, README.md, dockpanel.dev | 2026-03-21 | 180 |
 | Competitor pricing and plan limits | COMPARISON.md, README.md | 2026-04-15 | 180 |
-| Screenshots still resemble the shipped UI | README.md, dockpanel.dev | 2026-07-26 | 90 |
-| The advertised install one-liner is the one we support | README.md, dockpanel.dev | 2026-07-27 | 180 |
+| Screenshots still resemble the shipped UI | README.md, dockpanel.dev | 2026-11-25 | 90 |
+| The advertised install one-liner is the one we support | README.md, dockpanel.dev | 2026-11-25 | 180 |
 
 The register's `measured` rows above expire too, on a 120-day budget declared in
 that script.

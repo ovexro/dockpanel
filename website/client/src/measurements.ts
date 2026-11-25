@@ -34,19 +34,19 @@ export const measurements = {
 
   /**
    * Resident set on a live box, by cgroup accounting
-   * (`systemctl show -p MemoryCurrent`), measured 2026-07-27.
+   * (`systemctl show -p MemoryCurrent`), measured 2026-11-25 (v2.242.6, fresh Debian 13, admin + two static sites, idle 6 min, three samples).
    *
    * No CI job can reproduce these — a GitHub runner has no DockPanel install —
    * so they expire instead: the scheduled check fails once the register's date
    * is older than its budget. A measurement nobody has retaken is a claim.
    */
   ram: {
-    api: 14,
-    agent: 35,
+    api: 20,
+    agent: 29,
     /** The honest headline: both panel services, nothing else. */
     services: 49,
     /** The number to compare against a competitor's, since theirs include a database. */
-    fullStack: 109,
+    fullStack: 120,
   },
 
   /** Competitors, whole stack against whole stack. See the note in Landing.tsx. */
