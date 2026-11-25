@@ -339,6 +339,19 @@ fi
 # the Compose-stack path could not grow a second, unguarded copy of it; the arm
 # follows the write rather than the name it used to sit under. The FIRST
 # non-empty body wins, and an empty result across all of them still reds.
+# `capture_previous` also keeps a copy on disk (#130). It counts as the snapshot
+# only while it still reads the path it is given and hands that body back on
+# every path past the read, which is what restore_or_remove is fed.
+capture_previous_reads() {
+  local S B
+  S=$(subj "$NGINX_SVC") || return 1
+  B=$(fnbody "$S" capture_previous)
+  [ -n "$B" ] || return 1
+  derives "$B" 'let previous = std::fs::read_to_string\(config_path\)\.ok\(\)\?;' &&
+    derives "$B" '^    Some\(previous\)$' &&
+    ! derives "$B" '(^|[^A-Za-z_])None([^A-Za-z_]|$)'
+}
+
 check_writer() {
   local file="$1" fns="$2" label="$3"
   local S B fn
@@ -359,7 +372,8 @@ check_writer() {
     bad "$label: the extracted body writes no vhost — the arm is pointed at the wrong function"
     return
   fi
-  if derives "$B" 'read_to_string\(&config_path\)'; then
+  if derives "$B" 'read_to_string\(&config_path\)' \
+     || { derives "$B" 'capture_previous\(&config_path' && capture_previous_reads; }; then
     ok "$label snapshots the existing vhost before replacing it"
   else
     bad "$label replaces a vhost without reading what was there"

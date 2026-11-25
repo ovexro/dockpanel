@@ -378,6 +378,9 @@ else
   (
     cd "$H_TMP/r" || exit 1
     git config user.email pin@test; git config user.name pin
+    # A machine-wide ignore (e.g. `*.pem`) would keep the probe files out of the
+    # index, and the hooks would pass for having been shown nothing.
+    git config core.excludesfile /dev/null
     mkdir -p .h && cp "$REPO/$PRECOMMIT" "$REPO/$PREPUSH" .h/
     echo seed > README.md; git add -A; git commit -qm seed --no-verify
   ) >/dev/null 2>&1

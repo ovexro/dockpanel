@@ -130,6 +130,10 @@ else
           | grep -oiE '(pass(ed)?[^0-9a-z]*([0-9]+)|([0-9]+)[^0-9a-z]*pass(ed)?)' | head -1 | grep -oE '[0-9]+')
     if [ "$got" = "$want" ]; then
       ok "$suite reports $got assertions, as published"
+    elif [ "$suite" = nginx-headers-pin-e2e.sh ] && [ -z "${CI:-}" ] && ! command -v nginx >/dev/null 2>&1; then
+      # Its serving assertions need a real nginx and it skips them without one.
+      # Never excused in CI, where the published count must be reproduced.
+      echo "  NOT CHECKED: $suite count (nginx is not installed here; CI checks it)"
     else
       bad "docs/testing.md publishes $want assertions for $suite; it actually reports ${got:-nothing}"
     fi
