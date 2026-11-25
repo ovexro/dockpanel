@@ -157,7 +157,13 @@ else
   # Only the path is printed, never the host. The secret is masked by Actions,
   # but a check that depends on masking to keep a hostname private is one
   # transformation away from leaking it.
-  if "${CURL[@]}" -o "$PANEL_TMP" "$PANEL/install-agent.sh" 2>/dev/null; then
+  # No -f: the status code decides. A panel that is DOWN (connection refused,
+  # DNS gone, Cloudflare 52x/50x because the origin is dead) is not the s274
+  # defect (a live panel handing out HTML); it means there is no panel to ask.
+  # That is reported loudly as NOT CHECKED, never as a pass; a live panel that
+  # answers wrongly (200 + HTML, 404) still fails below.
+  panel_code=$(curl -sS --max-time 30 --retry 2 --retry-delay 3 -o "$PANEL_TMP" -w '%{http_code}' "$PANEL/install-agent.sh" 2>/dev/null) || panel_code=000
+  if [ "$panel_code" = 200 ]; then
     ok "the panel's /install-agent.sh answers"
 
     if head -1 "$PANEL_TMP" | grep -c '^#!' >/dev/null; then
@@ -195,7 +201,14 @@ else
       bad "scripts/install-agent.sh is missing — the Add-Server command has no source in this repo"
     fi
   else
-    bad "the panel's /install-agent.sh does not answer — the command the Add-Server dialog prints is dead"
+    case "$panel_code" in
+      000|50[0-9]|52[0-9])
+        note "NOT CHECKED: the panel host is down (HTTP $panel_code), so {panel}/install-agent.sh could not be fetched. Bring a panel up or retire the PANEL_URL secret."
+        ;;
+      *)
+        bad "the panel's /install-agent.sh does not answer correctly (HTTP $panel_code) — the command the Add-Server dialog prints is dead"
+        ;;
+    esac
   fi
   rm -f "$PANEL_TMP"
 fi
