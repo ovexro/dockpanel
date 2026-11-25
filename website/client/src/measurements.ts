@@ -49,12 +49,23 @@ export const measurements = {
     fullStack: 120,
   },
 
-  /** Competitors, whole stack against whole stack. See the note in Landing.tsx. */
-  competitorRam: {
-    cloudPanel: 250,
-    plesk: 512,
-    hestiaCp: 512,
-    cPanel: 800,
+  /**
+   * Whole default install, idle, memory in use above a bare Debian 12 box
+   * (MemTotal - MemAvailable after a clean reboot, 5 to 9 minutes in), measured
+   * 2026-11-25 on identical 8 GB VPSes. Same method for all three, so these are
+   * comparable with each other; `ram.fullStack` above is NOT (panel services +
+   * PostgreSQL only). Register row: "Claims That Expire" in FEATURES.md.
+   */
+  idleInstall: {
+    dockpanel: 220,
+    cloudPanel: 680,
+    hestiaCp: 1450,
+  },
+
+  /** cPanel and Plesk need a licence: vendor-documented minimum RAM in GB, not a measurement. */
+  vendorMinimumGb: {
+    cPanel: 2,
+    plesk: 1,
   },
 
   /** Docker app templates in the catalogue. Derived from source by the pin suite. */

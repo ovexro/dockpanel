@@ -46,18 +46,18 @@ on any firewalld box by design. See [getting started](docs/getting-started.md#re
 
 ## Why DockPanel?
 
-No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 147 one-click Docker app templates, per-image CVE scanning with deploy gating, a WAF, passkey login, GPU passthrough, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all while the panel services themselves use under 20MB of RAM. DockPanel does.
+No other free panel gives you Git push-to-deploy with blue-green zero-downtime updates, 147 one-click Docker app templates, per-image CVE scanning with deploy gating, a WAF, passkey login, GPU passthrough, multi-server management, reseller accounts, a developer CLI, and Infrastructure as Code — all while the panel services themselves idle at about 49MB of RAM. DockPanel does.
 
 | | DockPanel | HestiaCP | CloudPanel | RunCloud |
 |---|---|---|---|---|
-| **Price** | **Free** | Free | Free | $8/mo+ |
+| **Price** | **Free** | Free | Free | $9/mo+ |
 | **Stack** | **Rust + React** | PHP | PHP | PHP (SaaS) |
 | **Docker native** | **147 templates** | No | No | No |
 | **Git deploy** | **Blue-green, zero-downtime** | No | No | Basic |
 | **Multi-server** | **Unlimited** | No | No | Yes |
 | **Reseller + white-label** | **Yes** | Reseller only | No | No |
 | **CLI + IaC** | **Full CLI + YAML export** | Limited | No | No |
-| **RAM usage (panel)** | **~49MB** | ~200MB+ | ~150MB+ | SaaS |
+| **RAM, whole default install, idle** | **~220MB** | ~1,450MB | ~680MB | SaaS |
 | **ARM64 / Homelab** | **Yes** | Partial | No | No |
 | **Self-hosted** | **Yes** | Yes | Yes | No |
 

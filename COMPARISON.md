@@ -6,7 +6,7 @@ An honest comparison. We're not shy about where DockPanel leads — and we're up
 
 | Feature | DockPanel | HestiaCP | CloudPanel | RunCloud | CyberPanel | Ploi |
 |---------|-----------|----------|------------|----------|------------|------|
-| **Price** | Free | Free | Free | $8/mo+ | Free | $8/mo+ |
+| **Price** | Free | Free | Free | $9/mo+ | Free | Free plan, $10/mo+ |
 | **Self-hosted** | Yes | Yes | Yes | No (SaaS) | Yes | No (SaaS) |
 | **Open source** | AGPLv3 | GPLv3 | No | No | GPLv3 | No |
 | **Language** | Rust | PHP/Bash | PHP | PHP | Python | PHP |
@@ -16,7 +16,7 @@ An honest comparison. We're not shy about where DockPanel leads — and we're up
 | **CLI** | Yes | Yes (v-commands) | No | No | Yes | No |
 | **IaC (YAML)** | Yes | No | No | No | No | No |
 | **ARM64** | Yes | Partial | No | N/A | No | N/A |
-| **RAM usage** | ~60MB | ~200MB+ | ~150MB+ | N/A | ~300MB+ | N/A |
+| **RAM, whole default install, idle** | ~220MB | ~1,450MB | ~680MB | N/A | not measured | N/A |
 | **2FA** | Yes | No | No | Yes | No | Yes |
 | **Reseller** | Yes | No | No | No | Yes | No |
 | **OAuth/SSO** | Yes | No | No | No | No | No |
@@ -27,11 +27,11 @@ An honest comparison. We're not shy about where DockPanel leads — and we're up
 
 ## Where DockPanel Wins — Massively
 
-**7x lighter, stack against stack** — The panel binaries are ~57MB on disk. At runtime the panel services themselves idle around ~49MB of RAM (cgroup accounting: agent ~29MB + API ~20MB), or about ~120MB counting the bundled PostgreSQL. That last figure is the one to compare, because cPanel's 800MB+ and CloudPanel's 250MB+ include their databases too — measuring our services against their whole stacks would flatter us by a factor nobody could reproduce. On a $5 VPS with 1GB of RAM, the honest gap is still the difference between running your apps and running out of memory.
+**About 3x lighter than CloudPanel and 6x lighter than HestiaCP, measured the same way** — We installed each panel with its default options on a clean Debian 12 server (8GB, no sites), rebooted, waited five to nine minutes, and read the memory in use above the bare operating system (2026-11-25): DockPanel ~220MB (including Docker, nginx, PHP-FPM and PostgreSQL), CloudPanel ~680MB, HestiaCP ~1,450MB (ClamAV alone is ~980MB of that; with it switched off HestiaCP is about 480MB). cPanel and Plesk need a licence, so we could not measure them; their documented minimums are 2GB and 1GB of RAM. For the panel alone, DockPanel's two services idle around ~49MB (cgroup accounting: agent ~29MB + API ~20MB), or about ~120MB counting the bundled PostgreSQL; that is not comparable to the whole-install figures above and is not presented as such. The panel binaries are ~57MB on disk. On a $5 VPS with 1GB of RAM, the gap is the difference between running your apps and running out of memory.
 
 **Docker integration that no other free panel has** — 147 one-click app templates across 14 categories. Docker Compose stack management. Container logs, shell, stats, resource limits, health checks. Blue-green zero-downtime updates. This is a full container management platform built into a hosting panel. HestiaCP, CloudPanel, and CyberPanel have nothing close to this.
 
-**A complete developer toolkit** — Git push-to-deploy with Nixpacks auto-build (30+ languages, no Dockerfile needed), preview environments with TTL, a full CLI for automation, and Infrastructure as Code (YAML export/import). These are features that RunCloud and Ploi charge $8-15/month for. DockPanel includes all of them for free.
+**A complete developer toolkit** — Git push-to-deploy with Nixpacks auto-build (30+ languages, no Dockerfile needed), preview environments with TTL, a full CLI for automation, and Infrastructure as Code (YAML export/import). These are features that RunCloud and Ploi charge for (from $9 and $10 a month; Ploi also has a limited free plan). DockPanel includes all of them for free.
 
 **Business-ready out of the box** — Multi-server management (unlimited), reseller accounts with quotas and white-label branding, OAuth/SSO (Google, GitHub, GitLab), extension API with HMAC-signed webhooks, and a migration wizard (import from cPanel/Plesk/HestiaCP). Most panels don't have even half of these at any price.
 

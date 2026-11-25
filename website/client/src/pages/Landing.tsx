@@ -158,7 +158,7 @@ function RamBar({ name, mb, max, highlight = false, delay = 0 }: {
   const width = (mb / max) * 100;
 
   // The figure sits OUTSIDE the fill, in a fixed column, for the reason this
-  // chart exists: DockPanel is a small fraction of an 800 MB scale, so its bar
+  // chart exists: DockPanel is a small fraction of a 1,450 MB scale, so its bar
   // is narrow and a label printed inside it was clipped to nothing — the one
   // number the chart is making an argument about was the only one you could
   // not read. Putting every figure in the same right-hand column also means
@@ -262,7 +262,7 @@ const steps = [
 const faqs = [
   { q: 'Is it really free?', a: 'Every feature, every server, no limits. Licensed under the AGPL v3 — free software, on as many servers as you like, commercially included. There is no premium tier.' },
   { q: 'System requirements?', a: '512 MB RAM, 1 CPU, 10 GB disk. Runs on Ubuntu, Debian, CentOS, Rocky, AlmaLinux, and Fedora. ARM64 works too.' },
-  { q: 'How is this different from cPanel?', a: `cPanel uses ~${m.competitorRam.cPanel} MB of RAM, costs $15/month, and doesn't support Docker. DockPanel's two services take about ${m.ram.services} MB between them, or roughly ${m.ram.fullStack} MB counting the bundled PostgreSQL, cost nothing, and ship with ${m.templates} Docker templates, a WAF, passkey authentication, Git deploys, a CLI, and multi-server management.` },
+  { q: 'How is this different from cPanel?', a: `cPanel documents a ${m.vendorMinimumGb.cPanel} GB RAM minimum, costs from $29.99/month, and doesn't support Docker. DockPanel's two services take about ${m.ram.services} MB between them, or roughly ${m.ram.fullStack} MB counting the bundled PostgreSQL (about ${m.idleInstall.dockpanel} MB for the whole default install including Docker, nginx and PHP-FPM), cost nothing, and ship with ${m.templates} Docker templates, a WAF, passkey authentication, Git deploys, a CLI, and multi-server management.` },
   { q: 'What happens if DockPanel goes down?', a: 'Your sites keep running. Nginx and Docker are independent processes \u2014 the panel is just the management layer. It auto-restarts via systemd if it ever stops.' },
   { q: 'Can I manage multiple servers?', a: 'As many as you want. Install a lightweight agent on each server and manage them all from one dashboard.' },
   // "On a $5 VPS, that's the difference between running 20 sites and running 2"
@@ -702,17 +702,21 @@ export default function Landing() {
               </h2>
               <p className="mt-4 text-[#a3a3ad] max-w-xl leading-relaxed">
                 Every megabyte the panel holds is a megabyte your applications do not get.
-                Each figure below is the whole stack, database included.
+                Each figure is the memory in use above a bare Debian 12 server after a default install,
+                idle, web server and database included, measured the same way for all three (25 November 2026).
               </p>
             </div>
           </div>
 
           <div className="max-w-4xl space-y-3 mb-16">
-            <RamBar name="DockPanel" mb={m.ram.fullStack} max={m.competitorRam.cPanel} highlight delay={0} />
-            <RamBar name="CloudPanel" mb={m.competitorRam.cloudPanel} max={m.competitorRam.cPanel} delay={0.1} />
-            <RamBar name="Plesk" mb={m.competitorRam.plesk} max={m.competitorRam.cPanel} delay={0.2} />
-            <RamBar name="HestiaCP" mb={m.competitorRam.hestiaCp} max={m.competitorRam.cPanel} delay={0.3} />
-            <RamBar name="cPanel" mb={m.competitorRam.cPanel} max={m.competitorRam.cPanel} delay={0.4} />
+            <RamBar name="DockPanel" mb={m.idleInstall.dockpanel} max={m.idleInstall.hestiaCp} highlight delay={0} />
+            <RamBar name="CloudPanel" mb={m.idleInstall.cloudPanel} max={m.idleInstall.hestiaCp} delay={0.1} />
+            <RamBar name="HestiaCP" mb={m.idleInstall.hestiaCp} max={m.idleInstall.hestiaCp} delay={0.2} />
+            <p className="text-sm text-[#6b6b74] pt-2 leading-relaxed">
+              cPanel and Plesk need a licence, so they are not measured here. Their documented
+              minimums are {m.vendorMinimumGb.cPanel} GB and {m.vendorMinimumGb.plesk} GB of RAM.
+              HestiaCP installs ClamAV by default, which alone holds about 980 MB.
+            </p>
           </div>
 
           <motion.div initial={{ opacity: 0, y: 15 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
@@ -729,9 +733,9 @@ export default function Landing() {
               <tbody>
                 {[
                   { n: 'DockPanel', t: '<60 sec', p: 'Free', d: true, s: true, hl: true },
-                  { n: 'cPanel', t: '~45 min', p: '$15/mo', d: false, s: true },
-                  { n: 'Plesk', t: '~20 min', p: '$10/mo', d: false, s: true },
-                  { n: 'RunCloud', t: '~5 min', p: '$8/mo', d: false, s: false },
+                  { n: 'cPanel', t: '~45 min', p: 'from $29.99/mo', d: false, s: true },
+                  { n: 'Plesk', t: '~20 min', p: 'from ~$13/mo', d: false, s: true },
+                  { n: 'RunCloud', t: '~5 min', p: 'from $9/mo', d: false, s: false },
                   { n: 'CloudPanel', t: '~10 min', p: 'Free', d: false, s: true },
                   { n: 'HestiaCP', t: '~2 min', p: 'Free', d: false, s: true },
                 ].map((row, i) => (

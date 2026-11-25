@@ -270,8 +270,8 @@ we no longer know.
 
 | Claim | Where | Last verified | Budget (days) |
 |-------|-------|---------------|---------------|
-| Competitor RAM: cPanel 800 MB, Plesk 512 MB, HestiaCP 512 MB, CloudPanel 250 MB | COMPARISON.md, README.md, dockpanel.dev | 2026-03-21 | 180 |
-| Competitor pricing and plan limits | COMPARISON.md, README.md | 2026-04-15 | 180 |
+| Idle RAM of the whole default install over bare Debian 12 (measured 2026-11-25): DockPanel ~220 MB, CloudPanel ~680 MB, HestiaCP ~1,450 MB; cPanel and Plesk not measurable (vendor minimums 2 GB / 1 GB) | COMPARISON.md, README.md, dockpanel.dev | 2026-11-25 | 180 |
+| Competitor pricing and plan limits (cPanel Solo $29.99, Plesk ~$13+, RunCloud from $9, Ploi $10 with a free plan) | COMPARISON.md, README.md, dockpanel.dev | 2026-11-25 | 180 |
 | Screenshots still resemble the shipped UI | README.md, dockpanel.dev | 2026-11-25 | 90 |
 | The advertised install one-liner is the one we support | README.md, dockpanel.dev | 2026-11-25 | 180 |
 
