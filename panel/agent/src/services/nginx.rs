@@ -1161,7 +1161,6 @@ pub async fn reload() -> Result<(), String> {
     }
 }
 
-
 // ── keeping the vhost a site write is about to replace ──────────────────────
 //
 // `restore_or_remove` above is an IN-PROCESS rollback: the writer holds the
@@ -1219,12 +1218,19 @@ fn vhost_backup_root() -> std::path::PathBuf {
 /// it returns the same `Option<String>` that goes to `restore_or_remove`, so
 /// the in-process rollback is unchanged and this is purely additive.
 ///
+/// `replacement` is the body about to be written. When it equals what is there,
+/// nothing is being lost and nothing is copied: a certificate renewal re-renders
+/// the vhost unchanged, and those copies would push real ones out of retention.
+///
 /// **Never fails the caller.** A backup that cannot be written is logged and
 /// the write proceeds. Refusing to deploy a site because its backup directory
 /// is full would turn a safety net into an outage, which is the opposite of
 /// what this is for.
-pub fn capture_previous(config_path: &str, domain: &str) -> Option<String> {
+pub fn capture_previous(config_path: &str, domain: &str, replacement: &str) -> Option<String> {
     let previous = std::fs::read_to_string(config_path).ok()?;
+    if previous == replacement {
+        return Some(previous);
+    }
     if let Err(e) = store_vhost_backup(domain, &previous) {
         tracing::warn!(
             "Could not back up the vhost for {domain} before replacing it \
@@ -1236,6 +1242,8 @@ pub fn capture_previous(config_path: &str, domain: &str) -> Option<String> {
 }
 
 /// Write one superseded body under `{root}/{domain}/`, then prune the oldest.
+/// A body identical to the newest copy is not stored again: a write that
+/// `nginx -t` rejects is rolled back, so each retry replaces the same body.
 ///
 /// `domain` becomes a path segment, so it is checked here rather than trusted.
 /// The caller reaches this through a route that already validated the domain,
@@ -1250,18 +1258,25 @@ fn store_vhost_backup(domain: &str, body: &str) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok();
 
-    // Milliseconds, fixed width, leading — the prune below orders by filename,
-    // and two site writes inside one second are ordinary (enabling SSL re-renders
-    // the vhost immediately after the site that asked for it).
+    if newest_vhost_backup(&dir)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_some_and(|kept| kept == body)
+    {
+        return Ok(());
+    }
+
+    // Timestamp then counter, both fixed width, so filename order is age order
+    // (the prune and the check above rely on it) even for two writes within one
+    // millisecond.
     let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S.%3f");
-    let mut path = dir.join(format!("{stamp}.conf"));
-    let mut n = 1;
+    let mut n = 0;
+    let mut path = dir.join(format!("{stamp}-{n:03}.conf"));
     while path.exists() {
-        path = dir.join(format!("{stamp}-{n}.conf"));
         n += 1;
-        if n > 100 {
-            return Err("more than 100 backups within one millisecond".into());
+        if n > 999 {
+            return Err("more than 999 backups within one millisecond".into());
         }
+        path = dir.join(format!("{stamp}-{n:03}.conf"));
     }
 
     std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))?;
@@ -1287,6 +1302,15 @@ fn domain_is_safe_segment(domain: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_')
 }
 
+fn newest_vhost_backup(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "conf"))
+        .max()
+}
+
 /// Keep the newest `VHOST_BACKUP_KEEP` bodies for one domain, drop the rest.
 ///
 /// Ordering is by filename, which is why the timestamp is fixed-width and
@@ -1310,6 +1334,7 @@ fn prune_vhost_backups(dir: &std::path::Path) {
         std::fs::remove_file(dir.join(old)).ok();
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1693,7 +1718,7 @@ mod tests {
         let conf = src.join("kept.example.conf");
         std::fs::write(&conf, "server { server_name kept.example; }").unwrap();
 
-        let previous = capture_previous(conf.to_str().unwrap(), domain);
+        let previous = capture_previous(conf.to_str().unwrap(), domain, "next");
 
         // The caller still gets exactly what it got before, for restore_or_remove.
         assert_eq!(
@@ -1719,7 +1744,7 @@ mod tests {
         let backups = backup_scratch(domain);
         let src = conf_scratch("fresh");
 
-        let previous = capture_previous(src.join("fresh.example.conf").to_str().unwrap(), domain);
+        let previous = capture_previous(src.join("fresh.example.conf").to_str().unwrap(), domain, "next");
 
         assert!(previous.is_none(), "nothing was there to replace");
         assert!(
@@ -1740,9 +1765,9 @@ mod tests {
         // what the first wrote. Neither may overwrite the other's copy — a
         // second save inside the same second is the ordinary case, not a rare one.
         std::fs::write(&conf, "one").unwrap();
-        capture_previous(conf.to_str().unwrap(), domain);
+        capture_previous(conf.to_str().unwrap(), domain, "next");
         std::fs::write(&conf, "two").unwrap();
-        capture_previous(conf.to_str().unwrap(), domain);
+        capture_previous(conf.to_str().unwrap(), domain, "next");
 
         let mut bodies: Vec<String> = std::fs::read_dir(&backups)
             .unwrap()
@@ -1805,10 +1830,74 @@ mod tests {
 
         // ...and the caller is still handed the previous body, because a failed
         // backup must never be the reason a site does not deploy.
-        let previous = capture_previous(conf.to_str().unwrap(), "../../etc/nginx");
+        let previous = capture_previous(conf.to_str().unwrap(), "../../etc/nginx", "next");
         assert_eq!(previous.as_deref(), Some("body"));
 
         std::fs::remove_dir_all(&src).ok();
+    }
+
+    fn kept_bodies(dir: &std::path::Path) -> Vec<String> {
+        let mut paths: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).collect();
+        paths.sort();
+        paths.iter().map(|p| std::fs::read_to_string(p).unwrap()).collect()
+    }
+
+    /// Certificate renewals re-render the whole vhost, usually byte for byte.
+    /// Each such write must not push an older, different body out of retention.
+    #[test]
+    fn rewrites_that_change_nothing_do_not_evict_the_original() {
+        let domain = "unchanged.example";
+        let backups = backup_scratch(domain);
+        let src = conf_scratch("unchanged");
+        let conf = src.join("unchanged.example.conf");
+
+        std::fs::write(&conf, "hand written").unwrap();
+        capture_previous(conf.to_str().unwrap(), domain, "rendered");
+        std::fs::write(&conf, "rendered").unwrap();
+        for _ in 0..(VHOST_BACKUP_KEEP * 2) {
+            capture_previous(conf.to_str().unwrap(), domain, "rendered");
+        }
+
+        assert_eq!(kept_bodies(&backups), vec!["hand written".to_string()]);
+
+        std::fs::remove_dir_all(&backups).ok();
+        std::fs::remove_dir_all(&src).ok();
+    }
+
+    /// A write `nginx -t` rejects is rolled back, so every retry replaces the
+    /// same body again. One copy of it is enough.
+    #[test]
+    fn retries_of_a_rolled_back_write_keep_one_copy() {
+        let domain = "retried.example";
+        let backups = backup_scratch(domain);
+        let src = conf_scratch("retried");
+        let conf = src.join("retried.example.conf");
+        std::fs::write(&conf, "live").unwrap();
+
+        for _ in 0..(VHOST_BACKUP_KEEP * 2) {
+            capture_previous(conf.to_str().unwrap(), domain, "rejected");
+        }
+
+        assert_eq!(kept_bodies(&backups), vec!["live".to_string()]);
+
+        std::fs::remove_dir_all(&backups).ok();
+        std::fs::remove_dir_all(&src).ok();
+    }
+
+    /// Filename order is age order, including copies made in one millisecond:
+    /// both the prune and the duplicate check rely on it.
+    #[test]
+    fn filename_order_is_write_order() {
+        let domain = "ordered.example";
+        let backups = backup_scratch(domain);
+        let bodies: Vec<String> = (0..VHOST_BACKUP_KEEP).map(|i| format!("body {i}")).collect();
+        for body in &bodies {
+            store_vhost_backup(domain, body).unwrap();
+        }
+
+        assert_eq!(kept_bodies(&backups), bodies);
+
+        std::fs::remove_dir_all(&backups).ok();
     }
 
     #[test]

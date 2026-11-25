@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### A copy of the nginx config a site save replaces (#130)
+
+Creating a site or saving its settings now keeps the vhost it replaces in
+`/var/backups/dockpanel/nginx-vhosts/<domain>/` (root only, newest 10 per domain). A write that does not
+change the file, such as the rebuild after a certificate renewal, adds no copy. Docker app, Git Deploy and
+rename writes are not covered yet. There is no UI: restore by hand, then check with `nginx -t`.
+Contributed by @MikeBerryCC.
+
 ### Docker Apps: search the template catalog (#141)
 
 The App Templates gallery on the Docker Apps page has a search box that filters by name, description
