@@ -163,6 +163,14 @@ pairs=$(printf '%s\n' "$nulled" \
 #                                                     WANTS to clear it silently
 #                                                     cannot): the round-trip is
 #                                                     the point.
+#        custom_nginx@SiteDetail.tsx   the Limits form of a SITE (PUT /sites/{id}/limits).
+#                                      The name collides with git_deploys.custom_nginx
+#                                      (#132), which IS a COALESCE three-state column,
+#                                      but this payload goes to sites.rs, whose UPDATE
+#                                      assigns `custom_nginx = $5` with no COALESCE:
+#                                      null empties the column, so clearing works. The
+#                                      Git Deploy form sends "" for an emptied box
+#                                      (GitDeploys.tsx, not an `|| null` key).
 #
 # Each entry pins a COUNT, because file granularity alone is not enough: several
 # of these pages carry a create AND an update payload, and an allow-list entry
@@ -170,8 +178,8 @@ pairs=$(printf '%s\n' "$nulled" \
 # expected counts are 1 — the create occurrence — so any OTHER count in the same
 # file fails here unless written above. `domain@GitDeploys.tsx` must never appear
 # at all: that clear is REFUSED rather than folded away (§5).
-EXPECTED_PAIRS="accent_color@Resellers.tsx=1 alert_discord_url@Monitors.tsx=1 alert_slack_url@Monitors.tsx=1 allowed_images@ContainerPolicies.tsx=1 domain@Apps.tsx=2 github_token@GitDeploys.tsx=1 keyword@Monitors.tsx=1 logo_url@Resellers.tsx=1 panel_name@Resellers.tsx=1 ssl_email@Apps.tsx=2"
-eq "§1 the only null-for-empty fields left on a COALESCE-guarded column are the ten with written reasons" \
+EXPECTED_PAIRS="accent_color@Resellers.tsx=1 alert_discord_url@Monitors.tsx=1 alert_slack_url@Monitors.tsx=1 allowed_images@ContainerPolicies.tsx=1 custom_nginx@SiteDetail.tsx=1 domain@Apps.tsx=2 github_token@GitDeploys.tsx=1 keyword@Monitors.tsx=1 logo_url@Resellers.tsx=1 panel_name@Resellers.tsx=1 ssl_email@Apps.tsx=2"
+eq "§1 the only null-for-empty fields left on a COALESCE-guarded column are the eleven with written reasons" \
    "$pairs" "$EXPECTED_PAIRS"
 
 echo
