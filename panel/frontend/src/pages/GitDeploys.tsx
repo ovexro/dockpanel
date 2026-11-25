@@ -67,6 +67,7 @@ interface GitDeploy {
   deploy_protected: boolean;
   build_method: string;
   preview_ttl_hours: number;
+  history_retention: number;
   // Container paths bind-mounted durably under GIT_DATA_DIR/{name} on the agent
   // (#118) — the host side is never operator-supplied. Always empty for
   // anything the panel deploys as a preview.
@@ -175,6 +176,7 @@ export default function GitDeploys() {
   const [formCron, setFormCron] = useState("");
   const [formProtected, setFormProtected] = useState(false);
   const [formPreviewTtl, setFormPreviewTtl] = useState(24);
+  const [formHistoryRetention, setFormHistoryRetention] = useState(0);
   const [formVolumes, setFormVolumes] = useState<string[]>([]);
 
   const loadDeploys = async () => {
@@ -277,6 +279,7 @@ export default function GitDeploys() {
     setFormCron(selected.deploy_cron || "");
     setFormProtected(selected.deploy_protected || false);
     setFormPreviewTtl(selected.preview_ttl_hours ?? 24);
+    setFormHistoryRetention(selected.history_retention ?? 0);
     setFormVolumes(selected.volumes || []);
     setEditing(true);
     setShowModal(true);
@@ -327,6 +330,7 @@ export default function GitDeploys() {
       deploy_cron: formCron.trim(),
       deploy_protected: formProtected,
       preview_ttl_hours: formPreviewTtl,
+      history_retention: formHistoryRetention,
       // Takes effect on the NEXT deploy, not this save — the field only
       // changes what a future container's HostConfig binds, and this request
       // never talks to the agent. Sent in full every time, empty included, so
@@ -816,6 +820,7 @@ export default function GitDeploys() {
                   { label: "Post-deploy Cmd", value: selected.post_deploy_cmd || "\u2014" },
                   { label: "Build Method", value: selected.build_method === "nixpacks" ? "Nixpacks" : selected.build_method === "auto-detect" ? "Auto-detect" : selected.build_method === "compose" ? "Docker Compose" : "Dockerfile" },
                   { label: "Preview TTL", value: selected.preview_ttl_hours > 0 ? `${selected.preview_ttl_hours}h` : "No auto-cleanup" },
+                  { label: "History kept", value: selected.history_retention > 0 ? `Last ${selected.history_retention}` : "All" },
                   { label: "Build Context", value: selected.build_context || "." },
                   { label: "GitHub", value: selected.github_token ? "Connected" : "Not configured" },
                   { label: "Deploy Schedule", value: selected.deploy_cron || "\u2014" },
@@ -1513,6 +1518,20 @@ export default function GitDeploys() {
                   className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-dark-100 text-sm focus:border-accent-500 focus:outline-none"
                 />
                 <p className="text-xs text-dark-300 mt-1">Auto-cleanup preview environments after this many hours (0 = no cleanup)</p>
+              </div>
+
+              {/* Deploy history retention */}
+              <div>
+                <label className="block text-sm font-medium text-dark-100 mb-1">Keep deploy history (entries)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={10000}
+                  value={formHistoryRetention}
+                  onChange={(e) => setFormHistoryRetention(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-dark-100 text-sm focus:border-accent-500 focus:outline-none"
+                />
+                <p className="text-xs text-dark-300 mt-1">Older entries are deleted automatically (0 = keep everything, otherwise at least 5 so a rollback target always remains)</p>
               </div>
 
               {/* Pre-build Command */}

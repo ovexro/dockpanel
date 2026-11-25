@@ -21,6 +21,10 @@ pub async fn run(db: PgPool, agents: AgentRegistry, mut shutdown: broadcast::Rec
         if let Err(e) = cleanup_expired_previews(&db, &agents).await {
             tracing::warn!("Preview cleanup error: {e}");
         }
+
+        if let Err(e) = prune_deploy_history(&db).await {
+            tracing::warn!("Deploy history prune error: {e}");
+        }
     }
 }
 
@@ -157,5 +161,31 @@ async fn cleanup_expired_previews(db: &PgPool, agents: &AgentRegistry) -> Result
         }
     }
 
+    Ok(())
+}
+
+/// Trim `git_deploy_history` to each deploy's `history_retention` newest rows.
+/// 0 (the default) keeps everything. Rows still `building`/`deploying` are never
+/// removed, so a running deploy cannot lose the row it will update.
+async fn prune_deploy_history(db: &PgPool) -> Result<(), String> {
+    let res = sqlx::query(
+        "DELETE FROM git_deploy_history h USING ( \
+             SELECT id FROM ( \
+                 SELECT h2.id, h2.status, \
+                        ROW_NUMBER() OVER (PARTITION BY h2.git_deploy_id ORDER BY h2.created_at DESC, h2.id DESC) AS rn, \
+                        d.history_retention AS keep \
+                 FROM git_deploy_history h2 \
+                 JOIN git_deploys d ON d.id = h2.git_deploy_id \
+                 WHERE d.history_retention > 0 \
+             ) ranked \
+             WHERE rn > keep AND status NOT IN ('building', 'deploying') \
+         ) doomed WHERE h.id = doomed.id",
+    )
+    .execute(db)
+    .await
+    .map_err(|e| e.to_string())?;
+    if res.rows_affected() > 0 {
+        tracing::info!("Pruned {} old deploy-history rows", res.rows_affected());
+    }
     Ok(())
 }

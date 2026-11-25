@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Git Deploys: deploy history can be limited (#132)
+
+Every Git Deploy kept its whole deploy history for ever; nothing deleted it. A Git Deploy now has a
+"Keep deploy history" setting: `0` (the default, so nothing changes for existing deploys) keeps every
+entry, otherwise only the newest N (5 to 10000) are kept and older ones are removed automatically. The
+floor of 5 leaves a rollback target. A deploy that is still building is never removed. Pin:
+`tests/git-deploy-history-retention-pin-e2e.sh`.
+
 ## [2.242.5]
 
 ### Security: a DNS zone belongs to the administrator who added it

@@ -46,7 +46,7 @@ const GIT_DEPLOY_SELECT: &str = "SELECT d.id, d.user_id, d.server_id, d.name, d.
     d.container_id, d.image_tag, d.status, d.memory_mb, d.cpu_percent, d.ssl_email, \
     d.pre_build_cmd, d.post_deploy_cmd, d.build_args, d.build_context, d.last_deploy, \
     d.last_commit, d.created_at, d.updated_at, d.github_token, d.deploy_cron, \
-    d.deploy_protected, d.build_method, d.preview_ttl_hours, d.scheduled_deploy_at, \
+    d.deploy_protected, d.build_method, d.preview_ttl_hours, d.history_retention, d.scheduled_deploy_at, \
     d.tls_mode, d.tls_certificate_id, d.volumes, c.alias AS tls_certificate \
     FROM git_deploys d LEFT JOIN tls_certificates c ON c.id = d.tls_certificate_id";
 
@@ -204,6 +204,8 @@ pub struct GitDeploy {
     pub deploy_protected: bool,
     pub build_method: String,
     pub preview_ttl_hours: i32,
+    /// Deploy-history rows kept for this deploy; 0 keeps everything.
+    pub history_retention: i32,
     pub scheduled_deploy_at: Option<chrono::DateTime<chrono::Utc>>,
     /// How the domain is served, as stored. NULL on a row an older binary
     /// wrote; read through `effective_tls_mode`, never directly.
@@ -463,6 +465,7 @@ pub struct CreateRequest {
     pub deploy_cron: Option<String>,
     pub deploy_protected: Option<bool>,
     pub preview_ttl_hours: Option<i32>,
+    pub history_retention: Option<i32>,
     pub volumes: Option<Vec<String>>,
 }
 
@@ -491,6 +494,7 @@ pub struct UpdateRequest {
     pub deploy_cron: Option<String>,
     pub deploy_protected: Option<bool>,
     pub preview_ttl_hours: Option<i32>,
+    pub history_retention: Option<i32>,
     /// Absent means keep the stored list. The frontend always sends the full
     /// current list (including `[]` to clear it), so in practice this is only
     /// ever `None` for a caller that omits the key entirely — matching how
@@ -599,6 +603,7 @@ pub async fn create(
     let deploy_protected = body.deploy_protected.unwrap_or(false);
 
     let preview_ttl = body.preview_ttl_hours.unwrap_or(24);
+    let history_retention = validate_history_retention(body.history_retention.unwrap_or(0))?;
 
     // Validate pre_build_cmd and post_deploy_cmd for command injection
     if let Some(ref cmd) = body.pre_build_cmd {
@@ -715,8 +720,8 @@ pub async fn create(
         };
 
     let mut deploy: GitDeploy = sqlx::query_as(
-        "INSERT INTO git_deploys (user_id, server_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron, deploy_protected, preview_ttl_hours, tls_mode, tls_certificate_id, volumes) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) \
+        "INSERT INTO git_deploys (user_id, server_id, name, repo_url, branch, dockerfile, container_port, host_port, domain, env_vars, auto_deploy, webhook_secret, memory_mb, cpu_percent, ssl_email, pre_build_cmd, post_deploy_cmd, build_args, build_context, github_token, deploy_cron, deploy_protected, preview_ttl_hours, tls_mode, tls_certificate_id, volumes, history_retention) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27) \
          RETURNING *",
     )
     .bind(claims.sub)
@@ -750,6 +755,7 @@ pub async fn create(
     .bind(mode)
     .bind(tls_certificate_id)
     .bind(&volumes_json)
+    .bind(history_retention)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -816,6 +822,16 @@ pub async fn get_one(
     Ok(Json(deploy))
 }
 
+/// 0 keeps every history row. Anything else must leave room for a rollback
+/// target (the previous successful deploy), so the floor is 5.
+fn validate_history_retention(n: i32) -> Result<i32, ApiError> {
+    if n == 0 || (5..=10_000).contains(&n) {
+        Ok(n)
+    } else {
+        Err(err(StatusCode::BAD_REQUEST, "History retention must be 0 (keep all) or between 5 and 10000"))
+    }
+}
+
 /// PUT /api/git-deploys/{id} — Update a git deploy configuration.
 pub async fn update(
     State(state): State<AppState>,
@@ -825,6 +841,8 @@ pub async fn update(
     Json(body): Json<UpdateRequest>,
 ) -> Result<Json<GitDeploy>, ApiError> {
     require_admin(&claims.role)?;
+
+    let history_retention = body.history_retention.map(validate_history_retention).transpose()?;
 
     // Verify ownership + fetch current domain/cron so we only validate values
     // that actually CHANGE (grandfather rows that predate these guards — e.g. a
@@ -1078,8 +1096,9 @@ pub async fn update(
          tls_mode = $19, \
          tls_certificate_id = $20, \
          volumes = COALESCE($21, volumes), \
+         history_retention = COALESCE($22, history_retention), \
          updated_at = NOW() \
-         WHERE id = $22 AND user_id = $23 \
+         WHERE id = $23 AND user_id = $24 \
          RETURNING *",
     )
     .bind(body.repo_url.as_deref())
@@ -1103,6 +1122,7 @@ pub async fn update(
     .bind(mode)
     .bind(tls_certificate_id)
     .bind(volumes)
+    .bind(history_retention)
     .bind(id)
     .bind(claims.sub)
     .fetch_one(&state.db)
