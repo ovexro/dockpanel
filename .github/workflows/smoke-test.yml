@@ -136,6 +136,17 @@ jobs:
             # This is the standard, narrow workaround for reaching an EOL archive
             # deliberately; it does not weaken anything on a still-supported distro,
             # since apt only ever has an expired Release file to complain about here.
+            #
+            # Expired Release is only half of it: bullseye's packages were also
+            # REMOVED from deb.debian.org (404 on every .deb, which no retry fixes;
+            # seen on the v2.242.6 release run). The archive lives on
+            # archive.debian.org, so point apt there on Debian 11 only.
+            if [ -r /etc/os-release ] && . /etc/os-release && [ "${ID:-}" = debian ] && [ "${VERSION_ID:-}" = 11 ]; then
+              for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+                [ -f "$f" ] && sed -i -e 's|deb.debian.org/debian-security|archive.debian.org/debian-security|g' \
+                                      -e 's|deb.debian.org/debian|archive.debian.org/debian|g' "$f"
+              done
+            fi
             apt-get update -qq -o Acquire::Check-Valid-Until=false
             DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates file >/dev/null
           elif command -v dnf >/dev/null 2>&1; then
