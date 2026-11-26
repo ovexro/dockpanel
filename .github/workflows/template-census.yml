@@ -104,7 +104,14 @@ jobs:
           TEMPLATE_CENSUS_PRUNE: '1'
           TEMPLATE_CENSUS_SHARD: '${{ matrix.shard }}/4'
         run: |
-          sudo -E env "PATH=$PATH" \
+          # Every variable is named. `sudo -E` is ignored by the sudo on Ubuntu 26.04
+          # runners, which left root with no Rust toolchain and no census settings.
+          sudo env "PATH=$PATH" "HOME=$HOME" \
+            "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" \
+            "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" \
+            "TEMPLATE_CENSUS=$TEMPLATE_CENSUS" \
+            "TEMPLATE_CENSUS_PRUNE=$TEMPLATE_CENSUS_PRUNE" \
+            "TEMPLATE_CENSUS_SHARD=$TEMPLATE_CENSUS_SHARD" \
             cargo test --manifest-path panel/agent/Cargo.toml \
             template_census -- --ignored --nocapture
 
