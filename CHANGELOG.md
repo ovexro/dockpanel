@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed: the Homarr one-click template
+
+Homarr refuses to start without `SECRET_ENCRYPTION_KEY` (64 hex characters) and the template did not set
+it: current images stop at the database migrations, v2.9.1 stayed running and answered HTTP 500. The agent
+now generates a random key at deploy, and updates keep it. A Homarr app deployed before this fix does not
+get the key from an update: delete it and deploy it again (it never finished its first start).
+
 ## [2.242.7]
 
 ### Docs: the list of Docker app templates (#140)

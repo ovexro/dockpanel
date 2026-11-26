@@ -444,6 +444,28 @@ fn domain_env_for(template_id: &str, domain: &str) -> Vec<(&'static str, String)
         .unwrap_or_default()
 }
 
+/// Variables an image refuses to start without, whose value only has to be random:
+/// 32 bytes written as 64 hex characters, made once at deploy.
+///
+/// Not an [`EnvVarDef`], because the operator has nothing to decide here and the
+/// form's generator makes 24 non-hex characters. Every recreate path starts from
+/// the container's own env, so the value outlives updates. That matters: Homarr
+/// encrypts stored integration credentials with it.
+static TEMPLATE_GENERATED_HEX_ENV: &[(&str, &str)] = &[("homarr", "SECRET_ENCRYPTION_KEY")];
+
+/// Append this template's generated variables, unless the deploy already set one.
+fn add_generated_env(template_id: &str, env_list: &mut Vec<String>) {
+    for (_, name) in TEMPLATE_GENERATED_HEX_ENV
+        .iter()
+        .filter(|(id, _)| *id == template_id)
+    {
+        let prefix = format!("{name}=");
+        if !env_list.iter().any(|e| e.starts_with(&prefix)) {
+            env_list.push(format!("{prefix}{}", hex::encode(rand::random::<[u8; 32]>())));
+        }
+    }
+}
+
 /// Assemble a deploy's `KEY=value` list from the template's declared vars, what
 /// the operator submitted, and whatever [`domain_env_for`] derived.
 ///
@@ -3966,6 +3988,7 @@ pub async fn deploy_app(
 
     // Build environment variables: merge template defaults with user-supplied values
     let mut env_list = merge_deploy_env(template.env_vars, &env, &derived);
+    add_generated_env(template.id, &mut env_list);
     // Reasserted, not merely defaulted — see `SidecarDef::client_env_entry`.
     if let Some(sc) = sidecar {
         env_list.retain(|e| !e.starts_with(&format!("{}=", sc.client_env_var)));
@@ -7985,6 +8008,39 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
         false
+    }
+
+    /// Homarr exits during its DB migrations without a 64-hex-character key.
+    #[test]
+    fn generated_env_gives_homarr_its_own_hex_key() {
+        let make = || {
+            let mut env = Vec::new();
+            add_generated_env("homarr", &mut env);
+            env
+        };
+        let (first, second) = (make(), make());
+        assert_eq!(first.len(), 1);
+        let key = first[0]
+            .strip_prefix("SECRET_ENCRYPTION_KEY=")
+            .expect("the variable Homarr reads");
+        assert_eq!(key.len(), 64);
+        assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(first, second, "every install needs its own key");
+    }
+
+    #[test]
+    fn generated_env_keeps_the_operators_value_and_skips_other_templates() {
+        let mut env = vec!["SECRET_ENCRYPTION_KEY=mine".to_string()];
+        add_generated_env("homarr", &mut env);
+        assert_eq!(env, ["SECRET_ENCRYPTION_KEY=mine"]);
+
+        let mut other = Vec::new();
+        add_generated_env("ghost", &mut other);
+        assert!(other.is_empty());
+
+        for (id, _) in TEMPLATE_GENERATED_HEX_ENV {
+            assert!(TEMPLATES.iter().any(|t| t.id == *id), "unknown template {id}");
+        }
     }
 
     // ── The docs "Apps" page (#140) ────────────────────────────────
