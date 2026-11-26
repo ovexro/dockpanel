@@ -182,7 +182,8 @@ done
 # sibling "Add Site" link three lines below was already gated for exactly this
 # reason: the fix landed on one of the two links.
 if need "$DASH_S" A10; then
-  if within "$DASH_S" '\{isAdmin && \(' 'Deploy App' 700; then
+  # The gate may also carry the Settings → Menu Options preference (#131).
+  if within "$DASH_S" '\{isAdmin && (!isMenuHidden\("/apps", hiddenMenu\) && )?\(' 'Deploy App' 700; then
     ok "A10 the Deploy App shortcut is admin-gated"
   else
     bad "A10 the Deploy App shortcut is offered to a role that Apps.tsx redirects away"

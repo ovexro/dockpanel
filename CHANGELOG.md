@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Menu Options: choose what each role sees (#131)
+
+Settings has a "Menu Options" tab where an administrator picks, per role, which side menu and top bar
+entries are shown. It also applies to the Ctrl-K palette and the dashboard's "Deploy App" and "Add Site"
+buttons. This changes what is shown, not what is allowed: a hidden page still opens from its URL and keeps
+its access rules. Dashboard, Settings, My Account and Logout cannot be hidden. For admins the saved choice
+is a default that each admin can override in their own browser. Contributed by @MikeBerryCC.
+
 ### Fixed: the Homarr one-click template
 
 Homarr refuses to start without `SECRET_ENCRYPTION_KEY` (64 hex characters) and the template did not set

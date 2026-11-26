@@ -1,6 +1,6 @@
 # API Reference
 
-DockPanel exposes 841 REST endpoints (545 backend + 296 agent) across 50+ categories — the figure derived from the two routers in `FEATURES.md` §Verified Metrics, which owns it. The tables below document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
+DockPanel exposes 842 REST endpoints (546 backend + 296 agent) across 50+ categories — the figure derived from the two routers in `FEATURES.md` §Verified Metrics, which owns it. The tables below document the commonly used subset, not every route. All endpoints except `/api/health`, `/api/branding`, `/api/auth/setup-status`, and `/api/auth/login` require authentication.
 
 ## Authentication
 
@@ -698,6 +698,7 @@ leaves the stored value unchanged — there is no way to clear one through this 
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET/PUT | `/api/settings` | Panel settings |
+| GET | `/api/menu-options` | Menu entries hidden for the caller's own role (any signed-in account) |
 | GET | `/api/settings/health` | Health check (DB + agent) |
 | POST | `/api/settings/smtp/test` | Test email delivery |
 | POST | `/api/settings/test-webhook` | Test Slack/Discord webhook |

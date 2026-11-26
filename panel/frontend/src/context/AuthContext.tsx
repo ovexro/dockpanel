@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { api, ApiError } from "../api";
 import { logger } from "../utils/logger";
+import { resetMenuDefault } from "../data/menuOptions";
 
 interface User {
   id: string;
@@ -53,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { temp_token: data.temp_token };
     }
     if (data.user) {
+      resetMenuDefault();
       setUser(data.user);
     }
     return null;
@@ -63,6 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       temp_token: tempToken,
       code,
     });
+    resetMenuDefault();
     setUser(data.user);
   };
 
@@ -74,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // "Server not found or access denied". Clearing it here stops the leak at
     // the source; `ServerContext` also self-heals a browser that is already dirty.
     localStorage.removeItem("dp-active-server");
+    resetMenuDefault();
     setUser(null);
   };
 

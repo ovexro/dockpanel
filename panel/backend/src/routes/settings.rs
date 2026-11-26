@@ -131,6 +131,17 @@ fn is_sensitive_key(key: &str) -> bool {
     SENSITIVE_KEYS.contains(&key) || key.ends_with("_client_secret")
 }
 
+/// A `menu_hidden_*` value must be empty or a JSON array of strings; any other
+/// key passes. Shared by `update` and `import_config`.
+fn check_menu_hidden(key: &str, value: &str) -> Result<(), String> {
+    if !key.starts_with("menu_hidden_") || value.is_empty() {
+        return Ok(());
+    }
+    serde_json::from_str::<Vec<String>>(value)
+        .map(|_| ())
+        .map_err(|e| format!("{key} must be a JSON array of strings: {e}"))
+}
+
 /// GET /api/menu-options — the menu entries hidden for the CALLER's own role.
 ///
 /// Separate from `list` because that handler is `AdminUser`, and the accounts
@@ -235,14 +246,7 @@ pub async fn update(
     // so a bad value does not fail loudly anywhere — it just makes the
     // checkboxes look like they did nothing, on somebody else's screen.
     for (key, value) in &body {
-        if key.starts_with("menu_hidden_") && !value.is_empty() {
-            if let Err(e) = serde_json::from_str::<Vec<String>>(value) {
-                return Err(err(
-                    StatusCode::BAD_REQUEST,
-                    &format!("{key} must be a JSON array of strings: {e}"),
-                ));
-            }
-        }
+        check_menu_hidden(key, value).map_err(|m| err(StatusCode::BAD_REQUEST, &m))?;
     }
 
     // Validate logo_url
@@ -895,6 +899,13 @@ pub async fn import_config(
     // the same list now, not a second copy that drifts away from it.
     let allowed_keys = ALLOWED_KEYS;
 
+    // Checked before the first write, so a refused import changes nothing.
+    for (key, value) in settings_obj {
+        if let Some(val) = value.as_str() {
+            check_menu_hidden(key, val).map_err(|m| err(StatusCode::BAD_REQUEST, &m))?;
+        }
+    }
+
     // `SENSITIVE_KEYS` is the module-level const above, not a local copy.
     let mut imported = 0;
     let mut skipped = 0;
@@ -1362,4 +1373,20 @@ pub async fn reencrypt_credentials(
         "covered_modules": crate::services::credential_reencrypt::covered_module_names(),
         "swept_subjects": crate::services::credential_reencrypt::swept_subjects(),
     })))
+}
+
+#[cfg(test)]
+mod menu_hidden_tests {
+    use super::check_menu_hidden;
+
+    #[test]
+    fn menu_hidden_values_must_be_string_arrays() {
+        for ok in ["", "[]", r#"["/dns","chrome:search"]"#] {
+            assert!(check_menu_hidden("menu_hidden_user", ok).is_ok(), "{ok}");
+        }
+        for bad in ["{oops", "{}", "[1]", r#""/dns""#] {
+            assert!(check_menu_hidden("menu_hidden_user", bad).is_err(), "{bad}");
+        }
+        assert!(check_menu_hidden("panel_name", "{oops").is_ok());
+    }
 }

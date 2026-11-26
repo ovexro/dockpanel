@@ -122,30 +122,36 @@ export interface MenuDefault {
   hidden: Set<string>;
 }
 
-// One fetch per session, shared by the three layouts, the command palette and
-// the dashboard. Without the cache each of those mounts its own request for the
-// same tiny answer, and the sidebar would re-request it on every layout switch.
+// One fetch per signed-in account, shared by the three layouts, the command
+// palette and the dashboard. Without the cache each of those mounts its own
+// request for the same tiny answer, and the sidebar would re-request it on every
+// layout switch.
 let cache: MenuDefault | null = null;
 let inflight: Promise<MenuDefault> | null = null;
+// Bumped by every reset. A request that started before a reset belongs to the
+// previous account (or the previous settings) and must not fill the cache.
+let generation = 0;
 
 /**
  * The stored menu for the CURRENT account's role, from `GET /api/menu-options`.
  *
- * Never rejects. A failure — offline, a 500, a logged-out 401 — resolves to an
+ * Never rejects. A failure (offline, a 500, a logged-out 401) resolves to an
  * empty set, because every caller is a menu about to render and a cluttered
- * menu is a better failure than an empty one.
+ * menu is a better failure than an empty one. A failure is not cached, so the
+ * next menu to mount asks again.
  */
-export function loadMenuDefault(force = false): Promise<MenuDefault> {
-  if (force) {
-    cache = null;
-    inflight = null;
-  }
+export function loadMenuDefault(): Promise<MenuDefault> {
   if (cache) return Promise.resolve(cache);
   if (inflight) return inflight;
+
+  const started = generation;
+  const nothingHidden = (): MenuDefault => ({ role: "", hidden: new Set<string>() });
 
   inflight = api
     .get<{ role?: string; hidden?: string[] }>("/menu-options")
     .then(r => {
+      // Whoever still waits on a superseded request gets "hide nothing".
+      if (started !== generation) return nothingHidden();
       const hidden = Array.isArray(r?.hidden) ? r.hidden : [];
       // An always-visible path that somehow reached the store is dropped on READ
       // as well as on write: a value written by an older build, or edited into
@@ -156,22 +162,27 @@ export function loadMenuDefault(force = false): Promise<MenuDefault> {
       };
       return cache;
     })
-    .catch(() => {
-      cache = { role: "", hidden: new Set<string>() };
-      return cache;
-    })
+    .catch(nothingHidden)
     .finally(() => {
-      inflight = null;
+      if (started === generation) inflight = null;
     });
 
   return inflight;
 }
 
-/** Drop the cached answer. Called after an admin saves, and on logout, so the
- *  next account does not inherit the previous one's menu. */
-export function invalidateHiddenMenu(): void {
+/** Forget the cached answer. `AuthContext` calls this whenever the signed-in
+ *  account changes: password sign-in and logout do not reload the page, so the
+ *  next account would otherwise inherit the previous one's menu. */
+export function resetMenuDefault(): void {
+  generation += 1;
   cache = null;
   inflight = null;
+}
+
+/** Forget the cached answer and make every mounted menu re-read. Called after
+ *  an admin saves. */
+export function invalidateHiddenMenu(): void {
+  resetMenuDefault();
   window.dispatchEvent(new Event(MENU_CHANGE_EVENT));
 }
 

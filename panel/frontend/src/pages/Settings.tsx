@@ -333,7 +333,11 @@ export default function Settings() {
     return menuHiddenFor(menuRole);
   };
 
-  /** Saves on every tick, like the auto-heal and status-page switches on this
+  /** Each save sends the whole array, built from the last SAVED one, so the
+   *  checkboxes are disabled until a save returns. A second tick made while one
+   *  was in flight would otherwise overwrite the first.
+   *
+   *  Saves on every tick, like the auto-heal and status-page switches on this
    *  page. A Save button here would be one more thing to forget, on a screen
    *  whose whole purpose is what somebody else sees. */
   const setMenuEntryShown = async (key: string, shown: boolean) => {
@@ -2672,6 +2676,7 @@ export default function Settings() {
                       <input
                         type="checkbox"
                         checked={!menuEditingSet().has(item.to)}
+                        disabled={menuSaving}
                         onChange={e => setMenuEntryShown(item.to, e.target.checked)}
                         className="rounded border-dark-500 text-rust-500 focus:ring-accent-500"
                       />
@@ -2690,6 +2695,7 @@ export default function Settings() {
                     <input
                       type="checkbox"
                       checked={!menuEditingSet().has(c.key)}
+                      disabled={menuSaving}
                       onChange={e => setMenuEntryShown(c.key, e.target.checked)}
                       className="rounded border-dark-500 text-rust-500 focus:ring-accent-500"
                     />
