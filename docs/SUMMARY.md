@@ -3,6 +3,7 @@
 - [Getting Started](getting-started.md)
 - [Configuration](CONFIGURATION.md)
 - [What DockPanel checks for you](guides/prerequisites.md)
+- [Apps](apps.md)
 - [How DockPanel is tested](testing.md)
 - [Guides]()
   - [Databases](guides/databases.md)

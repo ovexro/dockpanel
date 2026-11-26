@@ -213,7 +213,7 @@ dockpanel apps templates
 ```
 ID                CATEGORY      NAME             DESCRIPTION
 ghost             cms           Ghost            Modern publishing platform
-wordpress         cms           WordPress        Popular CMS and blogging platform
+gitea             development   Gitea            Self-hosted Git service
 grafana           monitoring    Grafana          Observability dashboards
 prometheus        monitoring    Prometheus       Metrics collection
 uptime-kuma       monitoring    Uptime Kuma      Uptime monitoring

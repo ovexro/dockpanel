@@ -7986,4 +7986,86 @@ mod tests {
         }
         false
     }
+
+    // ── The docs "Apps" page (#140) ────────────────────────────────
+
+    /// Broken templates that cannot sit in `CENSUS_KNOWN_BROKEN`: both also need a
+    /// value the operator types, so the census cannot judge them. FEATURES.md
+    /// records them.
+    const KNOWN_BROKEN_NEEDING_INPUT: &[&str] = &["drone", "azuracast"];
+
+    fn render_apps_doc() -> String {
+        let broken: Vec<&str> = CENSUS_KNOWN_BROKEN
+            .iter()
+            .map(|row| row.split('|').next().unwrap_or(row).trim())
+            .chain(KNOWN_BROKEN_NEEDING_INPUT.iter().copied())
+            .collect();
+
+        let mut by_category: std::collections::BTreeMap<String, Vec<AppTemplate>> =
+            Default::default();
+        let templates = list_templates();
+        let total = templates.len();
+        for t in templates {
+            by_category.entry(t.category.clone()).or_default().push(t);
+        }
+
+        let mut out = String::new();
+        out.push_str("<!-- Generated from panel/agent/src/services/docker_apps.rs. Do not edit by hand: -->\n");
+        out.push_str("<!-- UPDATE_APPS_DOC=1 cargo test --manifest-path panel/agent/Cargo.toml docs_apps_page -->\n\n");
+        out.push_str("# Apps\n\n");
+        out.push_str(&format!(
+            "DockPanel ships {total} one-click Docker app templates in {} categories.\n\n",
+            by_category.len()
+        ));
+        out.push_str(
+            "Deploy one from the **Docker Apps** page in the panel. `dockpanel apps templates` \
+             prints the same catalog on your server.\n\n",
+        );
+        out.push_str(
+            "A template starts one app container. Some apps also need a value from you, or a \
+             service you run yourself such as a database: check the app's own documentation. \
+             **Known issue** marks a template that currently does not work with a one-click \
+             deploy. **GPU** marks one that benefits from GPU passthrough.\n",
+        );
+
+        for (category, mut apps) in by_category {
+            apps.sort_by_key(|t| t.name.to_lowercase());
+            out.push_str(&format!("\n## {category} ({})\n\n", apps.len()));
+            out.push_str("| App | ID | Description | Image |\n|---|---|---|---|\n");
+            for t in apps {
+                let mut description = t.description.replace('|', "\\|");
+                if t.gpu_recommended {
+                    description.push_str(" · **GPU**");
+                }
+                if broken.contains(&t.id.as_str()) {
+                    description.push_str(" · **Known issue**");
+                }
+                out.push_str(&format!(
+                    "| {} | `{}` | {description} | `{}` |\n",
+                    t.name, t.id, t.image
+                ));
+            }
+        }
+        out
+    }
+
+    /// docs/apps.md is what people read before installing, so it has to be the
+    /// catalogue and not a copy of what the catalogue once was.
+    #[test]
+    fn docs_apps_page_matches_the_catalogue() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/apps.md");
+        for id in KNOWN_BROKEN_NEEDING_INPUT {
+            template_by_id(id);
+        }
+        let expected = render_apps_doc();
+        if std::env::var_os("UPDATE_APPS_DOC").is_some() {
+            std::fs::write(&path, &expected).expect("write docs/apps.md");
+        }
+        let actual = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            actual == expected,
+            "docs/apps.md is out of date. Regenerate it with: UPDATE_APPS_DOC=1 cargo test \
+             --manifest-path panel/agent/Cargo.toml docs_apps_page"
+        );
+    }
 }

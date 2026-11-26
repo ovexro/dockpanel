@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Docs: the list of Docker app templates (#140)
+
+The documentation has an "Apps" page listing every one-click template with its ID, description and image,
+so you can see what is available before installing. It is generated from the template catalog, CI fails if
+it falls behind, and it marks the templates that currently do not work with a one-click deploy.
+
 ### A copy of the nginx config a site save replaces (#130)
 
 Creating a site or saving its settings now keeps the vhost it replaces in
