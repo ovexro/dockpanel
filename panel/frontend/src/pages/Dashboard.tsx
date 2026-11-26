@@ -4,6 +4,7 @@ import { api } from "../api";
 import { useServer } from "../context/ServerContext";
 import { useAuth } from "../context/AuthContext";
 import { isNavVisible, navFlagsFor } from "../data/navItems";
+import { isMenuHidden, useHiddenMenu } from "../data/menuOptions";
 import { formatSize, formatRate, formatUptime, timeAgo } from "../utils/format";
 
 interface SiteDetail {
@@ -275,6 +276,7 @@ export default function Dashboard() {
   // indistinguishable from having no access to their own site. Reported that
   // way on #51, twice, by an operator who was testing a client account.
   const { user } = useAuth();
+  const hiddenMenu = useHiddenMenu();
   const isAdmin = user?.role === "admin";
 
   const [system, setSystem] = useState<SystemInfo | null>(null);
@@ -792,7 +794,12 @@ export default function Dashboard() {
               back here, and every handler in `routes/docker_apps.rs` requires
               admin. Docker Apps is an operator capability, so say so by not
               offering it. */}
-          {isAdmin && (
+          {/* Also gated on the Docker Apps menu checkbox. This shortcut and the
+              /apps sidebar row are one decision wearing two hats: an operator
+              who switched that row off has said they do not work with Docker
+              Apps on this box, and leaving the button here would put the thing
+              they hid back on the first screen they see. */}
+          {isAdmin && !isMenuHidden("/apps", hiddenMenu) && (
             <Link to="/apps" className="hidden sm:flex px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium items-center gap-1.5 transition-colors">
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
               Deploy App
@@ -800,8 +807,9 @@ export default function Dashboard() {
           )}
           {/* A `client` cannot bring a new domain into service by any route, so
               offering it the shortcut named for exactly that is a dead end —
-              it lands on the one refusal the role is defined by. */}
-          {user?.role !== "client" && (
+              it lands on the one refusal the role is defined by.
+              Gated on the Sites menu checkbox too, for the reason above. */}
+          {user?.role !== "client" && !isMenuHidden("/sites", hiddenMenu) && (
             <Link to="/sites" className="px-3 py-1.5 bg-dark-800 text-dark-300 hover:bg-dark-700 hover:text-dark-100 border border-dark-600 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors">
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
               Add Site

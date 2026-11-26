@@ -5,7 +5,7 @@ use axum::{
 };
 use std::collections::HashMap;
 
-use crate::auth::{AdminUser, ServerScope};
+use crate::auth::{AdminUser, AuthUser, ServerScope};
 use crate::error::{internal_error, err, agent_error, ApiError};
 use crate::services::activity;
 use crate::AppState;
@@ -81,6 +81,22 @@ pub const ALLOWED_KEYS: &[&str] = &[
     // AI-assisted build/deploy failure diagnosis (BYO API key, default off).
     // Read by services/ai_diagnosis.rs.
     "ai_diagnosis_enabled", "ai_diagnosis_provider", "ai_diagnosis_model", "ai_diagnosis_api_key",
+    // Which menu entries each role is shown. JSON arrays of nav paths and
+    // `chrome:*` control names, read back by `menu_options` below.
+    //
+    // `menu_hidden_admin` differs from the other three in how binding it is, and
+    // the difference is enforced in the frontend rather than here: for a
+    // non-admin role the stored array IS what that role sees, while for an admin
+    // it is a DEFAULT each administrator may override for their own browser. An
+    // operator debugging a box must always be able to get every door back
+    // without another account's help, because there is no account above them to
+    // restore a row they can no longer find.
+    //
+    // Presentation only. Hiding a row removes the door, not what is behind it:
+    // the route still resolves and every handler still applies the role checks
+    // it always did. Nothing here is a permission, and it must never become the
+    // reason something is BELIEVED to be unreachable.
+    "menu_hidden_admin", "menu_hidden_reseller", "menu_hidden_user", "menu_hidden_client",
     // MCP server (dockpanel-mcp, panel/mcp). Unlike ai_diagnosis_enabled, nothing
     // in the backend or the MCP crate reads these yet — the MCP server's actual
     // on/off state is the systemd unit and its bind address is /etc/dockpanel/
@@ -113,6 +129,41 @@ pub(crate) const SENSITIVE_KEYS: &[&str] = &["smtp_password", "pdns_api_key", "a
 /// back as raw ciphertext, not `********`, on read.
 fn is_sensitive_key(key: &str) -> bool {
     SENSITIVE_KEYS.contains(&key) || key.ends_with("_client_secret")
+}
+
+/// GET /api/menu-options — the menu entries hidden for the CALLER's own role.
+///
+/// Separate from `list` because that handler is `AdminUser`, and the accounts
+/// whose menus this shapes are exactly the ones that cannot call it. Same shape
+/// as `branding`: one narrow, self-scoped read of a table the caller otherwise
+/// has no access to. It answers only for `claims.role`, so no account can learn
+/// what another role's menu looks like.
+///
+/// The role is returned alongside the set because the caller has to know whether
+/// what it just received is binding or merely a default: an administrator may
+/// override their own menu locally, and every other role may not. The frontend
+/// cannot tell those apart from the array alone, and asking it to look the role
+/// up separately is how the two would drift.
+///
+/// A stored value that will not parse is treated as "hide nothing" rather than
+/// as an error. Every caller of this is a menu about to render, and a cluttered
+/// menu is a better failure than an empty one or a page that will not load.
+pub async fn menu_options(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let key = format!("menu_hidden_{}", claims.role);
+    let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = $1")
+        .bind(&key)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| internal_error("read menu options", e))?;
+
+    let hidden: Vec<String> = row
+        .and_then(|(v,)| serde_json::from_str::<Vec<String>>(&v).ok())
+        .unwrap_or_default();
+
+    Ok(Json(serde_json::json!({ "role": claims.role, "hidden": hidden })))
 }
 
 /// GET /api/settings — Returns all settings as a key/value map (admin only).
@@ -176,6 +227,21 @@ pub async fn update(
                 StatusCode::BAD_REQUEST,
                 &format!("Invalid IP or CIDR in allowed_panel_ips: {bad}"),
             ));
+        }
+    }
+
+    // Reject a malformed menu_hidden_* array BEFORE storing it. Every layout
+    // parses this on render and falls back to "show everything" when it cannot,
+    // so a bad value does not fail loudly anywhere — it just makes the
+    // checkboxes look like they did nothing, on somebody else's screen.
+    for (key, value) in &body {
+        if key.starts_with("menu_hidden_") && !value.is_empty() {
+            if let Err(e) = serde_json::from_str::<Vec<String>>(value) {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    &format!("{key} must be a JSON array of strings: {e}"),
+                ));
+            }
         }
     }
 

@@ -6,6 +6,15 @@ import ProvisionLog from "../components/ProvisionLog";
 import UpdatesContent from "./Updates";
 import { timeAgo } from "../utils/format";
 import { applyTheme, readStoredTheme } from "../hooks/useLayoutState";
+import {
+  CHROME_ITEMS,
+  CONFIGURABLE_ROLES,
+  invalidateHiddenMenu,
+  readAdminOverride,
+  toggleableNavGroups,
+  writeAdminOverride,
+  type ConfigurableRole,
+} from "../data/menuOptions";
 import ConfirmDialog from "../components/ConfirmDialog";
 import {
   TwoFactorCard,
@@ -181,6 +190,15 @@ const NOTIF_PLACEHOLDERS = ["{{title}}", "{{message}}", "{{severity}}", "{{times
 
 export default function Settings() {
   const { user } = useAuth();
+  const [menuRole, setMenuRole] = useState<ConfigurableRole>("admin");
+  const [menuSaving, setMenuSaving] = useState(false);
+  /** Which admin menu the checkboxes edit: the stored default every admin
+   *  starts from, or this administrator's own override. Meaningless for the
+   *  other roles, whose stored array is simply what they get. */
+  const [adminScope, setAdminScope] = useState<"default" | "mine">("default");
+  /** localStorage is not reactive; bumped after an override write so the
+   *  checkboxes re-read it. */
+  const [overrideTick, setOverrideTick] = useState(0);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -287,6 +305,64 @@ export default function Settings() {
   const [canary, setCanary] = useState<{ enabled: boolean; watching: number; total: number; armable: number; paths: { path: string; state: string; plantable: boolean; detail: string | null }[] } | null>(null);
   const [canaryErr, setCanaryErr] = useState<string | null>(null);
   const [arming, setArming] = useState(false);
+
+  /** The hidden set stored for one role, from the settings map already loaded.
+   *  A value that will not parse reads as "hide nothing", the same way the
+   *  backend and the layouts treat it — three places that must not disagree
+   *  about a malformed row, or the checkboxes would show one thing and the
+   *  role's menu another. */
+  const menuHiddenFor = (role: string): Set<string> => {
+    try {
+      const parsed: unknown = JSON.parse(settings[`menu_hidden_${role}`] || "[]");
+      return new Set(Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : []);
+    } catch {
+      return new Set<string>();
+    }
+  };
+
+  /** True when the checkboxes are editing this administrator's own view rather
+   *  than a stored role default. */
+  const editingOwnAdminView = menuRole === "admin" && adminScope === "mine";
+
+  /** The set the checkboxes currently reflect. An admin who has never overridden
+   *  starts from the stored default, so switching to "just me" shows what they
+   *  have rather than an empty slate. */
+  const menuEditingSet = (): Set<string> => {
+    void overrideTick;
+    if (editingOwnAdminView) return readAdminOverride() ?? menuHiddenFor("admin");
+    return menuHiddenFor(menuRole);
+  };
+
+  /** Saves on every tick, like the auto-heal and status-page switches on this
+   *  page. A Save button here would be one more thing to forget, on a screen
+   *  whose whole purpose is what somebody else sees. */
+  const setMenuEntryShown = async (key: string, shown: boolean) => {
+    const next = menuEditingSet();
+    if (shown) next.delete(key);
+    else next.add(key);
+
+    if (editingOwnAdminView) {
+      writeAdminOverride(next);
+      setOverrideTick(t => t + 1);
+      return;
+    }
+
+    const settingKey = `menu_hidden_${menuRole}`;
+    const value = JSON.stringify([...next]);
+    setMenuSaving(true);
+    try {
+      await api.put("/settings", { [settingKey]: value });
+      setSettings(s => ({ ...s, [settingKey]: value }));
+      // This admin's own sidebar re-reads on the event; an admin following the
+      // default sees their change immediately, one with an override does not,
+      // which is exactly what having an override means.
+      invalidateHiddenMenu();
+    } catch (e) {
+      setMessage({ text: e instanceof Error ? e.message : "Failed to save menu options", type: "error" });
+    } finally {
+      setMenuSaving(false);
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -557,7 +633,7 @@ export default function Settings() {
   // to write a correct link even if you wanted to, because nothing here read the
   // URL. "Configure alert channels →" on the notifications page was the instance
   // that surfaced it; there are several more.
-  const SETTINGS_TABS: readonly string[] = ["general", "email", "account", "channels", "services"];
+  const SETTINGS_TABS: readonly string[] = ["general", "email", "account", "channels", "services", "menu"];
   const [searchParams] = useSearchParams();
   const resolveSettingsTab = (raw: string | null): string =>
     raw && SETTINGS_TABS.includes(raw) ? raw : "general";
@@ -600,6 +676,7 @@ export default function Settings() {
           { id: "account", label: "Account" },
           { id: "channels", label: "Alert Channels" },
           { id: "services", label: "Services" },
+          { id: "menu", label: "Menu Options" },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap shrink-0 ${
@@ -2507,6 +2584,146 @@ export default function Settings() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+        </>)}
+
+        {/* Menu Options */}
+        {tab === "menu" && (<>
+        <div className="bg-dark-800 rounded-lg border border-dark-500 overflow-hidden">
+          <div className="px-5 py-3 border-b border-dark-600">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <h3 className="text-xs font-medium text-dark-300 uppercase font-mono tracking-widest">Menu Options</h3>
+                <p className="text-xs text-dark-400 mt-1">
+                  Choose what each role is shown. Unticked entries are removed from that role's side
+                  menu, top bar and Ctrl-K palette, for every account with the role, on every browser.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {menuSaving && <span className="text-xs text-dark-400">Saving…</span>}
+                <label htmlFor="menu_role" className="text-xs text-dark-300">Role</label>
+                <select
+                  id="menu_role"
+                  value={menuRole}
+                  onChange={e => setMenuRole(e.target.value as ConfigurableRole)}
+                  className="px-2 py-1.5 rounded-lg bg-dark-900 border border-dark-500 text-sm text-dark-100 outline-none focus:ring-2 focus:ring-accent-500 capitalize"
+                >
+                  {CONFIGURABLE_ROLES.map(r => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            {/* The admin row is a default, not a decision, and the difference
+                has to be visible at the moment of ticking — otherwise an admin
+                sets "the admin menu" and cannot explain why their colleague's
+                is different. */}
+            {menuRole === "admin" && (
+              <div className="mt-3 flex items-center gap-4 flex-wrap">
+                <div className="flex items-center gap-1 bg-dark-900 border border-dark-600 rounded-lg p-0.5">
+                  {([
+                    { id: "default" as const, label: "Default for admins" },
+                    { id: "mine" as const, label: "Just me, this browser" },
+                  ]).map(s => (
+                    <button
+                      key={s.id}
+                      onClick={() => setAdminScope(s.id)}
+                      className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                        adminScope === s.id ? "bg-dark-700 text-dark-50" : "text-dark-400 hover:text-dark-200"
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+                {adminScope === "mine" && readAdminOverride() !== null && (
+                  <button
+                    onClick={() => { writeAdminOverride(null); setOverrideTick(t => t + 1); }}
+                    className="px-3 py-1.5 bg-dark-700 text-dark-200 hover:bg-dark-600 border border-dark-500 rounded-lg text-xs transition-colors"
+                  >
+                    Follow the default again
+                  </button>
+                )}
+                <p className="text-xs text-dark-400">
+                  {adminScope === "mine"
+                    ? "Applies to your browser only. Any admin can do this, so nobody can be locked out of a menu."
+                    : "The starting point for every admin who has not set their own."}
+                </p>
+              </div>
+            )}
+
+            {/* Said here rather than only in a commit message. An operator
+                reaching for this to stop a role doing something needs to be
+                told, at the moment they reach for it, that it will not. */}
+            <p className="text-xs text-warn-400/90 mt-3">
+              This changes what is <strong>shown</strong>, not what is <strong>allowed</strong>. A
+              hidden page still opens from its URL, and still applies the access rules it always
+              did — use roles, not this, to restrict what someone can do.
+            </p>
+          </div>
+          <div className="p-5 space-y-6">
+            {toggleableNavGroups().map(group => (
+              <div key={group.key}>
+                <h4 className="text-[11px] font-medium text-dark-400 uppercase font-mono tracking-widest mb-2">{group.label}</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2">
+                  {group.items.map(item => (
+                    <label key={item.to} className="flex items-center gap-2 text-sm text-dark-100 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!menuEditingSet().has(item.to)}
+                        onChange={e => setMenuEntryShown(item.to, e.target.checked)}
+                        className="rounded border-dark-500 text-rust-500 focus:ring-accent-500"
+                      />
+                      {item.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+
+            <div>
+              <h4 className="text-[11px] font-medium text-dark-400 uppercase font-mono tracking-widest mb-2">Top Bar</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2">
+                {CHROME_ITEMS.map(c => (
+                  <label key={c.key} className="flex items-center gap-2 text-sm text-dark-100 cursor-pointer" title={c.hint}>
+                    <input
+                      type="checkbox"
+                      checked={!menuEditingSet().has(c.key)}
+                      onChange={e => setMenuEntryShown(c.key, e.target.checked)}
+                      className="rounded border-dark-500 text-rust-500 focus:ring-accent-500"
+                    />
+                    {c.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Shown, disabled, and ticked — rather than left out of the list.
+                An operator looking for "why can I not hide Settings" needs to
+                find the answer here; an absent row answers nothing. */}
+            <div>
+              <h4 className="text-[11px] font-medium text-dark-400 uppercase font-mono tracking-widest mb-2">Always shown</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2">
+                {[
+                  { label: "Dashboard", why: "Where every layout's logo links, and where a page you cannot reach sends you back to." },
+                  { label: "Settings", why: "The only way back to these checkboxes." },
+                  { label: "My Account", why: "The one entry every role can see — password, 2FA, passkeys and sessions live behind it." },
+                  { label: "Signed-in user and Logout", why: "You must always be able to see who you are signed in as, and sign out." },
+                ].map(r => (
+                  <label key={r.label} className="flex items-center gap-2 text-sm text-dark-400 cursor-not-allowed" title={r.why}>
+                    <input type="checkbox" checked disabled className="rounded border-dark-600 opacity-50" />
+                    {r.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <p className="text-xs text-dark-400 border-t border-dark-600 pt-4">
+              {editingOwnAdminView
+                ? "Saved in this browser, for your account only."
+                : "Saved panel-side and applied to every account with the selected role. A signed-in account picks the change up on its next page load."}
+            </p>
           </div>
         </div>
         </>)}

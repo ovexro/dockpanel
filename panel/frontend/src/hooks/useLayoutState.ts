@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import { navGroups, isNavVisible, type NavGroup } from "../data/navItems";
+import { isMenuHidden, useHiddenMenu } from "../data/menuOptions";
 
 const themeOrder = ["terminal", "midnight", "ember", "arctic", "clean", "clean-dark"] as const;
 
@@ -87,10 +88,15 @@ export interface LayoutState {
   sidebarOpen: boolean;
   setSidebarOpen: (v: boolean) => void;
   visibleGroups: NavGroup[];
+  /** Top-bar controls the operator has switched off, keyed `chrome:*`. Read it
+   *  through `isMenuHidden` rather than `.has`, so the always-visible rule is
+   *  applied the one way everywhere. */
+  hiddenMenu: Set<string>;
 }
 
 export function useLayoutState(): LayoutState {
   const { user, logout, loading } = useAuth();
+  const hiddenMenu = useHiddenMenu();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [firingCount, setFiringCount] = useState(0);
   const [incidentCount, setIncidentCount] = useState(0);
@@ -224,16 +230,24 @@ export function useLayoutState(): LayoutState {
       .catch(() => {});
   }, []);
 
-  // Filter nav groups by role
+  // Filter nav groups by role, then by what the operator has chosen to hide.
+  //
+  // Two filters and not one, because they answer different questions. The role
+  // test says whether this account may be OFFERED the page at all; the hidden
+  // test is a per-browser decluttering preference over what is left. Only the
+  // first is a restriction — a hidden row's route still resolves, which is why
+  // it must not be folded into `isNavVisible`.
   const visibleGroups = useMemo(() => {
     if (!user) return [];
     return navGroups.map(g => ({
       ...g,
       // Extracted to `navItems.ts` so the command palette can read the same
       // decision instead of having its own (it had none at all).
-      items: g.items.filter(item => isNavVisible(item, user.role)),
+      items: g.items.filter(
+        item => isNavVisible(item, user.role) && !isMenuHidden(item.to, hiddenMenu),
+      ),
     })).filter(g => g.items.length > 0);
-  }, [user]);
+  }, [user, hiddenMenu]);
 
   return {
     user: user || { email: "", role: "" },
@@ -253,5 +267,6 @@ export function useLayoutState(): LayoutState {
     sidebarOpen,
     setSidebarOpen,
     visibleGroups,
+    hiddenMenu,
   };
 }

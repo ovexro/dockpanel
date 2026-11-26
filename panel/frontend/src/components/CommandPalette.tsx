@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { isNavVisible, navFlagsFor } from "../data/navItems";
+import { isMenuHidden, useHiddenMenu } from "../data/menuOptions";
 
 interface Command {
   id: string;
@@ -18,6 +19,7 @@ interface Command {
 
 export default function CommandPalette() {
   const { user } = useAuth();
+  const hiddenMenu = useHiddenMenu();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -75,10 +77,21 @@ export default function CommandPalette() {
   // Same predicate, same registry as the sidebar. A command whose path has no
   // nav row (none today) is treated as unrestricted — this is a menu, and every
   // destination still enforces its own access on arrival.
+  //
+  // The hidden-menu preference applies here for the same reason the role test
+  // was extracted in the first place: this palette IS a second menu over the
+  // same pages, and an operator who switched a row off in Settings has said
+  // they do not want to be offered it. Typing the URL still works — hiding is
+  // presentation, not restriction.
   const allowed = useMemo(
-    () => commands.filter((c) => isNavVisible(navFlagsFor(c.path), user?.role ?? "")),
+    () =>
+      commands.filter(
+        (c) =>
+          isNavVisible(navFlagsFor(c.path), user?.role ?? "") &&
+          !isMenuHidden(c.path, hiddenMenu),
+      ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [user?.role],
+    [user?.role, hiddenMenu],
   );
 
   const filtered = query

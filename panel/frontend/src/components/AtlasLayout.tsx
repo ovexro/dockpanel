@@ -5,6 +5,7 @@ import { useServer } from "../context/ServerContext";
 import { Icon } from "../data/icons";
 import CommandPalette from "./CommandPalette";
 import LayoutSwitcher from "./LayoutSwitcher";
+import { isMenuHidden } from "../data/menuOptions";
 
 export default function AtlasLayout() {
   const {
@@ -23,8 +24,11 @@ export default function AtlasLayout() {
     sidebarOpen,
     setSidebarOpen,
     visibleGroups,
+    hiddenMenu,
   } = useLayoutState();
   const isLight = theme === "clean" || theme === "arctic";
+  /** Has the operator switched this top-bar control off in Settings → Menu Options? */
+  const hide = (key: string) => isMenuHidden(key, hiddenMenu);
   const { servers, activeServer, setActiveServerId } = useServer();
 
   const location = useLocation();
@@ -168,7 +172,7 @@ export default function AtlasLayout() {
           {/* Right actions */}
           <div className="flex items-center gap-2 shrink-0 ml-auto md:ml-4">
             {/* Server selector */}
-            {servers.length > 1 && (
+            {servers.length > 1 && !hide("chrome:serverSelector") && (
               <select
                 value={activeServer?.id || ""}
                 onChange={e => { setActiveServerId(e.target.value); window.location.href = "/"; }}
@@ -178,6 +182,7 @@ export default function AtlasLayout() {
               </select>
             )}
             {/* Search */}
+            {!hide("chrome:search") && (
             <button
               onClick={() =>
                 window.dispatchEvent(
@@ -190,6 +195,7 @@ export default function AtlasLayout() {
             >
               <Icon name="search" className="w-4 h-4" />
             </button>
+            )}
 
             {/* Alert badge */}
             {firingCount > 0 && (
@@ -203,7 +209,7 @@ export default function AtlasLayout() {
             )}
 
             {/* Health dot — admins only; see `canSeeHealth` in useLayoutState. */}
-            {canSeeHealth && (
+            {canSeeHealth && !hide("chrome:health") && (
               <div
                 className={`w-2 h-2 rounded-full ${
                   apiHealthy === null
@@ -223,6 +229,7 @@ export default function AtlasLayout() {
             )}
 
             {/* Notification bell */}
+            {!hide("chrome:notifications") && (
             <Link to="/notifications" className="relative p-1.5 text-dark-300 hover:text-dark-100 rounded-md hover:bg-dark-700/30" title={notifCount > 0 ? `${notifCount} unread notification${notifCount === 1 ? "" : "s"}` : "Notifications"} aria-label="Notifications">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
@@ -233,11 +240,13 @@ export default function AtlasLayout() {
                 </span>
               )}
             </Link>
+            )}
 
             {/* Layout switcher */}
-            <LayoutSwitcher variant={isLight ? "light" : "dark"} />
+            {!hide("chrome:layoutSwitcher") && <LayoutSwitcher variant={isLight ? "light" : "dark"} />}
 
             {/* Theme cycle */}
+            {!hide("chrome:themeToggle") && (
             <button
               onClick={cycleTheme}
               className="p-1.5 text-dark-300 hover:text-dark-100 rounded-md hover:bg-dark-700/30"
@@ -259,6 +268,7 @@ export default function AtlasLayout() {
                 />
               </svg>
             </button>
+            )}
 
             {/* User */}
             <div className="flex items-center gap-2 pl-2 border-l border-dark-600">
