@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.242.7]
+
 ### Docs: the list of Docker app templates (#140)
 
 The documentation has an "Apps" page listing every one-click template with its ID, description and image,

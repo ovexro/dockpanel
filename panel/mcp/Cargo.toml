@@ -1,6 +1,6 @@
 [package]
 name = "dockpanel-mcp"
-version = "2.242.6"
+version = "2.242.7"
 license = "AGPL-3.0-only"
 edition = "2024"
 description = "MCP server exposing read-only DockPanel introspection to AI agents"
