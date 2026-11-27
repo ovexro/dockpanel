@@ -2255,9 +2255,10 @@ async fn redis_enable(
     let redis_db = body.redis_db.clamp(0, 15);
 
     // Verify Redis is running
+    let redis_cli = crate::services::pkg::redis_cli_bin().await;
     let check = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        safe_command("redis-cli").args(["ping"]).output(),
+        safe_command(redis_cli).args(["ping"]).output(),
     ).await;
 
     match check {
@@ -2391,9 +2392,10 @@ async fn redis_purge(
         return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid Redis DB (0-15)"}))));
     }
 
+    let redis_cli = crate::services::pkg::redis_cli_bin().await;
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        safe_command("redis-cli")
+        safe_command(redis_cli)
             .args(["-n", &redis_db.to_string(), "FLUSHDB"])
             .output(),
     ).await;

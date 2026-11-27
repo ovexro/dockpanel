@@ -25,6 +25,26 @@ use tokio::sync::OnceCell;
 /// installer used before this module existed.
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Points a dnf/yum QUERY at a metadata cache the agent is allowed to write.
+///
+/// The agent runs under `ProtectSystem=strict` and `/var/cache/dnf` is not in
+/// its `ReadWritePaths`. dnf takes `/var/cache/dnf/metadata_lock.pid` even for
+/// a read-only `list`, `repoquery` or `module list`, so every query made from
+/// inside the sandbox failed with
+/// `[Errno 30] Read-only file system: '/var/cache/dnf/metadata_lock.pid'` —
+/// measured on AlmaLinux 9.9 and 10.3, with a warm cache and an expired one,
+/// by running the queries under systemd-run with this unit's own sandbox
+/// properties. `-C` (cache only) fails the same way: the lock is taken first.
+///
+/// Every caller read that failure as "not available". On AlmaLinux 9.9 under
+/// the real unit, `install_php` reported "PHP 8.3 installed" while it installed
+/// the non-modular PHP 8.0.30 with no extensions ([`php_streams`] saw no
+/// streams, [`install_available`] saw no candidates), and the version picker
+/// failed with "Unsupported distro". `/var/lib/dockpanel` is
+/// already writable for the agent, so queries keep their own metadata there.
+/// Transactions are unaffected: they run unsandboxed and use the system cache.
+pub const DNF_QUERY_CACHEDIR: &str = "--setopt=cachedir=/var/lib/dockpanel/dnf-cache";
+
 /// Which package database this box actually has.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PkgMgr {
@@ -156,7 +176,10 @@ fn php_rpm_name(debian: &str) -> &str {
     let Some(rest) = debian
         .strip_prefix("php")
         .and_then(|r| r.split_once('-'))
-        .filter(|(ver, _)| ver.is_empty() || ver.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        .filter(|(ver, ext)| {
+            !ext.starts_with("php-")
+                && (ver.is_empty() || ver.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        })
         .map(|(_, ext)| ext)
     else {
         return debian;
@@ -245,23 +268,127 @@ pub async fn installed_php_version() -> Option<String> {
     (!major.is_empty() && !minor.is_empty()).then(|| format!("{major}.{minor}"))
 }
 
-/// Resolve the real, currently-existing PHP-FPM socket for a version, across
-/// both families.
+/// Convert a `major.minor` PHP version (`"8.4"`) into its Remi SCL package
+/// prefix (`"php84"`). Returns `None` for any input that is not two ASCII
+/// numeric segments, so callers can safely interpolate the result into package
+/// names, unit names, and filesystem paths.
+pub fn remi_php_prefix(version: &str) -> Option<String> {
+    let (maj, min) = version.split_once('.')?;
+    if maj.is_empty()
+        || min.is_empty()
+        || !maj.chars().all(|c| c.is_ascii_digit())
+        || !min.chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(format!("php{maj}{min}"))
+}
+
+/// Systemd unit name for a Remi SCL PHP-FPM version (`"8.4"` -> `"php84-php-fpm"`).
+pub fn remi_php_fpm_unit(version: &str) -> Option<String> {
+    Some(format!("{}-php-fpm", remi_php_prefix(version)?))
+}
+
+/// Unix socket path opened by a Remi SCL PHP-FPM pool (`"8.4"` ->
+/// `"/var/opt/remi/php84/run/php-fpm/www.sock"`).
+pub fn remi_php_socket_path(version: &str) -> Option<String> {
+    Some(format!(
+        "/var/opt/remi/{}/run/php-fpm/www.sock",
+        remi_php_prefix(version)?
+    ))
+}
+
+/// CLI binary symlink installed by Remi SCL (`"8.4"` -> `"/usr/bin/php84"`).
+pub fn remi_php_cli_bin(version: &str) -> Option<String> {
+    Some(format!("/usr/bin/{}", remi_php_prefix(version)?))
+}
+
+/// Map a logical PHP extension name (`"fpm"`, `"mysql"`, `"zip"`, `"redis"`, …)
+/// to its Remi SCL RPM package name (`"php84-php-mysqlnd"`, `"php84-php-pecl-zip"`, …).
+pub fn remi_php_pkg_name(version: &str, ext: &str) -> Option<String> {
+    let prefix = remi_php_prefix(version)?;
+    let suffix = match ext {
+        "mysql" => "mysqlnd",
+        "zip" => "pecl-zip",
+        "redis" => "pecl-redis6",
+        "imagick" => "pecl-imagick",
+        other => other,
+    };
+    Some(format!("{prefix}-php-{suffix}"))
+}
+
+/// Official Remi release RPM URL for an RPM distro, or `None` when unsupported.
 ///
-/// Debian ships one socket per version at a fixed, predictable path. The RHEL
-/// family ships exactly one unversioned socket for whichever stream is
-/// active — see [`installed_php_version`] for why RHEL can only ever have one
-/// live version at a time. Callers that build a nginx vhost or answer a
-/// status check used to assume the Debian path unconditionally, which made
-/// PHP sites unreachable on the RHEL family even though PHP-FPM was
-/// genuinely installed and running: `settle()`'s own socket check already
-/// knew about this split (see [`crate::routes::php::socket_exists`]), but
-/// `nginx.rs::put_site()` re-implemented a Debian-only existence check
-/// instead of sharing it. This is the single source of truth both now call.
+/// Enterprise Linux support covers the community rebuilds in DockPanel's
+/// support matrix (`almalinux`, `rocky`, `centos`) whose base repos ship
+/// `epel-release`; RHEL/Oracle Linux require different EPEL/CodeReady setup and
+/// are deliberately excluded rather than failing mid-install.
+fn remi_release_url(os_id: &str, major: u32) -> Option<String> {
+    match os_id {
+        "fedora" if major >= 39 => Some(format!(
+            "https://rpms.remirepo.net/fedora/remi-release-{major}.rpm"
+        )),
+        "almalinux" | "rocky" | "centos" if major >= 8 => Some(format!(
+            "https://rpms.remirepo.net/enterprise/remi-release-{major}.rpm"
+        )),
+        _ => None,
+    }
+}
+
+/// True when the Remi SCL PHP-FPM package for `version` (`php84-php-fpm`) is
+/// installed on this RPM host.
+pub async fn is_remi_php_installed(version: &str) -> bool {
+    if manager().await != PkgMgr::Rpm {
+        return false;
+    }
+    let Some(pkg) = remi_php_fpm_unit(version) else {
+        return false;
+    };
+    run_ok("rpm", &["-q", &pkg], |_| true).await
+}
+
+/// True when `remi-release` is already installed on this RPM host.
+pub async fn remi_repo_installed() -> bool {
+    if manager().await != PkgMgr::Rpm {
+        return false;
+    }
+    run_ok("rpm", &["-q", "remi-release"], |_| true).await
+}
+
+/// The systemd unit managing PHP-FPM for `version`, supporting Debian
+/// (`php8.4-fpm`), Remi SCL parallel RPM installs (`php84-php-fpm`), and
+/// system RPM installs (`php-fpm`).
+pub async fn php_fpm_unit_for(version: &str) -> String {
+    if manager().await == PkgMgr::Rpm {
+        if is_remi_php_installed(version).await
+            && let Some(unit) = remi_php_fpm_unit(version)
+        {
+            return unit;
+        }
+        "php-fpm".to_string()
+    } else {
+        format!("php{version}-fpm")
+    }
+}
+
+/// Resolve the real, currently-existing PHP-FPM socket for a version, across
+/// both families (including Remi SCL parallel PHP installations on RPM).
+///
+/// Debian ships one socket per version at `/run/php/php{version}-fpm.sock`.
+/// On the RHEL family, Remi SCL installs provide parallel per-version sockets
+/// at `/var/opt/remi/php{XY}/run/php-fpm/www.sock`, while the distro's own
+/// `php-fpm` package serves a single unversioned socket at
+/// `/run/php-fpm/www.sock`. This is the single source of truth shared by
+/// `php.rs` and `nginx.rs`.
 pub async fn resolve_php_fpm_socket(version: &str) -> Option<String> {
     let debian = format!("/run/php/php{version}-fpm.sock");
     if std::path::Path::new(&debian).exists() {
         return Some(debian);
+    }
+    if let Some(remi) = remi_php_socket_path(version)
+        && std::path::Path::new(&remi).exists()
+    {
+        return Some(remi);
     }
     if installed_php_version().await.as_deref() == Some(version)
         && std::path::Path::new("/run/php-fpm/www.sock").exists()
@@ -283,7 +410,7 @@ pub async fn php_streams() -> Vec<String> {
     let out = tokio::time::timeout(
         Duration::from_secs(120),
         safe_command(inst.bin())
-            .args(["-q", "module", "list", "php"])
+            .args([DNF_QUERY_CACHEDIR, "-q", "module", "list", "php"])
             .kill_on_drop(true)
             .output(),
     )
@@ -307,6 +434,149 @@ pub async fn php_streams() -> Vec<String> {
     versions
 }
 
+fn rpm_name_for(debian: &str, use_valkey: bool) -> &str {
+    if debian == "redis-server" && use_valkey {
+        "valkey"
+    } else {
+        rpm_name(debian)
+    }
+}
+
+/// True on RPM distributions where `redis` was replaced by its wire-compatible
+/// fork `valkey` (EL10: AlmaLinux 10, Rocky 10, CentOS Stream 10; Fedora 41+).
+///
+/// Checked in order: already-installed package first, then package-manager
+/// availability (so EL9 / Fedora 39 keep `redis`), with `/etc/os-release` as
+/// a fallback when repository metadata is unavailable.
+async fn rpm_uses_valkey() -> bool {
+    static USES_VALKEY: OnceCell<bool> = OnceCell::const_new();
+    *USES_VALKEY
+        .get_or_init(|| async {
+            if manager().await != PkgMgr::Rpm {
+                return false;
+            }
+            if run_ok("rpm", &["-q", "valkey"], |_| true).await {
+                return true;
+            }
+            if run_ok("rpm", &["-q", "redis"], |_| true).await {
+                return false;
+            }
+            if let Some(inst) = installer().await.filter(|i| !i.is_apt()) {
+                let bin = inst.bin();
+                if run_ok(
+                    bin,
+                    &[DNF_QUERY_CACHEDIR, "-q", "list", "--available", "redis"],
+                    |_| true,
+                )
+                .await
+                {
+                    return false;
+                }
+                if run_ok(
+                    bin,
+                    &[DNF_QUERY_CACHEDIR, "-q", "list", "--available", "valkey"],
+                    |_| true,
+                )
+                .await
+                {
+                    return true;
+                }
+            }
+            let id = os_release_value("ID").await.unwrap_or_default();
+            let major: u32 = os_release_value("VERSION_ID")
+                .await
+                .and_then(|v| v.split('.').next()?.parse().ok())
+                .unwrap_or(0);
+            os_defaults_to_valkey(&id, major)
+        })
+        .await
+}
+
+/// Pure fallback for [`rpm_uses_valkey`] when repo metadata cannot be queried.
+fn os_defaults_to_valkey(os_id: &str, major: u32) -> bool {
+    match os_id {
+        "fedora" => major >= 41,
+        "almalinux" | "rocky" | "centos" | "rhel" | "ol" => major >= 10,
+        _ => false,
+    }
+}
+
+async fn resolve_rpm_name(debian: &str) -> &str {
+    if debian == "redis-server" {
+        rpm_name_for(debian, rpm_uses_valkey().await)
+    } else {
+        rpm_name(debian)
+    }
+}
+
+/// The Redis-compatible CLI binary available on this host (`redis-cli`, or
+/// `valkey-cli` on EL10 / Fedora 41+ where Valkey replaced Redis).
+pub async fn redis_cli_bin() -> &'static str {
+    if which("redis-cli").await {
+        "redis-cli"
+    } else if which("valkey-cli").await {
+        "valkey-cli"
+    } else {
+        "redis-cli"
+    }
+}
+
+/// True when either Redis or its drop-in replacement Valkey is installed.
+pub async fn redis_server_installed() -> bool {
+    which("redis-server").await
+        || which("valkey-server").await
+        || is_installed("redis-server").await
+}
+
+/// Parse the newest `major.minor` version from newline-separated RPM version
+/// strings (as printed by `dnf -q repoquery --qf "%{version}\n" php-fpm`).
+fn parse_major_minor_versions(stdout: &str) -> Option<String> {
+    let mut best: Option<(u32, u32)> = None;
+    for raw in stdout.lines() {
+        let trimmed = raw.trim();
+        let ver = trimmed.split_once(':').map(|(_, v)| v).unwrap_or(trimmed);
+        let mut parts = ver.split('.');
+        let Ok(maj) = parts.next().unwrap_or("").parse::<u32>() else {
+            continue;
+        };
+        let Ok(min) = parts.next().unwrap_or("").parse::<u32>() else {
+            continue;
+        };
+        if best.is_none_or(|b| (maj, min) > b) {
+            best = Some((maj, min));
+        }
+    }
+    best.map(|(maj, min)| format!("{maj}.{min}"))
+}
+
+/// The `major.minor` PHP version offered directly by `php-fpm` on non-modular
+/// RPM distributions (EL10: AlmaLinux 10, Rocky 10, CentOS Stream 10; Fedora).
+/// Returns `None` on apt systems or when `php-fpm` has no candidate.
+pub async fn available_rpm_php_version() -> Option<String> {
+    let inst = installer().await.filter(|i| !i.is_apt())?;
+    let mut captured = String::new();
+    let ok = run_ok(
+        inst.bin(),
+        &[
+            DNF_QUERY_CACHEDIR,
+            "-q",
+            "repoquery",
+            "--qf",
+            "%{version}\n",
+            "php-fpm",
+        ],
+        |out| {
+            captured = out.to_string();
+            true
+        },
+    )
+    .await;
+    if !ok {
+        return None;
+    }
+    parse_major_minor_versions(&captured)
+}
+
 /// True when `package` is installed. Takes the Debian package name.
 ///
 /// Note for callers that iterate PHP versions: on RPM every `php{v}-fpm` maps
@@ -321,7 +591,14 @@ pub async fn is_installed(package: &str) -> bool {
             // `ii` is what distinguishes installed from residual-config.
             run_ok("dpkg", &["-l", package], |out| out.contains("ii")).await
         }
-        PkgMgr::Rpm => run_ok("rpm", &["-q", rpm_name(package)], |_| true).await,
+        PkgMgr::Rpm => {
+            if package == "redis-server" {
+                run_ok("rpm", &["-q", "redis"], |_| true).await
+                    || run_ok("rpm", &["-q", "valkey"], |_| true).await
+            } else {
+                run_ok("rpm", &["-q", rpm_name(package)], |_| true).await
+            }
+        }
         PkgMgr::Unknown => false,
     }
 }
@@ -336,11 +613,21 @@ pub async fn is_installed(package: &str) -> bool {
 /// family. Verified against the units actually shipped on Rocky 9 (s266):
 /// `redis.service`, `php-fpm.service` and `pdns.service` exist;
 /// `redis-server.service`, `php{v}-fpm.service` and `pdns-server.service` do not.
+/// On EL10 and Fedora 41+, `redis` is replaced by `valkey.service`.
 pub async fn service_name(debian_unit: &str) -> String {
     if manager().await == PkgMgr::Rpm {
-        rpm_service_name(debian_unit).to_string()
+        let use_valkey = debian_unit == "redis-server" && rpm_uses_valkey().await;
+        rpm_service_name_for(debian_unit, use_valkey).to_string()
     } else {
         debian_unit.to_string()
+    }
+}
+
+fn rpm_service_name_for(debian_unit: &str, use_valkey: bool) -> &str {
+    if debian_unit == "redis-server" && use_valkey {
+        "valkey"
+    } else {
+        rpm_service_name(debian_unit)
     }
 }
 
@@ -394,18 +681,36 @@ pub async fn available(package: &str) -> bool {
         }
         Some(Installer::Dnf) | Some(Installer::Yum) => {
             let bin = installer().await.map(Installer::bin).unwrap_or("dnf");
-            let name = rpm_name(package);
+            let name = resolve_rpm_name(package).await;
             // `list` matches package NAMES only. That is not the same question
             // as "can this be installed": `php-curl` is *provided by*
             // `php-common`, so `dnf list --available php-curl` reports nothing
             // while `dnf install php-curl` succeeds. Stopping at `list` would
             // silently skip extensions dnf can supply, so a virtual-provide
             // lookup is the tiebreaker before declaring anything unavailable.
-            run_ok(bin, &["-q", "list", "--available", name], |_| true).await
-                || run_ok(bin, &["-q", "list", "--installed", name], |_| true).await
-                || run_ok(bin, &["-q", "repoquery", "--whatprovides", name], |out| {
-                    !out.trim().is_empty()
-                })
+            run_ok(
+                bin,
+                &[DNF_QUERY_CACHEDIR, "-q", "list", "--available", name],
+                |_| true,
+            )
+            .await
+                || run_ok(
+                    bin,
+                    &[DNF_QUERY_CACHEDIR, "-q", "list", "--installed", name],
+                    |_| true,
+                )
+                .await
+                || run_ok(
+                    bin,
+                    &[
+                        DNF_QUERY_CACHEDIR,
+                        "-q",
+                        "repoquery",
+                        "--whatprovides",
+                        name,
+                    ],
+                    |out| !out.trim().is_empty(),
+                )
                 .await
         }
         None => false,
@@ -478,7 +783,19 @@ async fn transact(action: Action, packages: &[&str]) -> Result<(), String> {
     // the logged command look like a bug to whoever reads it next.
     let mut names: Vec<String> = Vec::with_capacity(packages.len());
     for p in packages {
-        let name = if rpm { rpm_name(p).to_string() } else { (*p).to_string() };
+        let name = if rpm {
+            if matches!(action, Action::Remove) && *p == "redis-server" {
+                if run_ok("rpm", &["-q", "valkey"], |_| true).await {
+                    "valkey".to_string()
+                } else {
+                    "redis".to_string()
+                }
+            } else {
+                resolve_rpm_name(p).await.to_string()
+            }
+        } else {
+            (*p).to_string()
+        };
         if !names.contains(&name) {
             names.push(name);
         }
@@ -795,6 +1112,38 @@ pub async fn add_repo(repo: Repo) -> Result<(), String> {
                    -o /etc/yum.repos.d/rspamd.repo"
             )
         }
+        (Repo::Remi, true) => {
+            return Err("Remi is an RPM-only PHP repository; Debian/Ubuntu use deb.sury.org or ppa:ondrej/php".into());
+        }
+        (Repo::Remi, false) => {
+            let os_id = os_release_value("ID")
+                .await
+                .ok_or_else(|| "Cannot detect OS ID from /etc/os-release".to_string())?;
+            let major: u32 = os_release_value("VERSION_ID")
+                .await
+                .and_then(|v| v.split('.').next()?.parse().ok())
+                .ok_or_else(|| "Cannot detect OS major version from /etc/os-release".to_string())?;
+            let url = remi_release_url(&os_id, major)
+                .ok_or_else(|| format!("Remi repository is not available for {os_id} {major}"))?;
+            let bin = inst.bin();
+            if os_id == "fedora" {
+                format!(
+                    "set -e; curl -sfI --max-time 15 {url} >/dev/null || \
+                       {{ echo 'Remi does not publish packages for {os_id} {major}' >&2; exit 42; }}; \
+                     {bin} install -y {url}"
+                )
+            } else {
+                // Enterprise Linux (AlmaLinux, Rocky, CentOS Stream) requires
+                // EPEL + CRB alongside Remi.
+                format!(
+                    "set -e; curl -sfI --max-time 15 {url} >/dev/null || \
+                       {{ echo 'Remi does not publish packages for {os_id} {major}' >&2; exit 42; }}; \
+                     {bin} install -y epel-release dnf-plugins-core >/dev/null 2>&1 || {bin} install -y epel-release; \
+                     {bin} config-manager --set-enabled crb >/dev/null 2>&1 || {bin} config-manager --set-enabled powertools >/dev/null 2>&1 || true; \
+                     {bin} install -y {url}"
+                )
+            }
+        }
     };
 
     // **bash, not sh.** On Debian and Ubuntu `/bin/sh` is dash, which answers
@@ -875,6 +1224,11 @@ fn repo_artifact_paths(repo: Repo) -> &'static [&'static str] {
             "/etc/yum.repos.d/cloudflared.repo",
         ],
         Repo::Rspamd => &["/etc/yum.repos.d/rspamd.repo"],
+        Repo::Remi => &[
+            "/etc/yum.repos.d/remi-safe.repo",
+            "/etc/yum.repos.d/remi.repo",
+            "/etc/yum.repos.d/remi-modular.repo",
+        ],
     }
 }
 
@@ -886,6 +1240,9 @@ pub enum Repo {
     /// in their own archives (driven at s262), and adding a repo there would
     /// change the family that already works to fix the one that does not.
     Rspamd,
+    /// Remi's RPM repository (**RHEL-family / Fedora only**) for parallel
+    /// multi-PHP SCL installations (`php81-php-fpm`..`php85-php-fpm`).
+    Remi,
 }
 
 /// A value from `/etc/os-release`, or `None` when this release does not carry
@@ -904,7 +1261,7 @@ pub async fn os_release_value(key: &str) -> Option<String> {
 }
 
 /// Run a query and apply `accept` to its stdout when it exits 0.
-async fn run_ok(bin: &str, args: &[&str], accept: impl Fn(&str) -> bool) -> bool {
+async fn run_ok(bin: &str, args: &[&str], mut accept: impl FnMut(&str) -> bool) -> bool {
     tokio::time::timeout(
         Duration::from_secs(120),
         safe_command(bin).args(args).kill_on_drop(true).output(),
@@ -1097,5 +1454,138 @@ mod tests {
             repo_artifact_paths(Repo::Rspamd),
             &["/etc/yum.repos.d/rspamd.repo"]
         );
+    }
+
+    /// The query cache must live under a path the agent can write. The system
+    /// cache under /var/cache is read-only inside the sandbox, which is the
+    /// whole defect; pointing the option back there would reintroduce it.
+    #[test]
+    fn dnf_query_cache_is_outside_the_read_only_system_cache() {
+        let dir = DNF_QUERY_CACHEDIR
+            .strip_prefix("--setopt=cachedir=")
+            .expect("must be a dnf --setopt=cachedir= option");
+        assert!(dir.starts_with("/var/lib/dockpanel/"), "{dir}");
+        assert!(!dir.starts_with("/var/cache"), "{dir}");
+    }
+
+    #[test]
+    fn maps_redis_to_valkey_on_el10_and_fedora41_plus() {
+        assert_eq!(rpm_name_for("redis-server", false), "redis");
+        assert_eq!(rpm_name_for("redis-server", true), "valkey");
+        assert_eq!(rpm_service_name_for("redis-server", false), "redis");
+        assert_eq!(rpm_service_name_for("redis-server", true), "valkey");
+        // Non-redis packages and units are unaffected by the valkey switch.
+        assert_eq!(rpm_name_for("pdns-server", true), "pdns");
+        assert_eq!(rpm_service_name_for("php8.3-fpm", true), "php-fpm");
+    }
+
+    #[test]
+    fn os_valkey_fallback_distinguishes_el9_and_el10() {
+        assert!(os_defaults_to_valkey("almalinux", 10));
+        assert!(os_defaults_to_valkey("rocky", 10));
+        assert!(os_defaults_to_valkey("centos", 10));
+        assert!(os_defaults_to_valkey("fedora", 43));
+        assert!(os_defaults_to_valkey("fedora", 41));
+        assert!(!os_defaults_to_valkey("almalinux", 9));
+        assert!(!os_defaults_to_valkey("rocky", 9));
+        assert!(!os_defaults_to_valkey("centos", 9));
+        assert!(!os_defaults_to_valkey("fedora", 39));
+        assert!(!os_defaults_to_valkey("ubuntu", 24));
+    }
+
+    #[test]
+    fn maps_remi_scl_names_units_sockets_and_extensions() {
+        assert_eq!(remi_php_prefix("8.4").as_deref(), Some("php84"));
+        assert_eq!(remi_php_prefix("8.5").as_deref(), Some("php85"));
+        assert_eq!(remi_php_prefix("8.4;rm -rf /"), None);
+        assert_eq!(remi_php_prefix("8"), None);
+
+        assert_eq!(remi_php_fpm_unit("8.4").as_deref(), Some("php84-php-fpm"));
+        assert_eq!(
+            remi_php_socket_path("8.5").as_deref(),
+            Some("/var/opt/remi/php85/run/php-fpm/www.sock")
+        );
+        assert_eq!(remi_php_cli_bin("8.4").as_deref(), Some("/usr/bin/php84"));
+
+        assert_eq!(
+            remi_php_pkg_name("8.4", "fpm").as_deref(),
+            Some("php84-php-fpm")
+        );
+        assert_eq!(
+            remi_php_pkg_name("8.4", "mysql").as_deref(),
+            Some("php84-php-mysqlnd")
+        );
+        assert_eq!(
+            remi_php_pkg_name("8.4", "zip").as_deref(),
+            Some("php84-php-pecl-zip")
+        );
+        assert_eq!(
+            remi_php_pkg_name("8.4", "redis").as_deref(),
+            Some("php84-php-pecl-redis6")
+        );
+        assert_eq!(
+            remi_php_pkg_name("8.5", "imagick").as_deref(),
+            Some("php85-php-pecl-imagick")
+        );
+        assert_eq!(
+            remi_php_pkg_name("8.5", "pgsql").as_deref(),
+            Some("php85-php-pgsql")
+        );
+        // Remi SCL package names must pass through rpm_name() untouched.
+        for p in [
+            "php84-php-fpm",
+            "php84-php-cli",
+            "php84-php-mysqlnd",
+            "php85-php-pecl-zip",
+        ] {
+            assert_eq!(rpm_name(p), p);
+        }
+    }
+
+    #[test]
+    fn builds_remi_release_urls_for_el_and_fedora() {
+        assert_eq!(
+            remi_release_url("almalinux", 10).as_deref(),
+            Some("https://rpms.remirepo.net/enterprise/remi-release-10.rpm")
+        );
+        assert_eq!(
+            remi_release_url("rocky", 9).as_deref(),
+            Some("https://rpms.remirepo.net/enterprise/remi-release-9.rpm")
+        );
+        assert_eq!(
+            remi_release_url("centos", 10).as_deref(),
+            Some("https://rpms.remirepo.net/enterprise/remi-release-10.rpm")
+        );
+        assert_eq!(
+            remi_release_url("fedora", 43).as_deref(),
+            Some("https://rpms.remirepo.net/fedora/remi-release-43.rpm")
+        );
+        assert_eq!(remi_release_url("rhel", 9), None);
+        assert_eq!(remi_release_url("ol", 9), None);
+        assert_eq!(remi_release_url("ubuntu", 24), None);
+        assert_eq!(remi_release_url("debian", 12), None);
+    }
+
+    #[test]
+    fn parses_non_modular_rpm_php_versions() {
+        assert_eq!(
+            parse_major_minor_versions("8.3.36\n8.3.37\n"),
+            Some("8.3".to_string())
+        );
+        assert_eq!(
+            parse_major_minor_versions("8.4.13\n8.4.28\n"),
+            Some("8.4".to_string())
+        );
+        assert_eq!(
+            parse_major_minor_versions("1:8.2.25\n"),
+            Some("8.2".to_string())
+        );
+        // Numeric ordering, not lexicographic ("8.10" > "8.4").
+        assert_eq!(
+            parse_major_minor_versions("8.4.28\n8.10.0\n"),
+            Some("8.10".to_string())
+        );
+        assert_eq!(parse_major_minor_versions(""), None);
+        assert_eq!(parse_major_minor_versions("Error: no match\n"), None);
     }
 }

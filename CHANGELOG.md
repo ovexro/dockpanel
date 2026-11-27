@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added: parallel multi-PHP (8.1–8.5) on RPM distributions via Remi SCL
+
+On AlmaLinux, Rocky Linux, CentOS Stream and Fedora, DockPanel previously only supported the single
+system `php-fpm` version from the distro repositories (one module stream on EL9, or PHP 8.3 alone on
+EL10) and refused any other version with HTTP 501. The agent now installs additional or non-native PHP
+versions (8.1–8.5) in parallel using Remi's SCL packages (`php81-php-fpm`–`php85-php-fpm`), each with
+its own systemd unit, CLI symlink (`/usr/bin/php{XY}`), and Unix socket
+(`/var/opt/remi/php{XY}/run/php-fpm/www.sock`), while still preferring the distro's native `php-fpm`
+when no system PHP is installed yet and the requested version is offered natively. Installing a Remi
+version enables EPEL and CRB (on Enterprise Linux) plus `remi-release` after a reachability pre-check,
+grants `nginx` socket ACL access in Remi's `www.conf` (`listen.acl_users`), wires extension listing
+and installation to the version's CLI and package prefix, and scopes uninstalls to `{prefix}-php-*`
+so removing one version leaves sibling versions untouched.
+
+### Fixed: package queries failed inside the agent sandbox on the RHEL family
+
+The agent runs with `ProtectSystem=strict`, and `/var/cache/dnf` is not writable for it. dnf takes
+`/var/cache/dnf/metadata_lock.pid` even for a read-only `list`, `repoquery` or `module list`, so every
+package query the agent made on Rocky, AlmaLinux, CentOS Stream and Fedora failed with
+`[Errno 30] Read-only file system` and was read as "not available". Measured on AlmaLinux 9.9 under the
+real unit: installing PHP from Settings → Services reported "PHP 8.3 with FPM installed" while it installed
+PHP 8.0.30 (end of life since 2023) with no extensions at all, and installing a version from the PHP
+version picker failed with "Unsupported distro for PHP install: ID='almalinux'", because the module
+streams could not be listed. Queries now keep their own metadata cache in `/var/lib/dockpanel/dnf-cache`;
+package installs are unchanged. With the fix the same two actions install PHP 8.4.28 and PHP 8.2 from
+their module streams, each with its extensions.
+
+### Fixed: Redis and PHP on EL10 (AlmaLinux 10, Rocky Linux 10, CentOS Stream 10) and Fedora 41+
+
+These releases replaced the `redis` package with its compatible fork Valkey (`valkey.service`,
+`valkey-cli`). The agent asked dnf for `redis`, enabled `redis.service` and ran `redis-cli`, so installing
+Redis or the Rspamd spam filter, the per-site Redis object cache and every Redis status check failed there.
+The agent now installs and manages Valkey on those releases, detected from the installed package, the
+repositories and `/etc/os-release`; EL9 and Fedora 39 keep Redis. EL10 also ships PHP without module
+streams, so the PHP version picker fell through to the Debian code path and answered "Unsupported distro
+for PHP install". It now installs the version the distribution offers (8.3 on EL10) and names that version
+when a different one is requested.
+
 ### Menu Options: choose what each role sees (#131)
 
 Settings has a "Menu Options" tab where an administrator picks, per role, which side menu and top bar

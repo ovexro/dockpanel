@@ -55,15 +55,33 @@ async fn install_status() -> Result<Json<serde_json::Value>, ApiErr> {
     // Keep these version lists in lock-step with php.rs ALLOWED_VERSIONS — both
     // installer paths (setup.sh, php.rs, this file) install `php{ver}-fpm`
     // directly (never the `php-fpm` metapackage), so a missing version here
-    // reports an installed+running PHP as absent on the Services page.
-    let php_installed = is_installed("php-fpm").await || is_installed("php8.5-fpm").await || is_installed("php8.4-fpm").await || is_installed("php8.3-fpm").await || is_installed("php8.2-fpm").await || is_installed("php8.1-fpm").await;
-    // Debian names the unit per version (`php8.3-fpm`); the RHEL family has a
-    // single `php-fpm`. Checking only the versioned names reported an active
-    // PHP as stopped on every RPM box (s265) — the same shape as the dpkg
-    // problem one line above, in the service manager instead of the package
-    // manager.
-    let php_running = is_active("php8.5-fpm").await || is_active("php8.4-fpm").await || is_active("php8.3-fpm").await || is_active("php8.2-fpm").await || is_active("php8.1-fpm").await
+    // reports an installed+running PHP as absent on the Services page. On RPM
+    // hosts, Remi SCL parallel versions (`php81-php-fpm`..`php85-php-fpm`) also
+    // count as installed/running.
+    let mut php_installed = is_installed("php-fpm").await
+        || is_installed("php8.5-fpm").await
+        || is_installed("php8.4-fpm").await
+        || is_installed("php8.3-fpm").await
+        || is_installed("php8.2-fpm").await
+        || is_installed("php8.1-fpm").await;
+    let mut php_running = is_active("php8.5-fpm").await
+        || is_active("php8.4-fpm").await
+        || is_active("php8.3-fpm").await
+        || is_active("php8.2-fpm").await
+        || is_active("php8.1-fpm").await
         || is_active("php-fpm").await;
+    if !php_installed || !php_running {
+        for v in ["8.5", "8.4", "8.3", "8.2", "8.1"] {
+            if crate::services::pkg::is_remi_php_installed(v).await {
+                php_installed = true;
+                if let Some(unit) = crate::services::pkg::remi_php_fpm_unit(v)
+                    && is_active(&unit).await
+                {
+                    php_running = true;
+                }
+            }
+        }
+    }
     let certbot_installed = which("certbot").await;
     let ufw_installed = which("ufw").await;
     let ufw_active = is_ufw_active().await;
@@ -73,8 +91,9 @@ async fn install_status() -> Result<Json<serde_json::Value>, ApiErr> {
     // Detect installed PHP version
     let php_version = detect_php_version().await;
 
-    let redis_installed = which("redis-server").await || is_installed("redis-server").await;
-    let redis_running = is_active("redis-server").await;
+    let redis_installed = crate::services::pkg::redis_server_installed().await;
+    let redis_unit = crate::services::pkg::service_name("redis-server").await;
+    let redis_running = is_active(&redis_unit).await;
 
     let nodejs_installed = which("node").await;
     let composer_installed = which("composer").await;
@@ -123,7 +142,15 @@ async fn install_php() -> Result<Json<serde_json::Value>, ApiErr> {
     // end-of-life since 2023, installed silently under a green status (s266).
     let streams = pkg::php_streams().await;
     let version = if streams.is_empty() {
-        detect_available_php().await.unwrap_or_else(|| "8.3".to_string())
+        if pkg::manager().await == pkg::PkgMgr::Rpm {
+            pkg::available_rpm_php_version()
+                .await
+                .unwrap_or_else(|| "8.3".to_string())
+        } else {
+            detect_available_php()
+                .await
+                .unwrap_or_else(|| "8.3".to_string())
+        }
     } else {
         // Honour the distro's newest stream. `detect_available_php` probes
         // apt-cache and cannot answer here, so it is not consulted.
@@ -773,10 +800,11 @@ async fn install_redis() -> Result<Json<serde_json::Value>, ApiErr> {
     let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["enable", &unit]).output()).await;
     let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["start", &unit]).output()).await;
 
-    // Verify Redis is responding
+    // Verify Redis (or Valkey on EL10 / Fedora 41+) is responding
+    let cli = pkg::redis_cli_bin().await;
     let verify = tokio::time::timeout(
         Duration::from_secs(10),
-        safe_command("redis-cli").arg("ping").output()
+        safe_command(cli).arg("ping").output()
     ).await;
     let verified = verify
         .ok()
@@ -1192,15 +1220,24 @@ async fn is_ufw_active() -> bool {
 }
 
 async fn detect_php_version() -> Option<String> {
-    let output = tokio::time::timeout(
+    if let Ok(Ok(output)) = tokio::time::timeout(
         Duration::from_secs(120),
-        safe_command("php").args(["-r", "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;"]).output()
-    ).await.ok()?.ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
+        safe_command("php")
+            .args(["-r", "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;"])
+            .output(),
+    )
+    .await
+        && output.status.success()
+    {
+        return Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
     }
+    // Fall back to Remi SCL binaries when only parallel RPM PHP versions are installed.
+    for v in ["8.5", "8.4", "8.3", "8.2", "8.1"] {
+        if crate::services::pkg::is_remi_php_installed(v).await {
+            return Some(v.to_string());
+        }
+    }
+    None
 }
 
 // ── WAF (ModSecurity3 + OWASP CRS) installer ───────────────────────

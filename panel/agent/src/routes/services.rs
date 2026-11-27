@@ -47,9 +47,15 @@ async fn check_services() -> Json<Vec<ServiceStatus>> {
 }
 
 async fn check_systemd_service(name: &str) -> ServiceStatus {
+    let unit = if name == "redis-server" {
+        crate::services::pkg::service_name(name).await
+    } else {
+        name.to_string()
+    };
+
     // First check if the unit is enabled/loaded
     let enabled = safe_command("systemctl")
-        .args(["is-enabled", name])
+        .args(["is-enabled", &unit])
         .output()
         .await;
 
@@ -85,7 +91,7 @@ async fn check_systemd_service(name: &str) -> ServiceStatus {
 
     // Now check active status for enabled/static services
     let output = safe_command("systemctl")
-        .args(["is-active", name])
+        .args(["is-active", &unit])
         .output()
         .await;
 
