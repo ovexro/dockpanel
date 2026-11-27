@@ -73,8 +73,9 @@ async fn install_status() -> Result<Json<serde_json::Value>, ApiErr> {
     // Detect installed PHP version
     let php_version = detect_php_version().await;
 
-    let redis_installed = which("redis-server").await || is_installed("redis-server").await;
-    let redis_running = is_active("redis-server").await;
+    let redis_installed = crate::services::pkg::redis_server_installed().await;
+    let redis_unit = crate::services::pkg::service_name("redis-server").await;
+    let redis_running = is_active(&redis_unit).await;
 
     let nodejs_installed = which("node").await;
     let composer_installed = which("composer").await;
@@ -123,7 +124,15 @@ async fn install_php() -> Result<Json<serde_json::Value>, ApiErr> {
     // end-of-life since 2023, installed silently under a green status (s266).
     let streams = pkg::php_streams().await;
     let version = if streams.is_empty() {
-        detect_available_php().await.unwrap_or_else(|| "8.3".to_string())
+        if pkg::manager().await == pkg::PkgMgr::Rpm {
+            pkg::available_rpm_php_version()
+                .await
+                .unwrap_or_else(|| "8.3".to_string())
+        } else {
+            detect_available_php()
+                .await
+                .unwrap_or_else(|| "8.3".to_string())
+        }
     } else {
         // Honour the distro's newest stream. `detect_available_php` probes
         // apt-cache and cannot answer here, so it is not consulted.
@@ -773,10 +782,11 @@ async fn install_redis() -> Result<Json<serde_json::Value>, ApiErr> {
     let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["enable", &unit]).output()).await;
     let _ = tokio::time::timeout(Duration::from_secs(120), safe_command("systemctl").args(["start", &unit]).output()).await;
 
-    // Verify Redis is responding
+    // Verify Redis (or Valkey on EL10 / Fedora 41+) is responding
+    let cli = pkg::redis_cli_bin().await;
     let verify = tokio::time::timeout(
         Duration::from_secs(10),
-        safe_command("redis-cli").arg("ping").output()
+        safe_command(cli).arg("ping").output()
     ).await;
     let verified = verify
         .ok()

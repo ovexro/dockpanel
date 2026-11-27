@@ -509,6 +509,9 @@ async fn service_logs(
         "opendkim",
         "rspamd",
         "redis-server",
+        "redis",
+        "valkey",
+        "php-fpm",
         "php8.3-fpm",
         "php8.2-fpm",
     ];
@@ -519,6 +522,12 @@ async fn service_logs(
             &format!("Service '{}' not in allowed list", service),
         ));
     }
+
+    let unit = if service == "redis-server" {
+        crate::services::pkg::service_name(&service).await
+    } else {
+        service.clone()
+    };
 
     let lines = params
         .get("lines")
@@ -531,7 +540,7 @@ async fn service_logs(
         safe_command("journalctl")
             .args([
                 "-u",
-                &service,
+                &unit,
                 "-n",
                 &lines.to_string(),
                 "--no-pager",
