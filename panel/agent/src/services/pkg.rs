@@ -176,7 +176,10 @@ fn php_rpm_name(debian: &str) -> &str {
     let Some(rest) = debian
         .strip_prefix("php")
         .and_then(|r| r.split_once('-'))
-        .filter(|(ver, _)| ver.is_empty() || ver.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        .filter(|(ver, ext)| {
+            !ext.starts_with("php-")
+                && (ver.is_empty() || ver.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        })
         .map(|(_, ext)| ext)
     else {
         return debian;
@@ -265,23 +268,127 @@ pub async fn installed_php_version() -> Option<String> {
     (!major.is_empty() && !minor.is_empty()).then(|| format!("{major}.{minor}"))
 }
 
-/// Resolve the real, currently-existing PHP-FPM socket for a version, across
-/// both families.
+/// Convert a `major.minor` PHP version (`"8.4"`) into its Remi SCL package
+/// prefix (`"php84"`). Returns `None` for any input that is not two ASCII
+/// numeric segments, so callers can safely interpolate the result into package
+/// names, unit names, and filesystem paths.
+pub fn remi_php_prefix(version: &str) -> Option<String> {
+    let (maj, min) = version.split_once('.')?;
+    if maj.is_empty()
+        || min.is_empty()
+        || !maj.chars().all(|c| c.is_ascii_digit())
+        || !min.chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(format!("php{maj}{min}"))
+}
+
+/// Systemd unit name for a Remi SCL PHP-FPM version (`"8.4"` -> `"php84-php-fpm"`).
+pub fn remi_php_fpm_unit(version: &str) -> Option<String> {
+    Some(format!("{}-php-fpm", remi_php_prefix(version)?))
+}
+
+/// Unix socket path opened by a Remi SCL PHP-FPM pool (`"8.4"` ->
+/// `"/var/opt/remi/php84/run/php-fpm/www.sock"`).
+pub fn remi_php_socket_path(version: &str) -> Option<String> {
+    Some(format!(
+        "/var/opt/remi/{}/run/php-fpm/www.sock",
+        remi_php_prefix(version)?
+    ))
+}
+
+/// CLI binary symlink installed by Remi SCL (`"8.4"` -> `"/usr/bin/php84"`).
+pub fn remi_php_cli_bin(version: &str) -> Option<String> {
+    Some(format!("/usr/bin/{}", remi_php_prefix(version)?))
+}
+
+/// Map a logical PHP extension name (`"fpm"`, `"mysql"`, `"zip"`, `"redis"`, …)
+/// to its Remi SCL RPM package name (`"php84-php-mysqlnd"`, `"php84-php-pecl-zip"`, …).
+pub fn remi_php_pkg_name(version: &str, ext: &str) -> Option<String> {
+    let prefix = remi_php_prefix(version)?;
+    let suffix = match ext {
+        "mysql" => "mysqlnd",
+        "zip" => "pecl-zip",
+        "redis" => "pecl-redis6",
+        "imagick" => "pecl-imagick",
+        other => other,
+    };
+    Some(format!("{prefix}-php-{suffix}"))
+}
+
+/// Official Remi release RPM URL for an RPM distro, or `None` when unsupported.
 ///
-/// Debian ships one socket per version at a fixed, predictable path. The RHEL
-/// family ships exactly one unversioned socket for whichever stream is
-/// active — see [`installed_php_version`] for why RHEL can only ever have one
-/// live version at a time. Callers that build a nginx vhost or answer a
-/// status check used to assume the Debian path unconditionally, which made
-/// PHP sites unreachable on the RHEL family even though PHP-FPM was
-/// genuinely installed and running: `settle()`'s own socket check already
-/// knew about this split (see [`crate::routes::php::socket_exists`]), but
-/// `nginx.rs::put_site()` re-implemented a Debian-only existence check
-/// instead of sharing it. This is the single source of truth both now call.
+/// Enterprise Linux support covers the community rebuilds in DockPanel's
+/// support matrix (`almalinux`, `rocky`, `centos`) whose base repos ship
+/// `epel-release`; RHEL/Oracle Linux require different EPEL/CodeReady setup and
+/// are deliberately excluded rather than failing mid-install.
+fn remi_release_url(os_id: &str, major: u32) -> Option<String> {
+    match os_id {
+        "fedora" if major >= 39 => Some(format!(
+            "https://rpms.remirepo.net/fedora/remi-release-{major}.rpm"
+        )),
+        "almalinux" | "rocky" | "centos" if major >= 8 => Some(format!(
+            "https://rpms.remirepo.net/enterprise/remi-release-{major}.rpm"
+        )),
+        _ => None,
+    }
+}
+
+/// True when the Remi SCL PHP-FPM package for `version` (`php84-php-fpm`) is
+/// installed on this RPM host.
+pub async fn is_remi_php_installed(version: &str) -> bool {
+    if manager().await != PkgMgr::Rpm {
+        return false;
+    }
+    let Some(pkg) = remi_php_fpm_unit(version) else {
+        return false;
+    };
+    run_ok("rpm", &["-q", &pkg], |_| true).await
+}
+
+/// True when `remi-release` is already installed on this RPM host.
+pub async fn remi_repo_installed() -> bool {
+    if manager().await != PkgMgr::Rpm {
+        return false;
+    }
+    run_ok("rpm", &["-q", "remi-release"], |_| true).await
+}
+
+/// The systemd unit managing PHP-FPM for `version`, supporting Debian
+/// (`php8.4-fpm`), Remi SCL parallel RPM installs (`php84-php-fpm`), and
+/// system RPM installs (`php-fpm`).
+pub async fn php_fpm_unit_for(version: &str) -> String {
+    if manager().await == PkgMgr::Rpm {
+        if is_remi_php_installed(version).await
+            && let Some(unit) = remi_php_fpm_unit(version)
+        {
+            return unit;
+        }
+        "php-fpm".to_string()
+    } else {
+        format!("php{version}-fpm")
+    }
+}
+
+/// Resolve the real, currently-existing PHP-FPM socket for a version, across
+/// both families (including Remi SCL parallel PHP installations on RPM).
+///
+/// Debian ships one socket per version at `/run/php/php{version}-fpm.sock`.
+/// On the RHEL family, Remi SCL installs provide parallel per-version sockets
+/// at `/var/opt/remi/php{XY}/run/php-fpm/www.sock`, while the distro's own
+/// `php-fpm` package serves a single unversioned socket at
+/// `/run/php-fpm/www.sock`. This is the single source of truth shared by
+/// `php.rs` and `nginx.rs`.
 pub async fn resolve_php_fpm_socket(version: &str) -> Option<String> {
     let debian = format!("/run/php/php{version}-fpm.sock");
     if std::path::Path::new(&debian).exists() {
         return Some(debian);
+    }
+    if let Some(remi) = remi_php_socket_path(version)
+        && std::path::Path::new(&remi).exists()
+    {
+        return Some(remi);
     }
     if installed_php_version().await.as_deref() == Some(version)
         && std::path::Path::new("/run/php-fpm/www.sock").exists()
@@ -1005,6 +1112,38 @@ pub async fn add_repo(repo: Repo) -> Result<(), String> {
                    -o /etc/yum.repos.d/rspamd.repo"
             )
         }
+        (Repo::Remi, true) => {
+            return Err("Remi is an RPM-only PHP repository; Debian/Ubuntu use deb.sury.org or ppa:ondrej/php".into());
+        }
+        (Repo::Remi, false) => {
+            let os_id = os_release_value("ID")
+                .await
+                .ok_or_else(|| "Cannot detect OS ID from /etc/os-release".to_string())?;
+            let major: u32 = os_release_value("VERSION_ID")
+                .await
+                .and_then(|v| v.split('.').next()?.parse().ok())
+                .ok_or_else(|| "Cannot detect OS major version from /etc/os-release".to_string())?;
+            let url = remi_release_url(&os_id, major)
+                .ok_or_else(|| format!("Remi repository is not available for {os_id} {major}"))?;
+            let bin = inst.bin();
+            if os_id == "fedora" {
+                format!(
+                    "set -e; curl -sfI --max-time 15 {url} >/dev/null || \
+                       {{ echo 'Remi does not publish packages for {os_id} {major}' >&2; exit 42; }}; \
+                     {bin} install -y {url}"
+                )
+            } else {
+                // Enterprise Linux (AlmaLinux, Rocky, CentOS Stream) requires
+                // EPEL + CRB alongside Remi.
+                format!(
+                    "set -e; curl -sfI --max-time 15 {url} >/dev/null || \
+                       {{ echo 'Remi does not publish packages for {os_id} {major}' >&2; exit 42; }}; \
+                     {bin} install -y epel-release dnf-plugins-core >/dev/null 2>&1 || {bin} install -y epel-release; \
+                     {bin} config-manager --set-enabled crb >/dev/null 2>&1 || {bin} config-manager --set-enabled powertools >/dev/null 2>&1 || true; \
+                     {bin} install -y {url}"
+                )
+            }
+        }
     };
 
     // **bash, not sh.** On Debian and Ubuntu `/bin/sh` is dash, which answers
@@ -1085,6 +1224,11 @@ fn repo_artifact_paths(repo: Repo) -> &'static [&'static str] {
             "/etc/yum.repos.d/cloudflared.repo",
         ],
         Repo::Rspamd => &["/etc/yum.repos.d/rspamd.repo"],
+        Repo::Remi => &[
+            "/etc/yum.repos.d/remi-safe.repo",
+            "/etc/yum.repos.d/remi.repo",
+            "/etc/yum.repos.d/remi-modular.repo",
+        ],
     }
 }
 
@@ -1096,6 +1240,9 @@ pub enum Repo {
     /// in their own archives (driven at s262), and adding a repo there would
     /// change the family that already works to fix the one that does not.
     Rspamd,
+    /// Remi's RPM repository (**RHEL-family / Fedora only**) for parallel
+    /// multi-PHP SCL installations (`php81-php-fpm`..`php85-php-fpm`).
+    Remi,
 }
 
 /// A value from `/etc/os-release`, or `None` when this release does not carry
@@ -1344,6 +1491,79 @@ mod tests {
         assert!(!os_defaults_to_valkey("centos", 9));
         assert!(!os_defaults_to_valkey("fedora", 39));
         assert!(!os_defaults_to_valkey("ubuntu", 24));
+    }
+
+    #[test]
+    fn maps_remi_scl_names_units_sockets_and_extensions() {
+        assert_eq!(remi_php_prefix("8.4").as_deref(), Some("php84"));
+        assert_eq!(remi_php_prefix("8.5").as_deref(), Some("php85"));
+        assert_eq!(remi_php_prefix("8.4;rm -rf /"), None);
+        assert_eq!(remi_php_prefix("8"), None);
+
+        assert_eq!(remi_php_fpm_unit("8.4").as_deref(), Some("php84-php-fpm"));
+        assert_eq!(
+            remi_php_socket_path("8.5").as_deref(),
+            Some("/var/opt/remi/php85/run/php-fpm/www.sock")
+        );
+        assert_eq!(remi_php_cli_bin("8.4").as_deref(), Some("/usr/bin/php84"));
+
+        assert_eq!(
+            remi_php_pkg_name("8.4", "fpm").as_deref(),
+            Some("php84-php-fpm")
+        );
+        assert_eq!(
+            remi_php_pkg_name("8.4", "mysql").as_deref(),
+            Some("php84-php-mysqlnd")
+        );
+        assert_eq!(
+            remi_php_pkg_name("8.4", "zip").as_deref(),
+            Some("php84-php-pecl-zip")
+        );
+        assert_eq!(
+            remi_php_pkg_name("8.4", "redis").as_deref(),
+            Some("php84-php-pecl-redis6")
+        );
+        assert_eq!(
+            remi_php_pkg_name("8.5", "imagick").as_deref(),
+            Some("php85-php-pecl-imagick")
+        );
+        assert_eq!(
+            remi_php_pkg_name("8.5", "pgsql").as_deref(),
+            Some("php85-php-pgsql")
+        );
+        // Remi SCL package names must pass through rpm_name() untouched.
+        for p in [
+            "php84-php-fpm",
+            "php84-php-cli",
+            "php84-php-mysqlnd",
+            "php85-php-pecl-zip",
+        ] {
+            assert_eq!(rpm_name(p), p);
+        }
+    }
+
+    #[test]
+    fn builds_remi_release_urls_for_el_and_fedora() {
+        assert_eq!(
+            remi_release_url("almalinux", 10).as_deref(),
+            Some("https://rpms.remirepo.net/enterprise/remi-release-10.rpm")
+        );
+        assert_eq!(
+            remi_release_url("rocky", 9).as_deref(),
+            Some("https://rpms.remirepo.net/enterprise/remi-release-9.rpm")
+        );
+        assert_eq!(
+            remi_release_url("centos", 10).as_deref(),
+            Some("https://rpms.remirepo.net/enterprise/remi-release-10.rpm")
+        );
+        assert_eq!(
+            remi_release_url("fedora", 43).as_deref(),
+            Some("https://rpms.remirepo.net/fedora/remi-release-43.rpm")
+        );
+        assert_eq!(remi_release_url("rhel", 9), None);
+        assert_eq!(remi_release_url("ol", 9), None);
+        assert_eq!(remi_release_url("ubuntu", 24), None);
+        assert_eq!(remi_release_url("debian", 12), None);
     }
 
     #[test]

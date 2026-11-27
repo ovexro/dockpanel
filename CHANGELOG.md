@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added: parallel multi-PHP (8.1–8.5) on RPM distributions via Remi SCL
+
+On AlmaLinux, Rocky Linux, CentOS Stream and Fedora, DockPanel previously only supported the single
+system `php-fpm` version from the distro repositories (one module stream on EL9, or PHP 8.3 alone on
+EL10) and refused any other version with HTTP 501. The agent now installs additional or non-native PHP
+versions (8.1–8.5) in parallel using Remi's SCL packages (`php81-php-fpm`–`php85-php-fpm`), each with
+its own systemd unit, CLI symlink (`/usr/bin/php{XY}`), and Unix socket
+(`/var/opt/remi/php{XY}/run/php-fpm/www.sock`), while still preferring the distro's native `php-fpm`
+when no system PHP is installed yet and the requested version is offered natively. Installing a Remi
+version enables EPEL and CRB (on Enterprise Linux) plus `remi-release` after a reachability pre-check,
+grants `nginx` socket ACL access in Remi's `www.conf` (`listen.acl_users`), wires extension listing
+and installation to the version's CLI and package prefix, and scopes uninstalls to `{prefix}-php-*`
+so removing one version leaves sibling versions untouched.
+
 ### Fixed: package queries failed inside the agent sandbox on the RHEL family
 
 The agent runs with `ProtectSystem=strict`, and `/var/cache/dnf` is not writable for it. dnf takes

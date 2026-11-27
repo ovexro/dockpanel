@@ -1107,7 +1107,7 @@ php_admin_value[max_execution_time] = 300
 
 /// Reload PHP-FPM for a given version.
 pub async fn reload_php_fpm(php_version: &str) -> Result<(), String> {
-    let service = format!("php{php_version}-fpm");
+    let service = crate::services::pkg::php_fpm_unit_for(php_version).await;
     let output = safe_command("systemctl")
         .args(["reload", &service])
         .output()
