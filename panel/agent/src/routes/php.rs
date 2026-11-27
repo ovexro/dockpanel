@@ -117,6 +117,7 @@ async fn list_versions() -> Json<PhpListResponse> {
 /// nothing in the UI to say so.
 async fn install_version_rpm(
     version: &str,
+    use_module_stream: bool,
 ) -> Result<Json<InstallResponse>, (StatusCode, Json<InstallResponse>)> {
     use crate::services::pkg;
 
@@ -127,10 +128,14 @@ async fn install_version_rpm(
         )
     };
 
-    tracing::info!("Installing PHP {version} from its module stream");
-    pkg::enable_php_stream(version)
-        .await
-        .map_err(|e| fail(format!("Could not select PHP {version}: {e}")))?;
+    if use_module_stream {
+        tracing::info!("Installing PHP {version} from its module stream");
+        pkg::enable_php_stream(version)
+            .await
+            .map_err(|e| fail(format!("Could not select PHP {version}: {e}")))?;
+    } else {
+        tracing::info!("Installing PHP {version} from distro repositories (non-modular RPM)");
+    }
 
     let core = [
         format!("php{version}-fpm"),
@@ -237,30 +242,64 @@ async fn install_version(
         return Ok(Json(settle(version, "was already installed").await));
     }
 
-    // The RHEL family selects a PHP version by enabling a module stream, not by
-    // installing a versioned package, so everything below this point — the
-    // apt-cache probe, deb.sury.org, ppa:ondrej/php — is Debian machinery.
-    // This whole file had NO family guard before s266, so on a RHEL box every
-    // handler here failed with a raw "Failed to find executable apt-get": the
-    // same defect s265 fixed in the service installers and did not reach here.
-    let streams = crate::services::pkg::php_streams().await;
-    if !streams.is_empty() {
-        if !streams.iter().any(|s| s == version) {
-            return Err((
-                StatusCode::NOT_IMPLEMENTED,
-                Json(InstallResponse {
-                    success: false,
-                    message: format!(
-                        "PHP {version} is not offered by this system's package repositories. \
-                         Available versions here: {}. (Other versions would need the third-party \
-                         remi repository, which DockPanel does not configure.)",
-                        streams.join(", ")
-                    ),
-                    version: version.to_string(),
-                }),
-            ));
+    // The RHEL family installs a single unversioned `php-fpm` package rather
+    // than Debian's per-version `php{v}-fpm` packages — either by enabling a
+    // module stream (EL9: Rocky 9 / Alma 9 / CentOS 9) or directly from
+    // non-modular repositories (EL10: AlmaLinux 10 / Rocky 10 / CentOS 10,
+    // and Fedora 39+). Branch on the package family before reaching the apt
+    // machinery (apt-cache, deb.sury.org, ppa:ondrej/php).
+    if crate::services::pkg::manager().await == crate::services::pkg::PkgMgr::Rpm {
+        let streams = crate::services::pkg::php_streams().await;
+        if !streams.is_empty() {
+            if !streams.iter().any(|s| s == version) {
+                return Err((
+                    StatusCode::NOT_IMPLEMENTED,
+                    Json(InstallResponse {
+                        success: false,
+                        message: format!(
+                            "PHP {version} is not offered by this system's package repositories. \
+                             Available versions here: {}. (Other versions would need the third-party \
+                             remi repository, which DockPanel does not configure.)",
+                            streams.join(", ")
+                        ),
+                        version: version.to_string(),
+                    }),
+                ));
+            }
+            return install_version_rpm(version, true).await;
         }
-        return install_version_rpm(version).await;
+
+        match crate::services::pkg::available_rpm_php_version().await {
+            Some(avail) if avail == version => {
+                return install_version_rpm(version, false).await;
+            }
+            Some(avail) => {
+                return Err((
+                    StatusCode::NOT_IMPLEMENTED,
+                    Json(InstallResponse {
+                        success: false,
+                        message: format!(
+                            "PHP {version} is not offered by this system's package repositories. \
+                             Available version here: {avail}. (Other versions would need the \
+                             third-party remi repository, which DockPanel does not configure.)"
+                        ),
+                        version: version.to_string(),
+                    }),
+                ));
+            }
+            None => {
+                return Err((
+                    StatusCode::NOT_IMPLEMENTED,
+                    Json(InstallResponse {
+                        success: false,
+                        message: format!(
+                            "PHP {version} is not offered by this system's package repositories."
+                        ),
+                        version: version.to_string(),
+                    }),
+                ));
+            }
+        }
     }
 
     // Ensure php{version}-fpm is available from some apt source. On Debian 13

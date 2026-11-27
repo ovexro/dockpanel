@@ -327,6 +327,149 @@ pub async fn php_streams() -> Vec<String> {
     versions
 }
 
+fn rpm_name_for(debian: &str, use_valkey: bool) -> &str {
+    if debian == "redis-server" && use_valkey {
+        "valkey"
+    } else {
+        rpm_name(debian)
+    }
+}
+
+/// True on RPM distributions where `redis` was replaced by its wire-compatible
+/// fork `valkey` (EL10: AlmaLinux 10, Rocky 10, CentOS Stream 10; Fedora 41+).
+///
+/// Checked in order: already-installed package first, then package-manager
+/// availability (so EL9 / Fedora 39 keep `redis`), with `/etc/os-release` as
+/// a fallback when repository metadata is unavailable.
+async fn rpm_uses_valkey() -> bool {
+    static USES_VALKEY: OnceCell<bool> = OnceCell::const_new();
+    *USES_VALKEY
+        .get_or_init(|| async {
+            if manager().await != PkgMgr::Rpm {
+                return false;
+            }
+            if run_ok("rpm", &["-q", "valkey"], |_| true).await {
+                return true;
+            }
+            if run_ok("rpm", &["-q", "redis"], |_| true).await {
+                return false;
+            }
+            if let Some(inst) = installer().await.filter(|i| !i.is_apt()) {
+                let bin = inst.bin();
+                if run_ok(
+                    bin,
+                    &[DNF_QUERY_CACHEDIR, "-q", "list", "--available", "redis"],
+                    |_| true,
+                )
+                .await
+                {
+                    return false;
+                }
+                if run_ok(
+                    bin,
+                    &[DNF_QUERY_CACHEDIR, "-q", "list", "--available", "valkey"],
+                    |_| true,
+                )
+                .await
+                {
+                    return true;
+                }
+            }
+            let id = os_release_value("ID").await.unwrap_or_default();
+            let major: u32 = os_release_value("VERSION_ID")
+                .await
+                .and_then(|v| v.split('.').next()?.parse().ok())
+                .unwrap_or(0);
+            os_defaults_to_valkey(&id, major)
+        })
+        .await
+}
+
+/// Pure fallback for [`rpm_uses_valkey`] when repo metadata cannot be queried.
+fn os_defaults_to_valkey(os_id: &str, major: u32) -> bool {
+    match os_id {
+        "fedora" => major >= 41,
+        "almalinux" | "rocky" | "centos" | "rhel" | "ol" => major >= 10,
+        _ => false,
+    }
+}
+
+async fn resolve_rpm_name(debian: &str) -> &str {
+    if debian == "redis-server" {
+        rpm_name_for(debian, rpm_uses_valkey().await)
+    } else {
+        rpm_name(debian)
+    }
+}
+
+/// The Redis-compatible CLI binary available on this host (`redis-cli`, or
+/// `valkey-cli` on EL10 / Fedora 41+ where Valkey replaced Redis).
+pub async fn redis_cli_bin() -> &'static str {
+    if which("redis-cli").await {
+        "redis-cli"
+    } else if which("valkey-cli").await {
+        "valkey-cli"
+    } else {
+        "redis-cli"
+    }
+}
+
+/// True when either Redis or its drop-in replacement Valkey is installed.
+pub async fn redis_server_installed() -> bool {
+    which("redis-server").await
+        || which("valkey-server").await
+        || is_installed("redis-server").await
+}
+
+/// Parse the newest `major.minor` version from newline-separated RPM version
+/// strings (as printed by `dnf -q repoquery --qf "%{version}\n" php-fpm`).
+fn parse_major_minor_versions(stdout: &str) -> Option<String> {
+    let mut best: Option<(u32, u32)> = None;
+    for raw in stdout.lines() {
+        let trimmed = raw.trim();
+        let ver = trimmed.split_once(':').map(|(_, v)| v).unwrap_or(trimmed);
+        let mut parts = ver.split('.');
+        let Ok(maj) = parts.next().unwrap_or("").parse::<u32>() else {
+            continue;
+        };
+        let Ok(min) = parts.next().unwrap_or("").parse::<u32>() else {
+            continue;
+        };
+        if best.is_none_or(|b| (maj, min) > b) {
+            best = Some((maj, min));
+        }
+    }
+    best.map(|(maj, min)| format!("{maj}.{min}"))
+}
+
+/// The `major.minor` PHP version offered directly by `php-fpm` on non-modular
+/// RPM distributions (EL10: AlmaLinux 10, Rocky 10, CentOS Stream 10; Fedora).
+/// Returns `None` on apt systems or when `php-fpm` has no candidate.
+pub async fn available_rpm_php_version() -> Option<String> {
+    let inst = installer().await.filter(|i| !i.is_apt())?;
+    let mut captured = String::new();
+    let ok = run_ok(
+        inst.bin(),
+        &[
+            DNF_QUERY_CACHEDIR,
+            "-q",
+            "repoquery",
+            "--qf",
+            "%{version}\n",
+            "php-fpm",
+        ],
+        |out| {
+            captured = out.to_string();
+            true
+        },
+    )
+    .await;
+    if !ok {
+        return None;
+    }
+    parse_major_minor_versions(&captured)
+}
+
 /// True when `package` is installed. Takes the Debian package name.
 ///
 /// Note for callers that iterate PHP versions: on RPM every `php{v}-fpm` maps
@@ -341,7 +484,14 @@ pub async fn is_installed(package: &str) -> bool {
             // `ii` is what distinguishes installed from residual-config.
             run_ok("dpkg", &["-l", package], |out| out.contains("ii")).await
         }
-        PkgMgr::Rpm => run_ok("rpm", &["-q", rpm_name(package)], |_| true).await,
+        PkgMgr::Rpm => {
+            if package == "redis-server" {
+                run_ok("rpm", &["-q", "redis"], |_| true).await
+                    || run_ok("rpm", &["-q", "valkey"], |_| true).await
+            } else {
+                run_ok("rpm", &["-q", rpm_name(package)], |_| true).await
+            }
+        }
         PkgMgr::Unknown => false,
     }
 }
@@ -356,11 +506,21 @@ pub async fn is_installed(package: &str) -> bool {
 /// family. Verified against the units actually shipped on Rocky 9 (s266):
 /// `redis.service`, `php-fpm.service` and `pdns.service` exist;
 /// `redis-server.service`, `php{v}-fpm.service` and `pdns-server.service` do not.
+/// On EL10 and Fedora 41+, `redis` is replaced by `valkey.service`.
 pub async fn service_name(debian_unit: &str) -> String {
     if manager().await == PkgMgr::Rpm {
-        rpm_service_name(debian_unit).to_string()
+        let use_valkey = debian_unit == "redis-server" && rpm_uses_valkey().await;
+        rpm_service_name_for(debian_unit, use_valkey).to_string()
     } else {
         debian_unit.to_string()
+    }
+}
+
+fn rpm_service_name_for(debian_unit: &str, use_valkey: bool) -> &str {
+    if debian_unit == "redis-server" && use_valkey {
+        "valkey"
+    } else {
+        rpm_service_name(debian_unit)
     }
 }
 
@@ -414,7 +574,7 @@ pub async fn available(package: &str) -> bool {
         }
         Some(Installer::Dnf) | Some(Installer::Yum) => {
             let bin = installer().await.map(Installer::bin).unwrap_or("dnf");
-            let name = rpm_name(package);
+            let name = resolve_rpm_name(package).await;
             // `list` matches package NAMES only. That is not the same question
             // as "can this be installed": `php-curl` is *provided by*
             // `php-common`, so `dnf list --available php-curl` reports nothing
@@ -516,7 +676,19 @@ async fn transact(action: Action, packages: &[&str]) -> Result<(), String> {
     // the logged command look like a bug to whoever reads it next.
     let mut names: Vec<String> = Vec::with_capacity(packages.len());
     for p in packages {
-        let name = if rpm { rpm_name(p).to_string() } else { (*p).to_string() };
+        let name = if rpm {
+            if matches!(action, Action::Remove) && *p == "redis-server" {
+                if run_ok("rpm", &["-q", "valkey"], |_| true).await {
+                    "valkey".to_string()
+                } else {
+                    "redis".to_string()
+                }
+            } else {
+                resolve_rpm_name(p).await.to_string()
+            }
+        } else {
+            (*p).to_string()
+        };
         if !names.contains(&name) {
             names.push(name);
         }
@@ -942,7 +1114,7 @@ pub async fn os_release_value(key: &str) -> Option<String> {
 }
 
 /// Run a query and apply `accept` to its stdout when it exits 0.
-async fn run_ok(bin: &str, args: &[&str], accept: impl Fn(&str) -> bool) -> bool {
+async fn run_ok(bin: &str, args: &[&str], mut accept: impl FnMut(&str) -> bool) -> bool {
     tokio::time::timeout(
         Duration::from_secs(120),
         safe_command(bin).args(args).kill_on_drop(true).output(),
@@ -1147,5 +1319,53 @@ mod tests {
             .expect("must be a dnf --setopt=cachedir= option");
         assert!(dir.starts_with("/var/lib/dockpanel/"), "{dir}");
         assert!(!dir.starts_with("/var/cache"), "{dir}");
+    }
+
+    #[test]
+    fn maps_redis_to_valkey_on_el10_and_fedora41_plus() {
+        assert_eq!(rpm_name_for("redis-server", false), "redis");
+        assert_eq!(rpm_name_for("redis-server", true), "valkey");
+        assert_eq!(rpm_service_name_for("redis-server", false), "redis");
+        assert_eq!(rpm_service_name_for("redis-server", true), "valkey");
+        // Non-redis packages and units are unaffected by the valkey switch.
+        assert_eq!(rpm_name_for("pdns-server", true), "pdns");
+        assert_eq!(rpm_service_name_for("php8.3-fpm", true), "php-fpm");
+    }
+
+    #[test]
+    fn os_valkey_fallback_distinguishes_el9_and_el10() {
+        assert!(os_defaults_to_valkey("almalinux", 10));
+        assert!(os_defaults_to_valkey("rocky", 10));
+        assert!(os_defaults_to_valkey("centos", 10));
+        assert!(os_defaults_to_valkey("fedora", 43));
+        assert!(os_defaults_to_valkey("fedora", 41));
+        assert!(!os_defaults_to_valkey("almalinux", 9));
+        assert!(!os_defaults_to_valkey("rocky", 9));
+        assert!(!os_defaults_to_valkey("centos", 9));
+        assert!(!os_defaults_to_valkey("fedora", 39));
+        assert!(!os_defaults_to_valkey("ubuntu", 24));
+    }
+
+    #[test]
+    fn parses_non_modular_rpm_php_versions() {
+        assert_eq!(
+            parse_major_minor_versions("8.3.36\n8.3.37\n"),
+            Some("8.3".to_string())
+        );
+        assert_eq!(
+            parse_major_minor_versions("8.4.13\n8.4.28\n"),
+            Some("8.4".to_string())
+        );
+        assert_eq!(
+            parse_major_minor_versions("1:8.2.25\n"),
+            Some("8.2".to_string())
+        );
+        // Numeric ordering, not lexicographic ("8.10" > "8.4").
+        assert_eq!(
+            parse_major_minor_versions("8.4.28\n8.10.0\n"),
+            Some("8.10".to_string())
+        );
+        assert_eq!(parse_major_minor_versions(""), None);
+        assert_eq!(parse_major_minor_versions("Error: no match\n"), None);
     }
 }

@@ -19,6 +19,17 @@ streams could not be listed. Queries now keep their own metadata cache in `/var/
 package installs are unchanged. With the fix the same two actions install PHP 8.4.28 and PHP 8.2 from
 their module streams, each with its extensions.
 
+### Fixed: Redis and PHP on EL10 (AlmaLinux 10, Rocky Linux 10, CentOS Stream 10) and Fedora 41+
+
+These releases replaced the `redis` package with its compatible fork Valkey (`valkey.service`,
+`valkey-cli`). The agent asked dnf for `redis`, enabled `redis.service` and ran `redis-cli`, so installing
+Redis or the Rspamd spam filter, the per-site Redis object cache and every Redis status check failed there.
+The agent now installs and manages Valkey on those releases, detected from the installed package, the
+repositories and `/etc/os-release`; EL9 and Fedora 39 keep Redis. EL10 also ships PHP without module
+streams, so the PHP version picker fell through to the Debian code path and answered "Unsupported distro
+for PHP install". It now installs the version the distribution offers (8.3 on EL10) and names that version
+when a different one is requested.
+
 ### Menu Options: choose what each role sees (#131)
 
 Settings has a "Menu Options" tab where an administrator picks, per role, which side menu and top bar

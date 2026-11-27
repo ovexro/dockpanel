@@ -150,10 +150,15 @@ async fn system_info() -> Json<SystemInfo> {
 
     let mut services = Vec::new();
     for name in &service_names {
+        let unit = if *name == "redis-server" {
+            crate::services::pkg::service_name(name).await
+        } else {
+            (*name).to_string()
+        };
         let active = tokio::time::timeout(
             timeout,
             safe_command("systemctl")
-                .args(["is-active", "--quiet", name])
+                .args(["is-active", "--quiet", &unit])
                 .status(),
         )
         .await
