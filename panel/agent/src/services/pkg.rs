@@ -25,6 +25,26 @@ use tokio::sync::OnceCell;
 /// installer used before this module existed.
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Points a dnf/yum QUERY at a metadata cache the agent is allowed to write.
+///
+/// The agent runs under `ProtectSystem=strict` and `/var/cache/dnf` is not in
+/// its `ReadWritePaths`. dnf takes `/var/cache/dnf/metadata_lock.pid` even for
+/// a read-only `list`, `repoquery` or `module list`, so every query made from
+/// inside the sandbox failed with
+/// `[Errno 30] Read-only file system: '/var/cache/dnf/metadata_lock.pid'` —
+/// measured on AlmaLinux 9.9 and 10.3, with a warm cache and an expired one,
+/// by running the queries under systemd-run with this unit's own sandbox
+/// properties. `-C` (cache only) fails the same way: the lock is taken first.
+///
+/// Every caller read that failure as "not available". On AlmaLinux 9.9 under
+/// the real unit, `install_php` reported "PHP 8.3 installed" while it installed
+/// the non-modular PHP 8.0.30 with no extensions ([`php_streams`] saw no
+/// streams, [`install_available`] saw no candidates), and the version picker
+/// failed with "Unsupported distro". `/var/lib/dockpanel` is
+/// already writable for the agent, so queries keep their own metadata there.
+/// Transactions are unaffected: they run unsandboxed and use the system cache.
+pub const DNF_QUERY_CACHEDIR: &str = "--setopt=cachedir=/var/lib/dockpanel/dnf-cache";
+
 /// Which package database this box actually has.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PkgMgr {
@@ -283,7 +303,7 @@ pub async fn php_streams() -> Vec<String> {
     let out = tokio::time::timeout(
         Duration::from_secs(120),
         safe_command(inst.bin())
-            .args(["-q", "module", "list", "php"])
+            .args([DNF_QUERY_CACHEDIR, "-q", "module", "list", "php"])
             .kill_on_drop(true)
             .output(),
     )
@@ -401,11 +421,29 @@ pub async fn available(package: &str) -> bool {
             // while `dnf install php-curl` succeeds. Stopping at `list` would
             // silently skip extensions dnf can supply, so a virtual-provide
             // lookup is the tiebreaker before declaring anything unavailable.
-            run_ok(bin, &["-q", "list", "--available", name], |_| true).await
-                || run_ok(bin, &["-q", "list", "--installed", name], |_| true).await
-                || run_ok(bin, &["-q", "repoquery", "--whatprovides", name], |out| {
-                    !out.trim().is_empty()
-                })
+            run_ok(
+                bin,
+                &[DNF_QUERY_CACHEDIR, "-q", "list", "--available", name],
+                |_| true,
+            )
+            .await
+                || run_ok(
+                    bin,
+                    &[DNF_QUERY_CACHEDIR, "-q", "list", "--installed", name],
+                    |_| true,
+                )
+                .await
+                || run_ok(
+                    bin,
+                    &[
+                        DNF_QUERY_CACHEDIR,
+                        "-q",
+                        "repoquery",
+                        "--whatprovides",
+                        name,
+                    ],
+                    |out| !out.trim().is_empty(),
+                )
                 .await
         }
         None => false,
@@ -1097,5 +1135,17 @@ mod tests {
             repo_artifact_paths(Repo::Rspamd),
             &["/etc/yum.repos.d/rspamd.repo"]
         );
+    }
+
+    /// The query cache must live under a path the agent can write. The system
+    /// cache under /var/cache is read-only inside the sandbox, which is the
+    /// whole defect; pointing the option back there would reintroduce it.
+    #[test]
+    fn dnf_query_cache_is_outside_the_read_only_system_cache() {
+        let dir = DNF_QUERY_CACHEDIR
+            .strip_prefix("--setopt=cachedir=")
+            .expect("must be a dnf --setopt=cachedir= option");
+        assert!(dir.starts_with("/var/lib/dockpanel/"), "{dir}");
+        assert!(!dir.starts_with("/var/cache"), "{dir}");
     }
 }

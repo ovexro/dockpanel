@@ -473,7 +473,13 @@ async fn list_extensions(Path(version): Path<String>) -> Result<Json<serde_json:
         (
             "php-".to_string(),
             safe_command("dnf")
-                .args(["-q", "list", "--available", "php-*"])
+                .args([
+                    crate::services::pkg::DNF_QUERY_CACHEDIR,
+                    "-q",
+                    "list",
+                    "--available",
+                    "php-*",
+                ])
                 .output()
                 .await,
         )

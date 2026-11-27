@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed: package queries failed inside the agent sandbox on the RHEL family
+
+The agent runs with `ProtectSystem=strict`, and `/var/cache/dnf` is not writable for it. dnf takes
+`/var/cache/dnf/metadata_lock.pid` even for a read-only `list`, `repoquery` or `module list`, so every
+package query the agent made on Rocky, AlmaLinux, CentOS Stream and Fedora failed with
+`[Errno 30] Read-only file system` and was read as "not available". Measured on AlmaLinux 9.9 under the
+real unit: installing PHP from Settings → Services reported "PHP 8.3 with FPM installed" while it installed
+PHP 8.0.30 (end of life since 2023) with no extensions at all, and installing a version from the PHP
+version picker failed with "Unsupported distro for PHP install: ID='almalinux'", because the module
+streams could not be listed. Queries now keep their own metadata cache in `/var/lib/dockpanel/dnf-cache`;
+package installs are unchanged. With the fix the same two actions install PHP 8.4.28 and PHP 8.2 from
+their module streams, each with its extensions.
+
 ### Menu Options: choose what each role sees (#131)
 
 Settings has a "Menu Options" tab where an administrator picks, per role, which side menu and top bar
