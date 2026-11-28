@@ -362,6 +362,17 @@ jobs:
       - name: Every DNS zone lookup is scoped to the caller
         run: bash tests/dns-zone-owner-pin-e2e.sh
 
+  peer-admin-and-cron-label:
+    name: Admins Stay Untouchable And A Cron Label Stays On One Line
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. The reseller routes once skipped the peer-admin
+      # guard, and a cron label once started a second line in root's crontab.
+      - name: Peer-admin guard on the reseller routes; cron label validated at both ends
+        run: bash tests/peer-admin-and-cron-label-pin-e2e.sh
+
   migration-analyze-async:
     name: Migration Analysis Is Accepted, Not Performed
     runs-on: ubuntu-latest

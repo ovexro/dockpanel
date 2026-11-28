@@ -257,8 +257,13 @@ pub async fn update_user(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Verify user belongs to this reseller (or admin has universal access)
     let user: Option<(Uuid, String)> = if claims.role == "admin" {
-        sqlx::query_as("SELECT id, email FROM users WHERE id = $1")
+        // An administrator is never a target here (GHSA: peer-admin bypass). This
+        // mirrors `users::is_other_admin`: the only admin row an admin may touch
+        // through this route is their own, so two administrators stay mutually
+        // untouchable on every path that writes `users`.
+        sqlx::query_as("SELECT id, email FROM users WHERE id = $1 AND (role <> 'admin' OR id = $2)")
             .bind(id)
+            .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
             .map_err(|e| internal_error("update user", e))?
@@ -374,8 +379,13 @@ pub async fn delete_user(
 
     // Verify user belongs to this reseller (or admin has universal access)
     let user: Option<(Uuid, String)> = if claims.role == "admin" {
-        sqlx::query_as("SELECT id, email FROM users WHERE id = $1")
+        // An administrator is never a target here (GHSA: peer-admin bypass). This
+        // mirrors `users::is_other_admin`: the only admin row an admin may touch
+        // through this route is their own, so two administrators stay mutually
+        // untouchable on every path that writes `users`.
+        sqlx::query_as("SELECT id, email FROM users WHERE id = $1 AND (role <> 'admin' OR id = $2)")
             .bind(id)
+            .bind(claims.sub)
             .fetch_optional(&state.db)
             .await
             .map_err(|e| internal_error("delete user", e))?
@@ -402,11 +412,24 @@ pub async fn delete_user(
     // users::remove).
     crate::routes::auth::revoke_all_user_sessions(&state, id).await;
 
+    // `servers.user_id` cascades to `sites`: hand any machine this account holds to
+    // the acting administrator first, as `users::remove` does, or deleting the
+    // account deletes every site on it.
+    let mut tx = state.db.begin().await.map_err(|e| internal_error("delete user", e))?;
+    if claims.role == "admin" {
+        sqlx::query("UPDATE servers SET user_id = $1 WHERE user_id = $2")
+            .bind(claims.sub)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| internal_error("delete user", e))?;
+    }
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(|e| internal_error("delete user", e))?;
+    tx.commit().await.map_err(|e| internal_error("delete user", e))?;
 
     // Decrement used_users counter (floor at 0)
     if claims.role == "reseller" {

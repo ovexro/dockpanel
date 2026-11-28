@@ -121,7 +121,11 @@ async fn sync_crons(
             disabled += 1;
             continue;
         }
-        let reject = if !is_valid_schedule(&cron.schedule) {
+        let reject = if !is_safe_marker_field(&cron.id) {
+            Some("id contains characters that do not belong on one crontab line".to_string())
+        } else if !is_safe_label(cron.label.as_deref().unwrap_or("")) {
+            Some("label contains control characters or line breaks".to_string())
+        } else if !is_valid_schedule(&cron.schedule) {
             Some(format!("invalid schedule {:?}", cron.schedule))
         } else if cron.command.is_empty() {
             Some("empty command".to_string())
@@ -275,6 +279,18 @@ fn marker_id(line: &str) -> Option<&str> {
     (!id.is_empty()).then_some(id)
 }
 
+/// The label is written onto the same crontab line as the command. A line break in
+/// it starts a NEW crontab line that carries no `# dockpanel:` marker, so nothing
+/// ever removes it and the command filter never sees it.
+fn is_safe_label(label: &str) -> bool {
+    label.chars().count() <= 100 && !label.chars().any(|c| c.is_control())
+}
+
+/// The id is the token after the marker; it must be one whitespace-free, control-free word.
+fn is_safe_marker_field(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && !id.chars().any(|c| c.is_control() || c.is_whitespace())
+}
+
 /// Basic cron schedule validation (5 fields).
 fn is_valid_schedule(schedule: &str) -> bool {
     let parts: Vec<&str> = schedule.split_whitespace().collect();
@@ -290,6 +306,20 @@ fn is_valid_schedule(schedule: &str) -> bool {
 #[cfg(test)]
 mod sync_scope_tests {
     use super::marker_id;
+
+    #[test]
+    fn a_label_cannot_start_a_second_crontab_line() {
+        use super::{is_safe_label, is_safe_marker_field};
+        assert!(is_safe_label("WordPress Cron"));
+        assert!(is_safe_label(""));
+        assert!(!is_safe_label("x\n* * * * * /usr/bin/true"));
+        assert!(!is_safe_label("x\r* * * * * /usr/bin/true"));
+        assert!(!is_safe_label("x\0y"));
+        assert!(!is_safe_label(&"a".repeat(101)));
+        assert!(is_safe_marker_field("0b1c2d3e-aaaa-bbbb-cccc-1234567890ab"));
+        assert!(!is_safe_marker_field("id\nx"));
+        assert!(!is_safe_marker_field("a b"));
+    }
 
     #[test]
     fn the_id_is_the_token_after_the_marker() {

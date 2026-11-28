@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.243.0]
+
+### Security: two fixes reported privately
+
+- **A cron label could add lines to root's crontab.** The label of a site cron job was never checked and was
+  written after the `# dockpanel:<id>` marker. A line break in it started a second, unmarked crontab line that
+  no later sync removed and the command filter never saw. Any non-admin account that owns a site could use
+  that to run commands as root. The panel and the agent now refuse a label with control characters or more
+  than 100 characters; the agent also skips a row whose id is not one plain word. Reported by @hackchang.
+- **An administrator could reset the password of, or delete, another administrator** through
+  `PUT`/`DELETE /api/reseller/users/{id}`: the guard added in v2.196.0 covered `/api/users` only. Those two
+  routes now treat another administrator as not found, and deleting an account first hands its servers to the
+  acting administrator, as `/api/users` already did (without that, the servers' sites were deleted with it).
+  Installs with one administrator were not affected. Reported by @hackchang.
+
+A cron *command* still runs as root; that is how the cron feature is built and is unchanged here.
+
 ### Menu Options: choose what each role sees (#131)
 
 Settings has a "Menu Options" tab where an administrator picks, per role, which side menu and top bar

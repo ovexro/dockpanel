@@ -47,6 +47,19 @@ pub struct Cron {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// A cron label is written into root's crontab after the `# dockpanel:<id>` marker,
+/// so it must stay on that one line: no control characters (newline included), and
+/// a bounded length. Mirrored by the agent, which is the sink and does not trust us.
+fn validate_label(label: &str) -> Result<(), ApiError> {
+    if label.chars().count() > 100 {
+        return Err(err(StatusCode::BAD_REQUEST, "Label must be at most 100 characters"));
+    }
+    if label.chars().any(|c| c.is_control()) {
+        return Err(err(StatusCode::BAD_REQUEST, "Label must not contain control characters or line breaks"));
+    }
+    Ok(())
+}
+
 /// Helper: resolve a site this caller may act on, and return its domain.
 ///
 /// One line over [`crate::helpers::site_domain_for_caller`], which is shared with
@@ -143,6 +156,7 @@ pub async fn create(
     }
 
     let label = body.label.unwrap_or_default();
+    validate_label(&label)?;
 
     let cron: Cron = sqlx::query_as(
         "INSERT INTO crons (site_id, label, command, schedule) VALUES ($1, $2, $3, $4) RETURNING *",
@@ -195,6 +209,10 @@ pub async fn update(
             super::is_safe_shell_command(command)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, &format!("Cron command: {e}")))?;
         }
+    }
+
+    if let Some(ref label) = body.label {
+        validate_label(label)?;
     }
 
     // Validate schedule if provided
