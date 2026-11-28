@@ -404,7 +404,7 @@ that reads the source and fails if the fix is undone — including the shapes th
 are easy to undo by accident. The mail pins assert, among other things, that the
 sandbox was **not** widened to include `/etc/opendkim.conf`, since widening it
 would have "fixed" the bug while destroying the reason the bug was
-survivable. One-hundred-forty-three suites, **4639 assertions**, all green at the current commit:
+survivable. One-hundred-forty-four suites, **4645 assertions**, all green at the current commit:
 
 | Suite | Assertions |
 |---|---|
@@ -515,6 +515,7 @@ survivable. One-hundred-forty-three suites, **4639 assertions**, all green at th
 | `pdns-install-scope-pin-e2e.sh` | 10 |
 | `dns-zone-owner-pin-e2e.sh` | 10 |
 | `peer-admin-and-cron-label-pin-e2e.sh` | 14 |
+| `cron-package-declared-pin-e2e.sh` | 6 |
 | `git-deploy-pre-build-rce-pin-e2e.sh` | 35 |
 | `chain-operator-bypass-pin-e2e.sh` | 16 |
 | `volume-backup-scope-leak-pin-e2e.sh` | 9 |

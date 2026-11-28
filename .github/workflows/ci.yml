@@ -373,6 +373,17 @@ jobs:
       - name: Peer-admin guard on the reseller routes; cron label validated at both ends
         run: bash tests/peer-admin-and-cron-label-pin-e2e.sh
 
+  cron-package-declared:
+    name: The Installer Declares The Cron Package It Uses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pure source analysis. Debian 13 cloud images ship without cron, so the
+      # daily database backup and the Cron page silently depended on it.
+      - name: setup.sh installs cron/cronie and update.sh repairs a box without it
+        run: bash tests/cron-package-declared-pin-e2e.sh
+
   migration-analyze-async:
     name: Migration Analysis Is Accepted, Not Performed
     runs-on: ubuntu-latest

@@ -618,15 +618,24 @@ install_dependencies() {
     # openssh-client is the SFTP backup destination's runtime: the agent shells out
     # to scp/ssh for every SFTP upload. Present by default on the images we test, but
     # a dependency that happens to be satisfied is still an undeclared dependency.
-    local BASE_PKGS="curl, openssl, ca-certificates, openssh-client"
+    #
+    # `cron` (Debian) / `cronie` (RHEL) is declared here for the same reason: the
+    # daily database backup is installed with `crontab`, and the agent writes every
+    # site cron through it. Debian 13 cloud images ship without it, so on a fresh box
+    # the database backup job was never installed and the panel's Cron page answered
+    # 502 "`crontab -l` failed to run: No such file or directory" (measured on a
+    # throwaway Debian 13 VPS, 2026-11-28).
+    local BASE_PKGS="curl, openssl, ca-certificates, openssh-client, cron"
     if [ "$PKG_MGR" = "apt" ]; then
         # gnupg + lsb-release only exist/matter on Debian-based
         run "Installing base packages (${BASE_PKGS}, gnupg, lsb-release)" \
-            pkg_install curl openssl ca-certificates openssh-client gnupg lsb-release
+            pkg_install curl openssl ca-certificates openssh-client gnupg lsb-release cron
+        systemctl enable --now cron >/dev/null 2>&1 || true
     else
-        # RHEL-family names the ssh client package openssh-clients (plural).
+        # RHEL-family names the ssh client package openssh-clients (plural), and cron cronie.
         run "Installing base packages (${BASE_PKGS})" \
-            pkg_install curl openssl ca-certificates openssh-clients
+            pkg_install curl openssl ca-certificates openssh-clients cronie
+        systemctl enable --now crond >/dev/null 2>&1 || true
     fi
 
     # sshpass — required for PASSWORD-authenticated SFTP backup destinations, which

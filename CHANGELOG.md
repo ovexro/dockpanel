@@ -23,6 +23,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 A cron *command* still runs as root; that is how the cron feature is built and is unchanged here.
 
+### Fixed: a fresh Debian 13 box had no `cron`
+
+`setup.sh` installs the daily database backup with `crontab`, and the Cron page writes through it, but no
+installer declared the package, and Debian 13 cloud images do not ship it. There the backup job was never
+installed and creating a cron answered 502 "`crontab -l` failed to run". The installer now installs `cron`
+(`cronie` on RHEL-family) and starts it, and `update.sh` installs it on a box that is missing it.
+
 ### Menu Options: choose what each role sees (#131)
 
 Settings has a "Menu Options" tab where an administrator picks, per role, which side menu and top bar

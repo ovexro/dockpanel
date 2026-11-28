@@ -306,6 +306,23 @@ else
     exit 1
 fi
 
+# ── Make sure a crontab exists ─────────────────────────────────────────────
+# Installs made before v2.243.0 on a minimal image (Debian 13 cloud) have no `cron`
+# package: the panel's Cron page answers 502 and the daily database backup job was
+# never installed. Installing it here repairs those boxes; boxes that have it skip.
+if ! command -v crontab >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get install -y cron >/dev/null 2>&1 && systemctl enable --now cron >/dev/null 2>&1 \
+            && log "Installed cron (it was missing)" || warn "Could not install cron: the Cron page and the daily database backup need it"
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y cronie >/dev/null 2>&1 && systemctl enable --now crond >/dev/null 2>&1 \
+            && log "Installed cronie (it was missing)" || warn "Could not install cronie: the Cron page and the daily database backup need it"
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y cronie >/dev/null 2>&1 && systemctl enable --now crond >/dev/null 2>&1 \
+            && log "Installed cronie (it was missing)" || warn "Could not install cronie: the Cron page and the daily database backup need it"
+    fi
+fi
+
 # ── Harden a legacy inline backup cron ────────────────────────────────────
 # Installs predating v2.88.0 carry the daily dump as an INLINE crontab command
 # whose bare `>` creates the file 0666 & ~umask — so the whole panel database,
